@@ -1,0 +1,90 @@
+{
+  "chapter": 2,
+  "selectedContext": [
+    {
+      "source": "runtime/chapter_memo",
+      "reason": "Carry the planner's chapter memo into governed writing.",
+      "excerpt": "goal=让灵瞳在地铁站落地，验证功能并埋下代价 | golden-opening=true | ## 当前任务\n林玄在地铁站出站口，主动第二次开启灵瞳，验证其看穿灵气流动的功能，并确认妹妹电话威胁与城市灵脉节点存在关联。\n\n## 读者此刻在等什么\n1) 读者期待林玄的\"灵瞳\"到底是什么能力，能不能真的帮他解决困境\n2) 本章通过一次具体使用来展现灵瞳功能，同时让读者意识到这个金手指有代价（不能无脑用）\n\n## 该兑现的 / 暂不掀的\n- 该兑现：灵瞳功能 → 在地铁站柱子上看到绿色漩涡和地底抽吸现象，证实第1章所见非幻觉\n- 该兑现：灵瞳代价 → 使用后出现轻微眩晕、元气消耗感，给读者\"这是有限资源\"的实感\n- 暂不掀：暗影楼具体成员 → 只通过灵瞳看到异常能量波动，不直接出现人脸，留到第3章\n\n## 日常/过渡承担什么任务\n- 出站口排队人群 → 通过拥挤、嘈杂对比主角内心的紧张，强化\"隐秘修真\"的都市感\n- 地铁站柱子特写 → 用视觉化描写（绿色漩涡、纹理）替代纯设定说明，让世界观落地\n- 林玄独自行走 → 内心独白梳理妹妹电话与自身状况，为后续行动做决策铺垫\n\n## 关键抉择过三连问\n- 主角本章最关键的一次选择：\n  - 为什么这么做？ → 妹妹电话被威胁，他必须确认灵瞳能否帮自己发现危险源头\n  - 符合当前利益吗？ → 灵瞳是唯一的破局工具，不用等于等死\n  - 符合他的人设吗？ → 沉稳内敛的人不会鲁莽，但会权衡后精准使用有限资源\n- 对手/配角本章最关键的一次选择：\n  - 为什么这么做？ → 无直接对手出场，但灵管局巡逻人员的存在感作为隐性阻力\n  - 符合当前利益吗？ → 灵管局监控范围大，主角必须在他们眼皮底下行动\n  - 符合他的人设吗？ → 巡逻人员按章办事，不主动惹事但保持警惕，符合\"结构性对手\"定位\n\n## 章尾必须发生的改变\n- 信息改变：确认地铁站柱子是灵脉节点，且正在被异常抽取能量\n- 关系改变：林玄对妹妹的担忧从\"被动接收信息\"转为\"主动调查\"\n- 物理改变：灵瞳使用1次，剩余2次/日，身体出现轻微不适感\n\n## 本章 hook 账\n**这是本章对活跃伏笔的账本，写手必须按这份账动作。**\n\nopen:\n- [new] 地铁站柱子异常能量波动 → 暗示有第三方在操控节点（上限 ≤ 2个）\n- [new] 灵管局巡逻人员出现 → 为后续\"隐世盟约\"规则做铺垫\n\nadvance:\n- H002 \"林雨电话威胁\" → 林玄从被动担忧转为主动调查（open → pressured）\n- H008 \"地铁站灵脉节点\" → 灵瞳确认绿色漩涡真实存在（open → pressured）\n- H009 \"灵瞳使用限制\" → 林玄实际使用1次，体验消耗感（open → pressured）\n\nresolve:\n- 无（本章主要推进已有hook，暂未完全resolve）\n\ndefer:\n- H001 \"灵脉枯竭症人为痕迹\" → 本章不动，理由：需要先确认节点异常与病症的关联，等到第3章\n- H007 \"灵瞳与父母事故关联\" → 本章不动，理由：时机未到，先聚焦当下危机\n\n## 不要做\n- 不要大段旁白解释修真体系，所有设定必须通过场景、动作、对话自然带出\n- 不要让林玄连续使用灵瞳超过1次，必须让读者感受到资源稀缺\n- 不要让暗影楼成员直接露面，保持神秘感，用能量波动和异常现象替代\n- 不要让林玄在地铁站内发生正面冲突，保持\"隐秘修真\"的基调\n\n## 输出要求\n\n- goal 字段不超过 50 字\n- threadRefs 是 YAML 数组，内容是从输入的 pending_hooks/subplot_board 中挑出的 id\n- 每个二级标题（##）必须出现，内容不能为空\n- 不要在 memo 里提方法论术语（\"情绪缺口\"、\"cyclePhase\"、\"蓄压\"等）——直接用这本书的人物、地点、事件说事\n- 不要产生正文片段或对话片段\n- 如果卷纲和上章摘要冲突，信上章摘要（剧情已实际发生）"
+    },
+    {
+      "source": "story/current_focus.md",
+      "reason": "Current task focus for this chapter.",
+      "excerpt": "（描述接下来 1-3 章最需要优先推进的内容。）"
+    },
+    {
+      "source": "story/current_state.md",
+      "reason": "Preserve hard state facts referenced by the active chapter brief or hard constraints.",
+      "excerpt": "| 字段 | 值 |"
+    },
+    {
+      "source": "story/outline/story_frame.md",
+      "reason": "Preserve canon constraints referenced by the active chapter brief or hard constraints.",
+      "excerpt": "---"
+    },
+    {
+      "source": "story/outline/volume_map.md",
+      "reason": "Anchor the default planning node for this chapter.",
+      "excerpt": "五卷，每卷约 100 章。第一卷\"压抑与试探\"，情绪曲线是低开高走——开篇即生死危机，林玄在公司加班时胸口剧痛，灵瞳首次被动开启，看到地铁站方向有异常灵脉波动，三年倒计时从这一刻开始具象化；中间压抑蛰伏，主角在灵管局监视下小心翼翼地寻找第一个灵脉节点，每一次灵瞳使用都伴随着生理痛苦；卷尾第一次小爆发，林玄在公共场合被迫使用灵瞳，引起灵管局注意，身份从\"隐藏者\"变为\"被监视者\"。第二卷\"暗流与同盟\"，情绪曲线是波动上升——林玄与苏晚晴结成利益同盟，但每一次信任都有代价；发现灵脉枯竭症的非自然痕迹，暗影楼第一次正面交锋，主角被迫暴露部分灵瞳能力；卷尾盟友背叛或牺牲，林玄意识到信任是有成本的。第三卷\"阴谋与裂变\"，情绪曲线是陡升陡降——真相碎片拼出全貌，灵管局高层与暗影楼的交易证据浮出，一名核心盟友的立场发生不可逆变化；主角修为突破至凝元境，但灵瞳过度使用导致第一次寿元透支；卷尾阴谋全貌拼出，林玄从\"求生\"转向\"复仇\"。第四卷\"曝光与突围\"，情绪曲线是高压释放——将高层交易证据公之于灵管局内部，引发权力震荡；主角突破筑基境，灵脉枯竭症暂时缓解；暗影楼楼主首次正面现身，与主角达成一次未分胜负的对峙；卷尾筑基境突破完成，但代价是灵瞳出现永久性损伤。第五卷\"终局与抉择\"，情绪曲线是悲壮收束——灵脉核心真相完全揭露，主角做出斩断/继承/摧毁的选择，付出不可逆代价；妹妹的命运得到最终安置，暗影楼残党被清算或蛰伏，灵管局进入新秩序；卷尾灵脉核心抉择完成，城市灵脉网络被重塑，林玄失去灵瞳但活下来了。"
+    },
+    {
+      "source": "runtime/hook_debt#H002",
+      "reason": "含原始种子文本的叙事债务简报。",
+      "excerpt": "H002（前台，备忘引用旧债，已开1章） | 读者承诺：第1卷尾 | 种于第0章：妹妹被暗影楼盯上"
+    },
+    {
+      "source": "runtime/hook_debt#H008",
+      "reason": "含原始种子文本的叙事债务简报。",
+      "excerpt": "H008（前台，备忘引用旧债，已开1章） | 读者承诺：第2章 | 种于第1章：城市灵脉节点网络"
+    },
+    {
+      "source": "runtime/hook_debt#H009",
+      "reason": "含原始种子文本的叙事债务简报。",
+      "excerpt": "H009（后台，备忘引用旧债，已开1章） | 读者承诺：第2章 | 种于第1章：金手指代价机制"
+    },
+    {
+      "source": "story/current_state.md#当前冲突",
+      "reason": "Relevant current-state fact retrieved for the current chapter goal.",
+      "excerpt": "当前冲突 | 三年生命倒计时 vs 寻找解决方案；妹妹被卷入 vs 保护妹妹"
+    },
+    {
+      "source": "story/current_state.md#当前目标",
+      "reason": "Relevant current-state fact retrieved for the current chapter goal.",
+      "excerpt": "当前目标 | 搞清楚身上发生的改变，寻找延寿方法，保护妹妹"
+    },
+    {
+      "source": "story/current_state.md#主角状态",
+      "reason": "Relevant current-state fact retrieved for the current chapter goal.",
+      "excerpt": "主角状态 | 灵脉枯竭症确认，三年倒计时启动；灵瞳首次被动开启，使用后太阳穴刺痛、胸口沉闷；每日三次每次十分钟限制，过度使用燃烧寿元"
+    },
+    {
+      "source": "story/current_state.md#当前限制",
+      "reason": "Relevant current-state fact retrieved for the current chapter goal.",
+      "excerpt": "当前限制 | 灵瞳使用限制（每日3次×10分钟）；三年生命倒计时；身体持续虚弱"
+    },
+    {
+      "source": "story/pending_hooks.md#H009",
+      "reason": "Carry forward unresolved hooks that match the chapter focus.",
+      "excerpt": "后台 | open | 第2章 | 金手指代价机制"
+    },
+    {
+      "source": "story/pending_hooks.md#H008",
+      "reason": "Carry forward unresolved hooks that match the chapter focus.",
+      "excerpt": "前台 | open | 第2章 | 城市灵脉节点网络"
+    },
+    {
+      "source": "story/pending_hooks.md#H001",
+      "reason": "Carry forward unresolved hooks that match the chapter focus.",
+      "excerpt": "后台 | open | 第3卷中段 | slow-burn | 灵脉枯竭症的人为痕迹"
+    },
+    {
+      "source": "story/pending_hooks.md#H002",
+      "reason": "Carry forward unresolved hooks that match the chapter focus.",
+      "excerpt": "前台 | open | 第1卷尾 | immediate | 妹妹被暗影楼盯上"
+    },
+    {
+      "source": "story/pending_hooks.md#H007",
+      "reason": "Carry forward unresolved hooks that match the chapter focus.",
+      "excerpt": "后台 | open | 第5卷终章 | endgame | 主角身世与灵瞳的关联"
+    }
+  ]
+}

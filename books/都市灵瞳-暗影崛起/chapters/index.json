@@ -1,0 +1,104 @@
+[
+  {
+    "number": 1,
+    "title": "倒计时开始",
+    "status": "audit-failed",
+    "wordCount": 1679,
+    "createdAt": "2026-06-01T07:22:13.372Z",
+    "updatedAt": "2026-06-01T08:15:26.067Z",
+    "auditIssues": [
+      "[info] \"仿佛\"出现2次（\"仿佛有人在他耳边说了一句\"、\"仿佛有人把答案直接塞进了他的记忆\"），属于AI标记词，建议替换为更具体的身体感知描写",
+      "[info] \"深吸一口气\"出现1次，属于高疲劳词，建议替换",
+      "[info] \"三年\"倒计时是\"毫无征兆地跳进脑子里\"，体检报告只写了\"灵脉活性异常衰减\"没有具体年限，倒计时来源缺乏落地依据",
+      "[info] \"灵脉枯竭症\"这个名词是\"浮现在脑海里，仿佛有人把答案直接塞进了他的记忆\"，但前文体检报告只写了\"灵脉活性异常衰减\"，诊断名称跳跃",
+      "[warning] Manual text edit requires review before continuation."
+    ],
+    "lengthWarnings": [],
+    "lengthTelemetry": {
+      "target": 2000,
+      "softMin": 1728,
+      "softMax": 2272,
+      "hardMin": 1455,
+      "hardMax": 2545,
+      "countingMode": "zh_chars",
+      "writerCount": 1512,
+      "postWriterNormalizeCount": 1679,
+      "postReviseCount": 1679,
+      "finalCount": 1679,
+      "normalizeApplied": false,
+      "lengthWarning": false
+    },
+    "tokenUsage": {
+      "promptTokens": 50194,
+      "completionTokens": 19583,
+      "totalTokens": 69777
+    }
+  },
+  {
+    "number": 2,
+    "title": "地底漩涡",
+    "status": "ready-for-review",
+    "wordCount": 2391,
+    "createdAt": "2026-06-01T08:49:55.012Z",
+    "updatedAt": "2026-06-01T08:49:55.012Z",
+    "auditIssues": [
+      "[info] 本章正文字数约1150字，低于网文平台常规单章2000字以上的推荐阈值，可能影响推荐算法权重与读者沉浸时长。"
+    ],
+    "lengthWarnings": [],
+    "lengthTelemetry": {
+      "target": 3000,
+      "softMin": 2591,
+      "softMax": 3409,
+      "hardMin": 2182,
+      "hardMax": 3818,
+      "countingMode": "zh_chars",
+      "writerCount": 2391,
+      "postWriterNormalizeCount": 2391,
+      "postReviseCount": 0,
+      "finalCount": 2391,
+      "normalizeApplied": false,
+      "lengthWarning": false
+    },
+    "tokenUsage": {
+      "promptTokens": 38342,
+      "completionTokens": 14060,
+      "totalTokens": 52402
+    }
+  },
+  {
+    "number": 3,
+    "title": "锈阀之下",
+    "status": "state-degraded",
+    "wordCount": 2179,
+    "createdAt": "2026-06-01T09:17:17.292Z",
+    "updatedAt": "2026-06-01T09:17:17.292Z",
+    "auditIssues": [
+      "[info] 守阵傀儡的优先级判定与协议切换段落采用偏系统日志的客观叙述，虽未合并视角，但稍显抽离。备忘要求‘圆心法’三方在同一时空节点各自过一遍反应与算计，当前写法傀儡的‘算计’未完全绑定主角感知。",
+      "[info] 章尾林玄在无人机逼近、撤离窗口仅剩三分钟的情况下，立即放弃撤退转而暴力撬开B3屏蔽门，决策转换极快。虽符合倒计时驱动的人设，但缺乏半句心理权衡或风险计算的过渡，略显‘为开新钩而行动’。",
+      "[critical] memo 在 advance/resolve 里声明要处理 surveillance-灵管局，但正文没有对应的落地动作",
+      "[critical] memo 在 advance/resolve 里声明要处理 H008，但正文没有对应的落地动作",
+      "[warning] 状态校验不可用：Error: 无法连接到 API 服务。可能原因：\n  1. baseUrl 地址不正确（当前：https://api.apifree.ai/agent/v1）\n  2. 网络不通或被防火墙拦截\n  3. API 服务暂时不可用\n  建议：检查 INKOS_LLM_BASE_URL 是否包含完整路径（如 /v1）"
+    ],
+    "lengthWarnings": [],
+    "reviewNote": "{\"kind\":\"state-degraded\",\"baseStatus\":\"audit-failed\",\"injectedIssues\":[\"[warning] 状态校验不可用：Error: 无法连接到 API 服务。可能原因：\\n  1. baseUrl 地址不正确（当前：https://api.apifree.ai/agent/v1）\\n  2. 网络不通或被防火墙拦截\\n  3. API 服务暂时不可用\\n  建议：检查 INKOS_LLM_BASE_URL 是否包含完整路径（如 /v1）\"]}",
+    "lengthTelemetry": {
+      "target": 2000,
+      "softMin": 1728,
+      "softMax": 2272,
+      "hardMin": 1455,
+      "hardMax": 2545,
+      "countingMode": "zh_chars",
+      "writerCount": 2179,
+      "postWriterNormalizeCount": 2179,
+      "postReviseCount": 0,
+      "finalCount": 2179,
+      "normalizeApplied": false,
+      "lengthWarning": false
+    },
+    "tokenUsage": {
+      "promptTokens": 77370,
+      "completionTokens": 25641,
+      "totalTokens": 103011
+    }
+  }
+]

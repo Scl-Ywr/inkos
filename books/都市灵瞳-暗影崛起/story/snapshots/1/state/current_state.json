@@ -1,0 +1,53 @@
+{
+  "chapter": 1,
+  "facts": [
+    {
+      "subject": "protagonist",
+      "predicate": "当前位置",
+      "object": "地铁站出站口（林玄）",
+      "validFromChapter": 1,
+      "validUntilChapter": null,
+      "sourceChapter": 1
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "主角状态",
+      "object": "灵脉枯竭症确认，三年倒计时启动；灵瞳首次被动开启，使用后太阳穴刺痛、胸口沉闷；每日三次每次十分钟限制，过度使用燃烧寿元",
+      "validFromChapter": 1,
+      "validUntilChapter": null,
+      "sourceChapter": 1
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "当前目标",
+      "object": "搞清楚身上发生的改变，寻找延寿方法，保护妹妹",
+      "validFromChapter": 1,
+      "validUntilChapter": null,
+      "sourceChapter": 1
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "当前限制",
+      "object": "灵瞳使用限制（每日3次×10分钟）；三年生命倒计时；身体持续虚弱",
+      "validFromChapter": 1,
+      "validUntilChapter": null,
+      "sourceChapter": 1
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "当前敌我",
+      "object": "暗影楼（潜在敌对，妹妹被盯上）；灵管局（未知立场）",
+      "validFromChapter": 1,
+      "validUntilChapter": null,
+      "sourceChapter": 1
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "当前冲突",
+      "object": "三年生命倒计时 vs 寻找解决方案；妹妹被卷入 vs 保护妹妹",
+      "validFromChapter": 1,
+      "validUntilChapter": null,
+      "sourceChapter": 1
+    }
+  ]
+}

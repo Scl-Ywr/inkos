@@ -1,0 +1,43 @@
+{
+  "name": "inkos-1.4.1",
+  "version": "0.1.0",
+  "language": "zh",
+  "llm": {
+    "provider": "openai",
+    "service": "custom:apifree",
+    "configSource": "studio",
+    "baseUrl": "https://api.apifree.ai/agent/v1",
+    "model": "skywork-ai/skyclaw-v1",
+    "apiFormat": "chat",
+    "stream": true,
+    "services": [
+      {
+        "service": "custom",
+        "name": "senseNova",
+        "baseUrl": "https://token.sensenova.cn/v1",
+        "temperature": 0.7,
+        "apiFormat": "chat",
+        "stream": true
+      },
+      {
+        "service": "custom",
+        "name": "apifree",
+        "baseUrl": "https://api.apifree.ai/agent/v1",
+        "temperature": 0.7,
+        "apiFormat": "chat",
+        "stream": true
+      }
+    ],
+    "defaultModel": "skywork-ai/skyclaw-v1",
+    "temperature": 0.7
+  },
+  "notify": [],
+  "inputGovernanceMode": "v2",
+  "daemon": {
+    "schedule": {
+      "radarCron": "0 */6 * * *",
+      "writeCron": "*/15 * * * *"
+    },
+    "maxConcurrentBooks": 3
+  }
+}

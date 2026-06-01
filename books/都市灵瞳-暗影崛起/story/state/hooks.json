@@ -1,0 +1,64 @@
+{
+  "hooks": [
+    {
+      "hookId": "H001",
+      "startChapter": 0,
+      "type": "后台",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "第3卷中段",
+      "payoffTiming": "slow-burn",
+      "notes": "灵脉枯竭症的人为痕迹"
+    },
+    {
+      "hookId": "H007",
+      "startChapter": 0,
+      "type": "后台",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "第5卷终章",
+      "payoffTiming": "endgame",
+      "notes": "主角身世与灵瞳的关联"
+    },
+    {
+      "hookId": "H002",
+      "startChapter": 0,
+      "type": "threat",
+      "status": "progressing",
+      "lastAdvancedChapter": 2,
+      "expectedPayoff": "未知发送者身份及其与地脉抽吸装置的关联",
+      "payoffTiming": "near-term",
+      "notes": "威胁升级，发送者发来妹妹学校照片并直接胁迫'顺着气脉走'，危机与地脉异常绑定"
+    },
+    {
+      "hookId": "H008",
+      "startChapter": 1,
+      "type": "mystery",
+      "status": "progressing",
+      "lastAdvancedChapter": 2,
+      "expectedPayoff": "城市灵脉节点网络/抽吸源头",
+      "payoffTiming": "near-term",
+      "notes": "确认节点为机械装置强行抽吸，能量流向东南废弃厂区，成为下一步行动目标"
+    },
+    {
+      "hookId": "H009",
+      "startChapter": 1,
+      "type": "mechanic",
+      "status": "progressing",
+      "lastAdvancedChapter": 2,
+      "expectedPayoff": "金手指代价机制/寿命限制",
+      "payoffTiming": "slow-burn",
+      "notes": "主动开启9分40秒，体验实打实气血消耗，剩余次数降至二，确立资源稀缺性"
+    },
+    {
+      "hookId": "surveillance-灵管局巡查机-制与阈值检测-手段的后续博",
+      "startChapter": 2,
+      "type": "surveillance",
+      "status": "open",
+      "lastAdvancedChapter": 2,
+      "expectedPayoff": "灵管局巡查机制与阈值检测手段的后续博弈",
+      "payoffTiming": "mid-arc",
+      "notes": "确认灵管局外勤按固定路线巡查，使用仪器检测灵气残留阈值，林玄需保持低阈值躲避"
+    }
+  ]
+}

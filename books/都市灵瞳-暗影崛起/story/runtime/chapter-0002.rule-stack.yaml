@@ -1,0 +1,65 @@
+layers:
+  - id: L1
+    name: hard_facts
+    precedence: 100
+    scope: global
+  - id: L2
+    name: author_intent
+    precedence: 80
+    scope: book
+  - id: L3
+    name: planning
+    precedence: 60
+    scope: arc
+  - id: L4
+    name: current_task
+    precedence: 70
+    scope: local
+sections:
+  hard:
+    - story_frame
+    - current_state
+    - book_rules
+    - roles
+  soft:
+    - author_intent
+    - current_focus
+    - volume_map
+  diagnostic:
+    - anti_ai_checks
+    - continuity_audit
+    - style_regression_checks
+overrideEdges:
+  - from: L4
+    to: L3
+    allowed: true
+    scope: current_chapter
+  - from: L4
+    to: L2
+    allowed: false
+    scope: current_chapter
+  - from: L4
+    to: L1
+    allowed: false
+    scope: current_chapter
+activeOverrides:
+  - from: L4
+    to: L3
+    target: chapter:2/mustAvoid
+    reason: 无逻辑的巧合推进剧情
+  - from: L4
+    to: L3
+    target: chapter:2/mustAvoid
+    reason: 配角降智配合主角
+  - from: L4
+    to: L3
+    target: chapter:2/mustAvoid
+    reason: 无铺垫的高潮
+  - from: L4
+    to: L3
+    target: chapter:2/mustAvoid
+    reason: 机械降神解决危机
+  - from: L4
+    to: L3
+    target: chapter:2/mustAvoid
+    reason: 数值化修炼体系

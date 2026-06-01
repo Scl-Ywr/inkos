@@ -1,0 +1,52 @@
+{
+  "hooks": [
+    {
+      "hookId": "H001",
+      "startChapter": 0,
+      "type": "后台",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "第3卷中段",
+      "payoffTiming": "slow-burn",
+      "notes": "灵脉枯竭症的人为痕迹"
+    },
+    {
+      "hookId": "H002",
+      "startChapter": 0,
+      "type": "前台",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "第1卷尾",
+      "payoffTiming": "immediate",
+      "notes": "妹妹被暗影楼盯上"
+    },
+    {
+      "hookId": "H007",
+      "startChapter": 0,
+      "type": "后台",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "第5卷终章",
+      "payoffTiming": "endgame",
+      "notes": "主角身世与灵瞳的关联"
+    },
+    {
+      "hookId": "H008",
+      "startChapter": 1,
+      "type": "前台",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "第2章",
+      "notes": "城市灵脉节点网络"
+    },
+    {
+      "hookId": "H009",
+      "startChapter": 1,
+      "type": "后台",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "第2章",
+      "notes": "金手指代价机制"
+    }
+  ]
+}
