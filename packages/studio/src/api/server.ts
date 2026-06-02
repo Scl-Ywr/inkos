@@ -1758,6 +1758,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
 
   app.delete("/api/v1/logs", (c) => {
     logBuffer.length = 0;
+    broadcast("logs:clear", { timestamp: new Date().toISOString() });
     return c.json({ status: "cleared" });
   });
 

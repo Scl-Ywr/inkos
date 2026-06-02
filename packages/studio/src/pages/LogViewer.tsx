@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useApi } from "../hooks/use-api";
+import { fetchJson, useApi } from "../hooks/use-api";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
@@ -50,6 +50,8 @@ export function LogViewer({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunct
   const { data, refetch } = useApi<{ entries: ReadonlyArray<LogEntry> }>("/logs");
   const { messages } = useSSE();
   const [liveEntries, setLiveEntries] = useState<ReadonlyArray<LogEntry>>([]);
+  const [clearing, setClearing] = useState(false);
+  const [clearError, setClearError] = useState<string | null>(null);
 
   useEffect(() => {
     setLiveEntries(data?.entries ?? []);
@@ -57,6 +59,10 @@ export function LogViewer({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunct
 
   useEffect(() => {
     const lastMessage = messages[messages.length - 1];
+    if (lastMessage?.event === "logs:clear") {
+      setLiveEntries([]);
+      return;
+    }
     if (lastMessage?.event !== "log") {
       return;
     }
@@ -82,6 +88,20 @@ export function LogViewer({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunct
 
   const entries = useMemo(() => liveEntries.slice(-MAX_VISIBLE_LOGS), [liveEntries]);
 
+  const handleClear = async () => {
+    setClearing(true);
+    setClearError(null);
+    setLiveEntries([]);
+    try {
+      await fetchJson<{ status: string }>("/logs", { method: "DELETE" });
+    } catch (e) {
+      setClearError(e instanceof Error ? e.message : String(e));
+      void refetch();
+    } finally {
+      setClearing(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -90,15 +110,30 @@ export function LogViewer({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunct
         <span className="text-foreground">{t("logs.title")}</span>
       </div>
 
-      <div className="flex items-baseline justify-between">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
         <h1 className="font-serif text-3xl">{t("logs.title")}</h1>
-        <button
-          onClick={() => refetch()}
-          className={`px-4 py-2.5 text-sm rounded-md ${c.btnSecondary}`}
-        >
-          {t("common.refresh")}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleClear}
+            disabled={clearing || entries.length === 0}
+            className={`px-4 py-2.5 text-sm rounded-md ${c.btnSecondary} disabled:opacity-45`}
+          >
+            {clearing ? t("common.loading") : t("common.clear")}
+          </button>
+          <button
+            onClick={() => refetch()}
+            className={`px-4 py-2.5 text-sm rounded-md ${c.btnSecondary}`}
+          >
+            {t("common.refresh")}
+          </button>
+        </div>
       </div>
+
+      {clearError && (
+        <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          {clearError}
+        </div>
+      )}
 
       <div className={`border ${c.cardStatic} rounded-lg overflow-hidden`}>
         <div className="p-4 max-h-[600px] overflow-y-auto">

@@ -5,6 +5,7 @@ import { fetchJson } from "../hooks/use-api";
 import { useServiceStore } from "../store/service";
 import type { EndpointGroup, ServiceInfo } from "../store/service";
 import { ServiceQuickLinks, getServiceQuickLinks } from "../components/ServiceQuickLinks";
+import { StudioSelect } from "../components/StudioSelect";
 
 interface Nav {
   toDashboard: () => void;
@@ -163,27 +164,27 @@ function CoverConfigCard() {
       <div className="grid gap-3 md:grid-cols-2">
         <label className="space-y-1.5">
           <span className="block text-xs font-medium text-muted-foreground/70">服务</span>
-          <select
+          <StudioSelect
             value={service}
-            onChange={(event) => handleServiceChange(event.target.value)}
-            className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 text-sm"
-          >
-            {providers.map((provider) => (
-              <option key={provider.service} value={provider.service}>{provider.label}</option>
-            ))}
-          </select>
+            onValueChange={handleServiceChange}
+            options={providers.map((provider) => ({
+              value: provider.service,
+              label: provider.label,
+            }))}
+            triggerClassName="bg-background shadow-none"
+          />
         </label>
         <label className="space-y-1.5">
           <span className="block text-xs font-medium text-muted-foreground/70">封面模型</span>
-          <select
+          <StudioSelect
             value={model}
-            onChange={(event) => setModel(event.target.value)}
-            className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 text-sm"
-          >
-            {(selected?.models ?? [model]).map((item) => (
-              <option key={item} value={item}>{item}</option>
-            ))}
-          </select>
+            onValueChange={setModel}
+            options={(selected?.models ?? [model]).map((item) => ({
+              value: item,
+              label: item,
+            }))}
+            triggerClassName="bg-background font-mono shadow-none"
+          />
         </label>
       </div>
 

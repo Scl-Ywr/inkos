@@ -42,6 +42,222 @@ interface Nav {
   toServices: () => void;
 }
 
+interface TaskLogEntry {
+  readonly message: string;
+  readonly tag?: string;
+  readonly level?: string;
+  readonly timestamp: number;
+}
+
+interface CurrentTask {
+  readonly bookId: string | null;
+  readonly label: string;
+  readonly status: "running" | "complete" | "error";
+  readonly timestamp: number;
+}
+
+const TASK_LABELS: Record<string, string> = {
+  "write:start": "开始写作",
+  "write:complete": "写作完成",
+  "write:error": "写作失败",
+  "draft:start": "开始起草",
+  "draft:complete": "起草完成",
+  "draft:error": "起草失败",
+  "rewrite:start": "开始重写",
+  "rewrite:complete": "重写完成",
+  "rewrite:error": "重写失败",
+  "audit:start": "开始审计",
+  "audit:complete": "审计完成",
+  "audit:error": "审计失败",
+  "revise:start": "开始修订",
+  "revise:complete": "修订完成",
+  "revise:error": "修订失败",
+  "agent:start": "Agent 启动",
+  "agent:complete": "Agent 完成",
+  "agent:error": "Agent 失败",
+};
+
+function getMessageBookId(message: SSEMessage): string | null {
+  const data = message.data as { bookId?: unknown } | null;
+  return typeof data?.bookId === "string" ? data.bookId : null;
+}
+
+function normalizeLogEvent(message: SSEMessage): TaskLogEntry | null {
+  if (message.event !== "log" || !message.data || typeof message.data !== "object") return null;
+  const data = message.data as { message?: unknown; tag?: unknown; level?: unknown; timestamp?: unknown };
+  if (typeof data.message !== "string" || data.message.trim().length === 0) return null;
+  const parsedTimestamp = typeof data.timestamp === "string" ? Date.parse(data.timestamp) : Number.NaN;
+  return {
+    message: data.message,
+    timestamp: Number.isFinite(parsedTimestamp) ? parsedTimestamp : message.timestamp,
+    ...(typeof data.tag === "string" ? { tag: data.tag } : {}),
+    ...(typeof data.level === "string" ? { level: data.level } : {}),
+  };
+}
+
+function normalizeTaskEvent(message: SSEMessage): TaskLogEntry | null {
+  if (message.event === "operations:restore") {
+    const operations = (message.data as { operations?: Array<{ type?: string }> } | null)?.operations ?? [];
+    const operation = operations.at(-1);
+    if (!operation) return null;
+    return {
+      tag: "task",
+      level: "info",
+      message: `已恢复执行中的任务${operation.type ? `: ${operation.type}` : ""}`,
+      timestamp: message.timestamp,
+    };
+  }
+
+  const label = TASK_LABELS[message.event];
+  if (!label) return null;
+  const data = message.data as { error?: unknown; agent?: unknown; tool?: unknown } | null;
+  const detail = typeof data?.error === "string"
+    ? data.error
+    : typeof data?.agent === "string"
+      ? data.agent
+      : typeof data?.tool === "string"
+        ? data.tool
+        : "";
+  return {
+    tag: "task",
+    level: message.event.endsWith(":error") ? "error" : "info",
+    message: detail ? `${label}: ${detail}` : label,
+    timestamp: message.timestamp,
+  };
+}
+
+function getCurrentTask(messages: ReadonlyArray<SSEMessage>): CurrentTask | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    const label = TASK_LABELS[message.event];
+    if (!label) continue;
+    return {
+      bookId: getMessageBookId(message),
+      label,
+      status: message.event.endsWith(":error")
+        ? "error"
+        : message.event.endsWith(":complete")
+          ? "complete"
+          : "running",
+      timestamp: message.timestamp,
+    };
+  }
+
+  let restored: SSEMessage | undefined;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].event === "operations:restore") {
+      restored = messages[i];
+      break;
+    }
+  }
+  const operations = (restored?.data as { operations?: Array<{ bookId?: string; type?: string }> } | null)?.operations ?? [];
+  const operation = operations.at(-1);
+  if (!operation) return null;
+  return {
+    bookId: operation.bookId ?? null,
+    label: operation.type === "agent" ? "Agent 正在执行" : "任务正在执行",
+    status: "running",
+    timestamp: restored?.timestamp ?? Date.now(),
+  };
+}
+
+function restoredOperationMatchesBook(message: SSEMessage, bookId: string): boolean {
+  if (message.event !== "operations:restore") return false;
+  const operations = (message.data as { operations?: Array<{ bookId?: string }> } | null)?.operations ?? [];
+  return operations.some((operation) => operation.bookId === bookId);
+}
+
+function getRecentTaskLogs(messages: ReadonlyArray<SSEMessage>, bookId?: string): ReadonlyArray<TaskLogEntry> {
+  const activeBookIds = deriveActiveBookIds(messages);
+  const seen = new Set<string>();
+  return messages
+    .filter((message) => {
+      if (!bookId) return true;
+      const messageBookId = getMessageBookId(message);
+      if (messageBookId) return messageBookId === bookId;
+      if (restoredOperationMatchesBook(message, bookId)) return true;
+      return message.event === "log" && activeBookIds.size <= 1;
+    })
+    .map((message) => normalizeLogEvent(message) ?? normalizeTaskEvent(message))
+    .filter((entry): entry is TaskLogEntry => entry !== null)
+    .filter((entry) => {
+      const key = `${entry.timestamp}\u0000${entry.tag ?? ""}\u0000${entry.message}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(-6);
+}
+
+function TaskExecutionLog({
+  title,
+  subtitle,
+  entries,
+  progressEvent,
+  compact = false,
+}: {
+  readonly title: string;
+  readonly subtitle?: string;
+  readonly entries: ReadonlyArray<TaskLogEntry>;
+  readonly progressEvent?: SSEMessage;
+  readonly compact?: boolean;
+}) {
+  const progress = progressEvent?.data as { elapsedMs?: number; totalChars?: number } | null;
+
+  if (entries.length === 0 && !progressEvent) {
+    return null;
+  }
+
+  return (
+    <div className={`rounded-3xl border border-primary/15 bg-primary/[0.035] ${compact ? "p-3" : "p-4 sm:p-6"}`}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-primary/20">
+            <Flame size={16} className="animate-pulse" />
+          </div>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-bold text-foreground">{title}</div>
+            {subtitle && <div className="mt-0.5 truncate text-xs text-muted-foreground">{subtitle}</div>}
+          </div>
+        </div>
+        {progress && (
+          <div className="soft-pill flex w-full items-center justify-between gap-3 rounded-full px-3 py-2 text-xs font-bold text-primary sm:w-auto">
+            <span className="flex items-center gap-1.5">
+              <Clock size={12} />
+              {Math.round((progress.elapsedMs ?? 0) / 1000)}s
+            </span>
+            <span className="h-3 w-px bg-primary/20" />
+            <span className="flex items-center gap-1.5">
+              <Zap size={12} />
+              {(progress.totalChars ?? 0).toLocaleString()} 字
+            </span>
+          </div>
+        )}
+      </div>
+
+      {entries.length > 0 && (
+        <div className={`mt-3 space-y-1 overflow-y-auto rounded-2xl border border-border/40 bg-black/5 p-3 font-mono text-[11px] leading-relaxed dark:bg-black/20 ${compact ? "max-h-28" : "max-h-52 sm:text-xs"}`}>
+          {entries.map((entry, index) => (
+            <div key={`${entry.timestamp}-${index}`} className="flex gap-2">
+              <span className="w-16 shrink-0 tabular-nums text-muted-foreground/55">
+                {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+              </span>
+              {entry.tag && (
+                <span className={`shrink-0 ${entry.level === "error" ? "text-destructive" : "text-primary/70"}`}>
+                  [{entry.tag}]
+                </span>
+              )}
+              <span className={entry.level === "error" ? "text-destructive" : "text-foreground/75"}>
+                {entry.message}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BookMenu({ bookId, bookTitle, nav, t, onDelete, onOpenChange }: {
   readonly bookId: string;
   readonly bookTitle: string;
@@ -137,8 +353,9 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
   useEffect(() => { void fetchServices(); }, [fetchServices]);
   const hasServices = serviceStoreServices.some((s) => s.connected);
 
-  const logEvents = sse.messages.filter((m) => m.event === "log").slice(-8);
   const progressEvent = sse.messages.filter((m) => m.event === "llm:progress").slice(-1)[0];
+  const currentTask = useMemo(() => getCurrentTask(sse.messages), [sse.messages]);
+  const currentTaskLogs = useMemo(() => getRecentTaskLogs(sse.messages), [sse.messages]);
 
   useEffect(() => {
     const recent = sse.messages.at(-1);
@@ -249,6 +466,7 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
       <div className="grid gap-4 sm:gap-6">
         {data.books.map((book, index) => {
           const isWriting = writingBooks.has(book.id);
+          const bookTaskLogs = isWriting ? getRecentTaskLogs(sse.messages, book.id) : [];
           const staggerClass = `stagger-${Math.min(index + 1, 5)}`;
           return (
             <div
@@ -347,6 +565,18 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
                 </div>
               </div>
 
+              {isWriting && (
+                <div className="px-4 pb-4 sm:px-7 sm:pb-6">
+                  <TaskExecutionLog
+                    compact
+                    title="当前任务执行日志"
+                    subtitle={currentTask?.bookId === book.id ? currentTask.label : "正在执行写作任务"}
+                    entries={bookTaskLogs}
+                    progressEvent={progressEvent}
+                  />
+                </div>
+              )}
+
               {/* Enhanced progress indicator */}
               {isWriting && (
                 <div className="absolute bottom-0 left-0 right-0 h-1 bg-secondary overflow-hidden">
@@ -358,45 +588,15 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
         })}
       </div>
 
-      {/* Modern writing progress panel */}
-      {writingBooks.size > 0 && logEvents.length > 0 && (
+      {/* Current task execution log */}
+      {currentTask && currentTaskLogs.length > 0 && writingBooks.size === 0 && (
         <div className="glass-panel rounded-[2rem] p-4 sm:p-8 border-primary/20 bg-primary/[0.02] shadow-2xl shadow-primary/5 fade-in">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 sm:mb-6 gap-3">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-primary/20">
-                <Flame size={18} className="animate-pulse" />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold uppercase tracking-widest text-primary"> Manuscript Foundry</h3>
-                <p className="text-xs text-muted-foreground mt-0.5">Real-time LLM generation tracking</p>
-              </div>
-            </div>
-            {progressEvent && (
-              <div className="soft-pill flex items-center gap-4 text-xs font-bold text-primary px-4 py-2 rounded-full">
-                <div className="flex items-center gap-2">
-                  <Clock size={12} />
-                  <span>{Math.round(((progressEvent.data as { elapsedMs?: number })?.elapsedMs ?? 0) / 1000)}s</span>
-                </div>
-                <div className="w-px h-3 bg-primary/20" />
-                <div className="flex items-center gap-2">
-                  <Zap size={12} />
-                  <span>{((progressEvent.data as { totalChars?: number })?.totalChars ?? 0).toLocaleString()} Chars</span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-2 font-mono text-xs bg-black/5 dark:bg-black/20 p-3 sm:p-6 rounded-3xl border border-border/50 max-h-[200px] overflow-y-auto scrollbar-thin">
-            {logEvents.map((msg, i) => {
-              const d = msg.data as { tag?: string; message?: string };
-              return (
-                <div key={i} className="flex gap-3 leading-relaxed animate-in fade-in slide-in-from-left-2 duration-300">
-                  <span className="text-primary/60 font-bold shrink-0">[{d.tag}]</span>
-                  <span className="text-muted-foreground">{d.message}</span>
-                </div>
-              );
-            })}
-          </div>
+          <TaskExecutionLog
+            title="当前任务执行日志"
+            subtitle={currentTask.label}
+            entries={currentTaskLogs}
+            progressEvent={progressEvent}
+          />
         </div>
       )}
 

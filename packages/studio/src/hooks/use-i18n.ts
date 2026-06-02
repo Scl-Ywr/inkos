@@ -259,6 +259,7 @@ const strings = {
   "common.error": { zh: "错误", en: "Error" },
   "common.loading": { zh: "加载中...", en: "Loading..." },
   "common.refresh": { zh: "刷新", en: "Refresh" },
+  "common.clear": { zh: "清空", en: "Clear" },
   "common.enterCommand": { zh: "输入指令...", en: "Enter command..." },
   "chapter.readyForReview": { zh: "待审核", en: "Ready for Review" },
   "chapter.approved": { zh: "已通过", en: "Approved" },

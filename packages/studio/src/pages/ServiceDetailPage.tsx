@@ -3,6 +3,7 @@ import { fetchJson } from "../hooks/use-api";
 import { useServiceStore } from "../store/service";
 import { Eye, EyeOff, Loader2, ArrowLeft, Trash2 } from "lucide-react";
 import { ServiceQuickLinks } from "../components/ServiceQuickLinks";
+import { StudioSelect } from "../components/StudioSelect";
 import {
   deleteServiceConfig,
   matchServiceConfigEntryForDetail,
@@ -276,25 +277,24 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
             <Field label="选择模型">
               {models.length > 0 ? (
                 <div className="flex gap-2">
-                  <select
+                  <StudioSelect
                     value={models.some((m) => m.id === detectedModel) ? detectedModel : "custom"}
-                    onChange={(e) => {
-                      const val = e.target.value;
+                    onValueChange={(val) => {
                       if (val === "custom") {
                         // Keep typing custom ID
                       } else {
                         setDetectedModel(val);
                       }
                     }}
-                    className="flex-1 rounded-lg border border-border/60 bg-background px-3 py-2 text-sm"
-                  >
-                    {models.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name || m.id}
-                      </option>
-                    ))}
-                    <option value="custom">自定义 / 手动输入...</option>
-                  </select>
+                    options={[
+                      ...models.map((m) => ({
+                        value: m.id,
+                        label: m.name || m.id,
+                      })),
+                      { value: "custom", label: "自定义 / 手动输入..." },
+                    ]}
+                    triggerClassName="flex-1 bg-background shadow-none"
+                  />
                   {(!models.some((m) => m.id === detectedModel) || 
                     !models.find((m) => m.id === detectedModel)) && (
                     <input
@@ -370,14 +370,15 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
 
         <div className="grid grid-cols-2 gap-4">
           <Field label="协议类型">
-            <select
+            <StudioSelect
               value={apiFormat}
-              onChange={(e) => setApiFormat(e.target.value as "chat" | "responses")}
-              className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 text-sm"
-            >
-              <option value="chat">Chat / Completions</option>
-              <option value="responses">Responses</option>
-            </select>
+              onValueChange={setApiFormat}
+              options={[
+                { value: "chat", label: "Chat / Completions" },
+                { value: "responses", label: "Responses" },
+              ]}
+              triggerClassName="bg-background shadow-none"
+            />
           </Field>
 
           <Field label="流式响应">

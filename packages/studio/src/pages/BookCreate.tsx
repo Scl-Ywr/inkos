@@ -5,6 +5,7 @@ import { fetchJson, useApi } from "../hooks/use-api";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
+import { StudioSelect } from "../components/StudioSelect";
 import {
   clearBookCreateSessionId,
   getBookCreateSessionId,
@@ -762,15 +763,12 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
           <div className="grid gap-4 sm:grid-cols-3">
             <label className="space-y-2">
               <span className="text-xs font-medium text-muted-foreground">{copy.platformLabel}</span>
-              <select
+              <StudioSelect
                 value={form.platform}
-                onChange={(event) => updateForm({ platform: event.target.value })}
-                className={`w-full ${c.input} rounded-md px-3 py-2.5 focus:outline-none text-sm bg-background`}
-              >
-                {platformChoices.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
+                onValueChange={(platform) => updateForm({ platform })}
+                options={platformChoices}
+                triggerClassName="h-11 rounded-md bg-background shadow-none"
+              />
             </label>
             <label className="space-y-2">
               <span className="text-xs font-medium text-muted-foreground">{copy.targetChaptersLabel}</span>

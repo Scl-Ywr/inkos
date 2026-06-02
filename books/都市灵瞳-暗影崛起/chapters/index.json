@@ -37,7 +37,7 @@
   {
     "number": 2,
     "title": "地底漩涡",
-    "status": "ready-for-review",
+    "status": "approved",
     "wordCount": 2391,
     "createdAt": "2026-06-01T08:49:55.012Z",
     "updatedAt": "2026-06-01T08:49:55.012Z",
@@ -68,7 +68,7 @@
   {
     "number": 3,
     "title": "锈阀之下",
-    "status": "ready-for-review",
+    "status": "approved",
     "wordCount": 2393,
     "createdAt": "2026-06-01T09:17:17.292Z",
     "updatedAt": "2026-06-01T13:02:51.692Z",
@@ -232,6 +232,104 @@
       "promptTokens": 89099,
       "completionTokens": 24238,
       "totalTokens": 113337
+    }
+  },
+  {
+    "number": 8,
+    "title": "观猎区耳语",
+    "status": "ready-for-review",
+    "wordCount": 1943,
+    "createdAt": "2026-06-02T12:47:43.795Z",
+    "updatedAt": "2026-06-02T12:47:43.795Z",
+    "auditIssues": [
+      "[info] 段落中“猛地”（如‘猛地拐进’）一词出现，属于AI标记词库。虽密度不高（约1次/3000字），但属于可优化词汇，供Polisher参考。"
+    ],
+    "lengthWarnings": [],
+    "lengthTelemetry": {
+      "target": 2000,
+      "softMin": 1728,
+      "softMax": 2272,
+      "hardMin": 1455,
+      "hardMax": 2545,
+      "countingMode": "zh_chars",
+      "writerCount": 1943,
+      "postWriterNormalizeCount": 1943,
+      "postReviseCount": 0,
+      "finalCount": 1943,
+      "normalizeApplied": false,
+      "lengthWarning": false
+    },
+    "tokenUsage": {
+      "promptTokens": 51916,
+      "completionTokens": 19340,
+      "totalTokens": 71256
+    }
+  },
+  {
+    "number": 9,
+    "title": "收割者",
+    "status": "audit-failed",
+    "wordCount": 2059,
+    "createdAt": "2026-06-02T13:01:55.421Z",
+    "updatedAt": "2026-06-02T13:09:07.603Z",
+    "auditIssues": [
+      "[warning] 章节从上一章（Ch8）的‘紧张逼近’直接进入本章的‘高压爆发’（斗篷人对峙、灵瞳使用、黑市骚乱、脱身），形成了完整的‘蓄压-爆发’周期，这符合预期。但章尾在脱身后迅速转向‘前往枯骨场’的新目标，缺少对上一波‘爆发后影响’的充分沉淀。例如，林玄脱身后对自身新出现的‘枯骨印向心脏蔓延’这一致命变化的内心冲击、对‘深根计划’信息的初步消化与困惑，以及‘黑市骚乱’对他后续计划的影响评估，略显仓促。",
+      "[info] 本章整体词汇使用准确，但‘仿佛’一词在‘视野被淡蓝色淹没，世界扭曲拉伸。但就在这扭曲中，他“看”到了。’附近出现（原文为‘视野被淡蓝色淹没，世界扭曲拉伸’，虽未直接使用‘仿佛’，但描述方式接近）。根据规则，AI标记词密度每3000字超过1次需关注。本章字数达标，仅此一处近似用法，尚在安全边界内，但值得留意。",
+      "[critical] 出现了「不是……而是……」句式",
+      "[warning] 连续出现4个不足35字的短段，容易形成短句堆砌。"
+    ],
+    "lengthWarnings": [],
+    "lengthTelemetry": {
+      "target": 2000,
+      "softMin": 1728,
+      "softMax": 2272,
+      "hardMin": 1455,
+      "hardMax": 2545,
+      "countingMode": "zh_chars",
+      "writerCount": 2898,
+      "postWriterNormalizeCount": 2059,
+      "postReviseCount": 0,
+      "finalCount": 2059,
+      "normalizeApplied": true,
+      "lengthWarning": false
+    },
+    "tokenUsage": {
+      "promptTokens": 88327,
+      "completionTokens": 20283,
+      "totalTokens": 108610
+    }
+  },
+  {
+    "number": 10,
+    "title": "枯骨场",
+    "status": "audit-failed",
+    "wordCount": 2030,
+    "createdAt": "2026-06-02T13:30:12.088Z",
+    "updatedAt": "2026-06-02T13:30:12.088Z",
+    "auditIssues": [
+      "[info] 段落形状整体偏长，可考虑在关键动作或心理转折处适当拆分，以增强视觉节奏感。",
+      "[warning] 套话词（似乎/可能/或许等）密度为3.3次/千字（阈值>3），语气过于模糊犹豫",
+      "[critical] memo 在 advance/resolve 里声明要处理 H009，但正文没有对应的落地动作"
+    ],
+    "lengthWarnings": [],
+    "lengthTelemetry": {
+      "target": 2000,
+      "softMin": 1728,
+      "softMax": 2272,
+      "hardMin": 1455,
+      "hardMax": 2545,
+      "countingMode": "zh_chars",
+      "writerCount": 2263,
+      "postWriterNormalizeCount": 2030,
+      "postReviseCount": 2030,
+      "finalCount": 2030,
+      "normalizeApplied": false,
+      "lengthWarning": false
+    },
+    "tokenUsage": {
+      "promptTokens": 96983,
+      "completionTokens": 25305,
+      "totalTokens": 122288
     }
   }
 ]

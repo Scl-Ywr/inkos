@@ -5,6 +5,7 @@ import type { TFunction } from "../hooks/use-i18n";
 import { useI18n } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { StudioSelect } from "../components/StudioSelect";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 
 interface GenreInfo {
@@ -106,14 +107,15 @@ function GenreForm({
 
       <div>
         <label className="text-xs text-muted-foreground uppercase tracking-wide">{t("create.language")}</label>
-        <select
+        <StudioSelect
           value={form.language}
-          onChange={(e) => set("language", e.target.value as "zh" | "en")}
-          className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-        >
-          <option value="zh">zh</option>
-          <option value="en">en</option>
-        </select>
+          onValueChange={(value) => set("language", value)}
+          options={[
+            { value: "zh", label: "zh" },
+            { value: "en", label: "en" },
+          ]}
+          triggerClassName="mt-1"
+        />
       </div>
 
       <div>

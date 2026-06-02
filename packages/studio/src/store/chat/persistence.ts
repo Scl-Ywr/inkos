@@ -16,6 +16,8 @@ interface PersistedChatState {
   readonly activeSessionId: string | null;
   readonly sessionIdsByBook: MessageState["sessionIdsByBook"];
   readonly sessions: Record<string, PersistedSession>;
+  readonly selectedModel: string | null;
+  readonly selectedService: string | null;
 }
 
 function canUseStorage(): boolean {
@@ -27,6 +29,23 @@ function sessionSortTime(session: SessionRuntime): number {
   if (typeof messageTime === "number") return messageTime;
   const sessionTime = Number(session.sessionId.split("-")[0]);
   return Number.isFinite(sessionTime) ? sessionTime : 0;
+}
+
+function isTransientAssistantError(message: SessionRuntime["messages"][number]): boolean {
+  if (message.role !== "assistant" || !message.content.startsWith("\u2717")) return false;
+  return /network error|请先选择一个模型|select a model/i.test(message.content);
+}
+
+function cacheableMessages(messages: SessionRuntime["messages"]): SessionRuntime["messages"] {
+  const kept: Array<SessionRuntime["messages"][number]> = [];
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    const next = messages[index + 1];
+    if (isTransientAssistantError(message)) continue;
+    if (message.role === "user" && next && isTransientAssistantError(next)) continue;
+    kept.push(message);
+  }
+  return kept;
 }
 
 export function loadPersistedMessageState(): Partial<MessageState> {
@@ -43,7 +62,7 @@ export function loadPersistedMessageState(): Partial<MessageState> {
         sessionId,
         bookId: session.bookId ?? null,
         title: session.title ?? null,
-        messages: session.messages ?? [],
+        messages: cacheableMessages(session.messages ?? []),
         stream: null,
         isStreaming: false,
         lastError: null,
@@ -54,6 +73,8 @@ export function loadPersistedMessageState(): Partial<MessageState> {
       activeSessionId: parsed.activeSessionId ?? null,
       sessionIdsByBook: parsed.sessionIdsByBook ?? {},
       sessions,
+      selectedModel: parsed.selectedModel ?? null,
+      selectedService: parsed.selectedService ?? null,
     };
   } catch {
     return {};
@@ -64,6 +85,7 @@ export function persistMessageState(state: MessageState): void {
   if (!canUseStorage()) return;
   try {
     const sessionEntries = Object.entries(state.sessions)
+      .map(([sessionId, session]) => [sessionId, { ...session, messages: cacheableMessages(session.messages) }] as const)
       .filter(([, session]) => session.messages.length > 0 || session.isDraft)
       .sort(([, left], [, right]) => {
         return sessionSortTime(right) - sessionSortTime(left);
@@ -94,6 +116,8 @@ export function persistMessageState(state: MessageState): void {
         : null,
       sessionIdsByBook,
       sessions: Object.fromEntries(sessionEntries),
+      selectedModel: state.selectedModel,
+      selectedService: state.selectedService,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
   } catch {

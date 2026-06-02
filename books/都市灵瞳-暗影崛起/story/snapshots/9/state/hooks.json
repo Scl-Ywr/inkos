@@ -1,0 +1,154 @@
+{
+  "hooks": [
+    {
+      "hookId": "H002",
+      "startChapter": 0,
+      "type": "伏笔",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "林雨觉醒或被解救时",
+      "payoffTiming": "mid-arc",
+      "notes": "无"
+    },
+    {
+      "hookId": "H004",
+      "startChapter": 0,
+      "type": "伏笔",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "灵瞳终极代价揭示或寿元危机爆发时",
+      "payoffTiming": "mid-arc",
+      "notes": "无"
+    },
+    {
+      "hookId": "H006",
+      "startChapter": 0,
+      "type": "伏笔",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "暗影楼楼主收藏室场景",
+      "payoffTiming": "mid-arc",
+      "notes": "无"
+    },
+    {
+      "hookId": "H007",
+      "startChapter": 0,
+      "type": "伏笔",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "林玄调查父母死亡真相时",
+      "payoffTiming": "mid-arc",
+      "notes": "无"
+    },
+    {
+      "hookId": "H008",
+      "startChapter": 0,
+      "type": "伏笔",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "灵脉节点调查深入时",
+      "payoffTiming": "mid-arc",
+      "notes": "无"
+    },
+    {
+      "hookId": "H009",
+      "startChapter": 0,
+      "type": "伏笔",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "与苏晚晴立场明确相关事件",
+      "payoffTiming": "mid-arc",
+      "notes": "无"
+    },
+    {
+      "hookId": "H011",
+      "startChapter": 0,
+      "type": "伏笔",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "组织全貌揭示时",
+      "payoffTiming": "mid-arc",
+      "notes": "无"
+    },
+    {
+      "hookId": "H012",
+      "startChapter": 0,
+      "type": "伏笔",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "符纸来历或终极用途揭示时",
+      "payoffTiming": "mid-arc",
+      "notes": "无"
+    },
+    {
+      "hookId": "H013",
+      "startChapter": 0,
+      "type": "伏笔",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "符纸风险处理或符纸秘密揭示",
+      "payoffTiming": "near-term",
+      "notes": "无"
+    },
+    {
+      "hookId": "H014",
+      "startChapter": 0,
+      "type": "伏笔",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "黑市调查完成时",
+      "payoffTiming": "near-term",
+      "notes": "无"
+    },
+    {
+      "hookId": "H015",
+      "startChapter": 0,
+      "type": "伏笔",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "摊主身份或目的揭示时",
+      "payoffTiming": "mid-arc",
+      "notes": "无"
+    },
+    {
+      "hookId": "H016",
+      "startChapter": 0,
+      "type": "伏笔",
+      "status": "resolved",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "（已回收）",
+      "payoffTiming": "mid-arc",
+      "notes": "无"
+    },
+    {
+      "hookId": "H017",
+      "startChapter": 0,
+      "type": "伏笔",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "与外勤三处历史或目的揭示时",
+      "payoffTiming": "mid-arc",
+      "notes": "无"
+    },
+    {
+      "hookId": "H018",
+      "startChapter": 0,
+      "type": "伏笔",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "揭示监视者所属组织或“收割”行动全貌时",
+      "payoffTiming": "mid-arc",
+      "notes": "无"
+    },
+    {
+      "hookId": "H019",
+      "startChapter": 0,
+      "type": "伏笔",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "查明骚乱原因及幕后势力时",
+      "payoffTiming": "mid-arc",
+      "notes": "无"
+    }
+  ]
+}

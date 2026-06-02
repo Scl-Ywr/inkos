@@ -15,6 +15,7 @@
 html,
 body,
 #root {
+  height: 100%;
   min-width: 0;
 }
 
@@ -420,6 +421,12 @@ h3 { font-size: 1.125rem; line-height: 1.4; }
   }
 }
 
+@supports (padding-top: env(safe-area-inset-top)) {
+  .mobile-safe-top {
+    padding-top: max(0.5rem, env(safe-area-inset-top));
+  }
+}
+
 /* Mobile sidebar overlay */
 .mobile-sidebar-backdrop {
   animation: fadeIn 0.2s ease-out forwards;
@@ -451,5 +458,11 @@ html {
 @media (hover: none) {
   button, [role="button"] {
     touch-action: manipulation;
+  }
+}
+
+@media (max-width: 640px) {
+  body {
+    background-attachment: scroll;
   }
 }

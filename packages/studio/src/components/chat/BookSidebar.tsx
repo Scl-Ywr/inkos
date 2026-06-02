@@ -260,22 +260,27 @@ export function BookSidebarToggle({ bookId, theme, t, sse }: BookSidebarProps) {
     <>
       <button
         onClick={() => setOpen(true)}
-        className="fixed right-3 top-[72px] z-20 lg:hidden w-8 h-8 rounded-lg bg-card border border-border/40 flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
+        className="fixed right-3 top-[4.25rem] z-20 flex h-11 w-11 items-center justify-center rounded-2xl border border-border/50 bg-card/95 text-muted-foreground shadow-lg shadow-primary/10 backdrop-blur transition-colors hover:text-foreground lg:hidden"
+        aria-label="打开书籍信息"
       >
-        <PanelRightOpen size={14} />
+        <PanelRightOpen size={18} />
       </button>
 
       {open && (
         <div className="fixed inset-0 z-40 lg:hidden" onClick={() => setOpen(false)}>
           <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" />
           <aside
-            className="absolute right-0 top-0 h-full w-[420px] max-w-[85vw] bg-background border-l border-border/20 overflow-y-auto"
+            className="absolute right-0 top-0 h-full w-[min(28rem,calc(100vw-1rem))] overflow-y-auto border-l border-border/20 bg-background shadow-2xl shadow-primary/10"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between px-3 py-2 border-b border-border/20">
+            <div className="flex items-center justify-between border-b border-border/20 px-3 py-2.5 mobile-safe-top">
               <span className="text-xs font-medium text-muted-foreground">书籍信息</span>
-              <button onClick={() => setOpen(false)} className="text-muted-foreground hover:text-foreground">
-                <PanelRightClose size={14} />
+              <button
+                onClick={() => setOpen(false)}
+                className="flex h-10 w-10 items-center justify-center rounded-xl text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+                aria-label="关闭书籍信息"
+              >
+                <PanelRightClose size={16} />
               </button>
             </div>
             {sidebarView === "artifact" ? (

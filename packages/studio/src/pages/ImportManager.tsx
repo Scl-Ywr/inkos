@@ -4,6 +4,7 @@ import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useI18n } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
+import { StudioSelect } from "../components/StudioSelect";
 import { FileInput, BookCopy, Feather } from "lucide-react";
 
 interface BookSummary {
@@ -94,6 +95,7 @@ export function ImportManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TF
     { id: "canon", label: t("import.canon"), icon: <BookCopy size={14} /> },
     { id: "fanfic", label: t("import.fanfic"), icon: <Feather size={14} /> },
   ];
+  const bookOptions = booksData?.books.map((b) => ({ value: b.id, label: b.title })) ?? [];
 
   return (
     <div className="space-y-8">
@@ -127,11 +129,13 @@ export function ImportManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TF
       <div className={`border ${c.cardStatic} rounded-lg p-6 space-y-4`}>
         {tab === "chapters" && (
           <>
-            <select value={chBookId} onChange={(e) => setChBookId(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm">
-              <option value="">{t("import.selectTarget")}</option>
-              {booksData?.books.map((b) => <option key={b.id} value={b.id}>{b.title}</option>)}
-            </select>
+            <StudioSelect
+              value={chBookId}
+              onValueChange={setChBookId}
+              options={bookOptions}
+              placeholder={t("import.selectTarget")}
+              triggerClassName="bg-secondary/30 shadow-none"
+            />
             <input
               type="text" value={chSplitRegex} onChange={(e) => setChSplitRegex(e.target.value)}
               placeholder={t("import.splitRegex")}
@@ -150,16 +154,20 @@ export function ImportManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TF
 
         {tab === "canon" && (
           <>
-            <select value={canonFrom} onChange={(e) => setCanonFrom(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm">
-              <option value="">{t("import.selectSource")}</option>
-              {booksData?.books.map((b) => <option key={b.id} value={b.id}>{b.title}</option>)}
-            </select>
-            <select value={canonTarget} onChange={(e) => setCanonTarget(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm">
-              <option value="">{t("import.selectDerivative")}</option>
-              {booksData?.books.map((b) => <option key={b.id} value={b.id}>{b.title}</option>)}
-            </select>
+            <StudioSelect
+              value={canonFrom}
+              onValueChange={setCanonFrom}
+              options={bookOptions}
+              placeholder={t("import.selectSource")}
+              triggerClassName="bg-secondary/30 shadow-none"
+            />
+            <StudioSelect
+              value={canonTarget}
+              onValueChange={setCanonTarget}
+              options={bookOptions}
+              placeholder={t("import.selectDerivative")}
+              triggerClassName="bg-secondary/30 shadow-none"
+            />
             <button onClick={handleImportCanon} disabled={loading || !canonTarget || !canonFrom}
               className={`px-4 py-2 text-sm rounded-lg ${c.btnPrimary} disabled:opacity-30`}>
               {loading ? t("import.importing") : t("import.canon")}
@@ -173,26 +181,38 @@ export function ImportManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TF
               placeholder={t("import.fanficTitle")}
               className="w-full px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm"
             />
-            <div className="grid grid-cols-3 gap-3">
-              <select value={ffMode} onChange={(e) => setFfMode(e.target.value)}
-                className="px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm">
-                <option value="canon">Canon</option>
-                <option value="au">AU</option>
-                <option value="ooc">OOC</option>
-                <option value="cp">CP</option>
-              </select>
-              <select value={ffGenre} onChange={(e) => setFfGenre(e.target.value)}
-                className="px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm">
-                <option value="other">Other</option>
-                <option value="xuanhuan">玄幻</option>
-                <option value="urban">都市</option>
-                <option value="xianxia">仙侠</option>
-              </select>
-              <select value={ffLang} onChange={(e) => setFfLang(e.target.value as "zh" | "en")}
-                className="px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm">
-                <option value="zh">中文</option>
-                <option value="en">English</option>
-              </select>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <StudioSelect
+                value={ffMode}
+                onValueChange={setFfMode}
+                options={[
+                  { value: "canon", label: "Canon" },
+                  { value: "au", label: "AU" },
+                  { value: "ooc", label: "OOC" },
+                  { value: "cp", label: "CP" },
+                ]}
+                triggerClassName="bg-secondary/30 shadow-none"
+              />
+              <StudioSelect
+                value={ffGenre}
+                onValueChange={setFfGenre}
+                options={[
+                  { value: "other", label: "Other" },
+                  { value: "xuanhuan", label: "玄幻" },
+                  { value: "urban", label: "都市" },
+                  { value: "xianxia", label: "仙侠" },
+                ]}
+                triggerClassName="bg-secondary/30 shadow-none"
+              />
+              <StudioSelect
+                value={ffLang}
+                onValueChange={(value) => setFfLang(value)}
+                options={[
+                  { value: "zh", label: "中文" },
+                  { value: "en", label: "English" },
+                ]}
+                triggerClassName="bg-secondary/30 shadow-none"
+              />
             </div>
             <textarea value={ffText} onChange={(e) => setFfText(e.target.value)} rows={10}
               placeholder={t("import.pasteMaterial")}

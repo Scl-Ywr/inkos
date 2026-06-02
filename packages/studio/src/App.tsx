@@ -142,7 +142,7 @@ export function App() {
   }
 
   return (
-    <div className="h-screen claude-surface text-foreground flex overflow-hidden font-sans">
+    <div className="h-[100dvh] claude-surface text-foreground flex overflow-hidden font-sans">
       {/* Left Sidebar — hidden on mobile, shown as overlay when toggled */}
       <div className="hidden md:block h-full">
         <Sidebar nav={nav} activePage={activePage} sse={sse} t={t} />
@@ -154,17 +154,18 @@ export function App() {
       {/* Center Content */}
       <div className="flex-1 flex flex-col min-w-0 bg-background/20">
         {/* Header Strip */}
-        <header className="h-14 sm:h-16 shrink-0 flex items-center justify-between gap-2 px-3 sm:px-4 md:px-8 border-b border-border/45 claude-topbar shadow-sm shadow-primary/5">
+        <header className="h-13 sm:h-16 shrink-0 flex items-center justify-between gap-2 px-2.5 sm:px-4 md:px-8 border-b border-border/45 claude-topbar shadow-sm shadow-primary/5 mobile-safe-top">
           <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
              <button
                onClick={() => setSidebarOpen(true)}
-               className="md:hidden flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl text-muted-foreground hover:bg-secondary/80 hover:text-foreground transition-colors"
+               className="md:hidden flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-muted-foreground hover:bg-secondary/80 hover:text-foreground transition-colors"
+               aria-label="打开导航"
              >
-               <Menu size={18} />
+               <Menu size={20} />
              </button>
              <button
                onClick={nav.toDashboard}
-               className="soft-pill inline-flex min-w-0 max-w-[48vw] items-center gap-2 rounded-full px-3 py-2 text-sm font-medium text-foreground hover:border-primary/40 transition-colors sm:max-w-none sm:px-3.5"
+               className="soft-pill inline-flex h-10 min-w-0 max-w-[52vw] items-center gap-2 rounded-full px-3 text-sm font-medium text-foreground hover:border-primary/40 transition-colors sm:max-w-none sm:px-3.5"
              >
                <House size={14} />
                <span className="hidden sm:inline">首页</span>
@@ -180,7 +181,7 @@ export function App() {
                   await putApi("/project", { language: "zh" });
                   refetchProject();
                 }}
-                className={`text-xs px-2 py-1 rounded-full transition-colors sm:px-2.5 ${currentLang === "zh" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                className={`min-h-8 min-w-8 rounded-full px-2 text-xs transition-colors sm:px-2.5 ${currentLang === "zh" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
               >
                 中
               </button>
@@ -189,7 +190,7 @@ export function App() {
                   await putApi("/project", { language: "en" });
                   refetchProject();
                 }}
-                className={`text-xs px-2 py-1 rounded-full transition-colors sm:px-2.5 ${currentLang === "en" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                className={`min-h-8 min-w-8 rounded-full px-2 text-xs transition-colors sm:px-2.5 ${currentLang === "en" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
               >
                 EN
               </button>
@@ -197,7 +198,8 @@ export function App() {
 
             <button
               onClick={() => setTheme(isDark ? "light" : "dark")}
-              className="soft-pill flex h-10 w-10 items-center justify-center rounded-full text-muted-foreground hover:text-foreground transition-colors sm:h-9 sm:w-9"
+              className="soft-pill flex h-10 w-10 items-center justify-center rounded-full text-muted-foreground hover:text-foreground transition-colors"
+              aria-label={isDark ? "切换到亮色模式" : "切换到暗色模式"}
             >
               {isDark ? <Sun size={14} /> : <Moon size={14} />}
             </button>

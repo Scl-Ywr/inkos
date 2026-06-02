@@ -6,6 +6,7 @@ import type { SSEMessage } from "../hooks/use-sse";
 import { useColors } from "../hooks/use-colors";
 import { deriveBookActivity, shouldRefetchBookView } from "../hooks/use-book-activity";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { StudioSelect } from "../components/StudioSelect";
 import {
   ChevronLeft,
   Zap,
@@ -357,6 +358,25 @@ export function BookDetail({
   const currentStatus = settingsStatus ?? (book.status as BookStatus);
 
   const exportHref = `/api/v1/books/${bookId}/export?format=${exportFormat}${exportApprovedOnly ? "&approvedOnly=true" : ""}`;
+  const exportFormatOptions = [
+    { value: "txt" as const, label: "TXT" },
+    { value: "md" as const, label: "MD" },
+    { value: "epub" as const, label: "EPUB" },
+  ];
+  const bookStatusOptions = [
+    { value: "active" as const, label: t("book.statusActive") },
+    { value: "paused" as const, label: t("book.statusPaused") },
+    { value: "outlining" as const, label: t("book.statusOutlining") },
+    { value: "completed" as const, label: t("book.statusCompleted") },
+    { value: "dropped" as const, label: t("book.statusDropped") },
+  ];
+  const reviseModeOptions = [
+    { value: "spot-fix" as const, label: t("book.spotFix") },
+    { value: "polish" as const, label: t("book.polish") },
+    { value: "rewrite" as const, label: t("book.rewrite") },
+    { value: "rework" as const, label: t("book.rework") },
+    { value: "anti-detect" as const, label: t("book.antiDetect") },
+  ];
 
   return (
     <div className="space-y-8 fade-in">
@@ -502,15 +522,12 @@ export function BookDetail({
             {t("book.analytics")}
           </button>
           <div className="flex items-center gap-2">
-            <select
+            <StudioSelect
               value={exportFormat}
-              onChange={(e) => setExportFormat(e.target.value as ExportFormat)}
-              className="px-2 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg border border-border/50 outline-none"
-            >
-              <option value="txt">TXT</option>
-              <option value="md">MD</option>
-              <option value="epub">EPUB</option>
-            </select>
+              onValueChange={setExportFormat}
+              options={exportFormatOptions}
+              triggerClassName="h-9 w-24 rounded-lg bg-secondary/50 text-xs font-bold text-muted-foreground shadow-none"
+            />
             <label className="flex items-center gap-1.5 text-xs font-bold text-muted-foreground cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -565,17 +582,12 @@ export function BookDetail({
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{t("book.status")}</label>
-            <select
+            <StudioSelect
               value={currentStatus}
-              onChange={(e) => setSettingsStatus(e.target.value as BookStatus)}
-              className="px-3 py-2 text-sm rounded-lg border border-border/50 bg-secondary/30 outline-none focus:border-primary/50"
-            >
-              <option value="active">{t("book.statusActive")}</option>
-              <option value="paused">{t("book.statusPaused")}</option>
-              <option value="outlining">{t("book.statusOutlining")}</option>
-              <option value="completed">{t("book.statusCompleted")}</option>
-              <option value="dropped">{t("book.statusDropped")}</option>
-            </select>
+              onValueChange={setSettingsStatus}
+              options={bookStatusOptions}
+              triggerClassName="h-10 min-w-36 rounded-lg bg-secondary/30 shadow-none"
+            />
           </div>
           <button
             onClick={handleSaveSettings}
@@ -588,9 +600,119 @@ export function BookDetail({
         </div>
       </div>
 
-      {/* Chapters Table */}
+      {/* Chapters List */}
       <div className="paper-sheet rounded-2xl overflow-hidden border border-border/40 shadow-xl shadow-primary/5">
-        <div className="overflow-x-auto">
+        <div className="divide-y divide-border/30 md:hidden">
+          {chapters.map((ch, index) => {
+            const staggerClass = `stagger-${Math.min(index + 1, 5)}`;
+            const busy = rewritingChapters.includes(ch.number)
+              || revisingChapters.includes(ch.number)
+              || syncingChapters.includes(ch.number);
+            return (
+              <div key={ch.number} className={`p-4 fade-in ${staggerClass}`}>
+                <div className="flex items-start gap-3">
+                  <div className="w-9 shrink-0 pt-1 font-mono text-xs text-muted-foreground/60">
+                    {ch.number.toString().padStart(2, "0")}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <button
+                      onClick={() => nav.toChapter(bookId, ch.number)}
+                      className="block w-full text-left font-serif text-lg font-medium leading-snug text-foreground hover:text-primary"
+                    >
+                      {ch.title || t("chapter.label").replace("{n}", String(ch.number))}
+                    </button>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-medium tabular-nums text-muted-foreground">
+                        {(ch.wordCount ?? 0).toLocaleString()} {t("book.words")}
+                      </span>
+                      <div className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-tight ${STATUS_CONFIG[ch.status]?.color ?? "bg-muted text-muted-foreground"}`}>
+                        {STATUS_CONFIG[ch.status]?.icon}
+                        {translateChapterStatus(ch.status, t)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap items-center gap-2 pl-12">
+                  {ch.status === "ready-for-review" && (
+                    <>
+                      <button
+                        onClick={async () => {
+                          try { await postApi(`/books/${bookId}/chapters/${ch.number}/approve`); refetch(); }
+                          catch (e) { alert(e instanceof Error ? e.message : "Approve failed"); }
+                        }}
+                        className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-500 text-white shadow-sm shadow-emerald-500/20"
+                        title={t("book.approve")}
+                        aria-label={t("book.approve")}
+                      >
+                        <Check size={18} />
+                      </button>
+                      <button
+                        onClick={async () => {
+                          try { await postApi(`/books/${bookId}/chapters/${ch.number}/reject`); refetch(); }
+                          catch (e) { alert(e instanceof Error ? e.message : "Reject failed"); }
+                        }}
+                        className="flex h-11 w-11 items-center justify-center rounded-2xl bg-destructive/10 text-destructive"
+                        title={t("book.reject")}
+                        aria-label={t("book.reject")}
+                      >
+                        <X size={18} />
+                      </button>
+                    </>
+                  )}
+                  <button
+                    onClick={async () => {
+                      try {
+                        const auditResult = await fetchJson<{ passed?: boolean; issues?: unknown[] }>(`/books/${bookId}/audit/${ch.number}`, { method: "POST" });
+                        alert(auditResult.passed ? "Audit passed" : `Audit failed: ${auditResult.issues?.length ?? 0} issues`);
+                        refetch();
+                      } catch (e) {
+                        alert(e instanceof Error ? e.message : "Audit failed");
+                      }
+                    }}
+                    className="flex h-11 w-11 items-center justify-center rounded-2xl bg-secondary text-muted-foreground"
+                    title={t("book.audit")}
+                    aria-label={t("book.audit")}
+                  >
+                    <ShieldCheck size={18} />
+                  </button>
+                  <button
+                    onClick={() => handleRewrite(ch.number)}
+                    disabled={busy}
+                    className="flex h-11 w-11 items-center justify-center rounded-2xl bg-secondary text-muted-foreground disabled:opacity-40"
+                    title={t("book.rewrite")}
+                    aria-label={t("book.rewrite")}
+                  >
+                    {rewritingChapters.includes(ch.number)
+                      ? <div className="h-4 w-4 rounded-full border-2 border-muted-foreground/20 border-t-muted-foreground animate-spin" />
+                      : <RotateCcw size={18} />}
+                  </button>
+                  <button
+                    onClick={() => handleSync(ch.number)}
+                    disabled={busy || ch.number !== latestPersistedChapter}
+                    className="flex h-11 w-11 items-center justify-center rounded-2xl bg-secondary text-muted-foreground disabled:opacity-40"
+                    title={data?.book.language === "en" ? "Sync truth/state from edited chapter" : "根据已编辑章节同步 truth/state"}
+                    aria-label={data?.book.language === "en" ? "Sync truth/state from edited chapter" : "根据已编辑章节同步 truth/state"}
+                  >
+                    {syncingChapters.includes(ch.number)
+                      ? <div className="h-4 w-4 rounded-full border-2 border-muted-foreground/20 border-t-muted-foreground animate-spin" />
+                      : <RefreshCw size={18} />}
+                  </button>
+                  <StudioSelect
+                    disabled={revisingChapters.includes(ch.number)}
+                    value=""
+                    onValueChange={(mode) => handleRevise(ch.number, mode)}
+                    options={reviseModeOptions}
+                    placeholder={revisingChapters.includes(ch.number) ? t("common.loading") : t("book.curate")}
+                    triggerClassName="h-11 w-28 rounded-2xl bg-secondary text-sm font-bold text-muted-foreground shadow-none disabled:opacity-40"
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="hidden overflow-x-auto md:block">
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="bg-muted/30 border-b border-border/50">
@@ -623,7 +745,7 @@ export function BookDetail({
                     </div>
                   </td>
                   <td className="px-3 sm:px-6 py-3 sm:py-4 text-right">
-                    <div className="flex gap-1.5 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex gap-1.5 justify-end opacity-100 transition-opacity">
                       {ch.status === "ready-for-review" && (
                         <>
                           <button
@@ -683,23 +805,14 @@ export function BookDetail({
                           ? <div className="w-3.5 h-3.5 border-2 border-muted-foreground/20 border-t-muted-foreground rounded-full animate-spin" />
                           : <RefreshCw size={14} />}
                       </button>
-                      <select
+                      <StudioSelect
                         disabled={revisingChapters.includes(ch.number)}
                         value=""
-                        onChange={(e) => {
-                          const mode = e.target.value as ReviseMode;
-                          if (mode) handleRevise(ch.number, mode);
-                        }}
-                        className="px-2 py-1.5 text-[11px] font-bold rounded-lg bg-secondary text-muted-foreground border border-border/50 outline-none hover:text-primary hover:bg-primary/10 transition-all disabled:opacity-50 cursor-pointer"
-                        title="Revise with AI"
-                      >
-                        <option value="" disabled>{revisingChapters.includes(ch.number) ? t("common.loading") : t("book.curate")}</option>
-                        <option value="spot-fix">{t("book.spotFix")}</option>
-                        <option value="polish">{t("book.polish")}</option>
-                        <option value="rewrite">{t("book.rewrite")}</option>
-                        <option value="rework">{t("book.rework")}</option>
-                        <option value="anti-detect">{t("book.antiDetect")}</option>
-                      </select>
+                        onValueChange={(mode) => handleRevise(ch.number, mode)}
+                        options={reviseModeOptions}
+                        placeholder={revisingChapters.includes(ch.number) ? t("common.loading") : t("book.curate")}
+                        triggerClassName="h-8 w-24 rounded-lg bg-secondary text-[11px] font-bold text-muted-foreground shadow-none hover:text-primary hover:bg-primary/10 disabled:opacity-50"
+                      />
                     </div>
                   </td>
                 </tr>

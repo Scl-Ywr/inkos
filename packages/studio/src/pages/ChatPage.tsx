@@ -303,7 +303,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
       <div
         ref={scrollRef}
         onScroll={handleMessageScroll}
-        className="chat-message-scroll flex-1 overflow-y-auto [scrollbar-gutter:stable] px-3 sm:px-4 py-4 sm:py-6"
+        className="chat-message-scroll flex-1 overflow-y-auto [scrollbar-gutter:stable] px-2.5 py-3 sm:px-4 sm:py-6"
       >
         {messages.length === 0 && !loading ? (
           <div className="h-full flex flex-col items-center justify-center text-center select-none">
@@ -315,7 +315,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
             </p>
           </div>
         ) : (
-          <div className="max-w-3xl mx-auto space-y-4">
+          <div className="mx-auto max-w-3xl space-y-3 sm:space-y-4">
             {messages.map((msg, i) => (
               <div key={`${msg.timestamp}-${i}`}>
                 {msg.role === "user" ? (
@@ -417,7 +417,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
               setFollowingLatest(true);
               requestAnimationFrame(() => scrollToLatest("auto"));
             }}
-            className="sticky bottom-4 left-1/2 z-20 mx-auto mt-4 flex w-max -translate-x-1/2 items-center gap-2 rounded-full border border-border/70 bg-card/95 px-3 py-2 text-xs font-medium text-foreground shadow-lg shadow-primary/10 backdrop-blur transition-all hover:border-primary/40 hover:text-primary"
+            className="sticky bottom-3 left-1/2 z-20 mx-auto mt-4 flex min-h-10 w-max -translate-x-1/2 items-center gap-2 rounded-full border border-border/70 bg-card/95 px-4 py-2 text-xs font-medium text-foreground shadow-lg shadow-primary/10 backdrop-blur transition-all hover:border-primary/40 hover:text-primary sm:bottom-4"
           >
             <ChevronDown size={14} />
             {isZh ? "追踪最新位置" : "Follow latest"}
@@ -427,7 +427,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
 
       {/* Quick actions (only when a book is active) */}
       {hasBook && (
-        <div className="shrink-0 max-w-3xl mx-auto w-full px-3 sm:px-4">
+        <div className="shrink-0 mx-auto w-full max-w-3xl px-2.5 sm:px-4">
           <QuickActions
             onAction={handleQuickAction}
             disabled={loading || !activeSessionId}
@@ -437,10 +437,10 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
       )}
 
       {/* Input area */}
-      <div className="shrink-0 border-t border-border/45 px-3 sm:px-4 py-3 sm:py-4 claude-topbar mobile-safe-bottom">
-        <div className="max-w-3xl mx-auto">
-            <div className="claude-composer rounded-2xl transition-all">
-              <div className="flex items-center gap-2 px-3 py-2">
+      <div className="shrink-0 border-t border-border/45 px-2.5 py-2 claude-topbar mobile-safe-bottom sm:px-4 sm:py-4">
+        <div className="mx-auto max-w-3xl">
+            <div className="claude-composer rounded-[1.35rem] transition-all sm:rounded-2xl">
+              <div className="flex items-end gap-2 px-3 py-2.5">
                 <textarea
                   ref={textareaRef}
                   value={input}
@@ -449,24 +449,25 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                   placeholder={isZh ? "输入消息..." : "Message InkOS..."}
                   disabled={loading || !activeSessionId}
                   rows={1}
-                  className="flex-1 bg-transparent text-sm leading-6 placeholder:text-muted-foreground/60 outline-none! border-none! ring-0! shadow-none focus:outline-none! focus:ring-0! focus:border-none! resize-none disabled:opacity-50 max-h-[200px] overflow-y-auto"
+                  className="max-h-[40dvh] min-h-11 flex-1 resize-none overflow-y-auto border-none! bg-transparent text-base leading-6 placeholder:text-muted-foreground/60 shadow-none outline-none! ring-0! focus:border-none! focus:outline-none! focus:ring-0! disabled:opacity-50 sm:max-h-[200px] sm:min-h-0 sm:text-sm"
                 />
                 <button
                   type="button"
                   onClick={() => onSend(input)}
                   disabled={!input.trim() || loading || !activeSessionId}
-                  className="w-8 h-8 rounded-xl bg-primary text-primary-foreground flex items-center justify-center shrink-0 hover:scale-105 active:scale-95 transition-all disabled:opacity-20 disabled:scale-100 shadow-sm shadow-primary/20"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-sm shadow-primary/20 transition-all hover:scale-105 active:scale-95 disabled:scale-100 disabled:opacity-20 sm:h-8 sm:w-8 sm:rounded-xl"
+                  aria-label={isZh ? "发送消息" : "Send message"}
                 >
-                  {loading ? <Loader2 size={14} className="animate-spin" /> : <ArrowUp size={14} strokeWidth={2.5} />}
+                  {loading ? <Loader2 size={16} className="animate-spin sm:size-3.5" /> : <ArrowUp size={16} strokeWidth={2.5} className="sm:size-3.5" />}
                 </button>
               </div>
-              <div className="flex items-center gap-2 px-3 pb-2 border-t border-border/35 pt-1.5">
+              <div className="flex min-h-10 items-center gap-2 border-t border-border/35 px-3 pb-2 pt-1.5">
                 {modelPickerStatus === "loading" ? (
                   <span className="text-xs text-muted-foreground/40 animate-pulse">加载模型...</span>
                 ) : modelPickerStatus === "ready" ? (
                   <DropdownMenu>
-                    <DropdownMenuTrigger className="flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-secondary/70 text-sm transition-colors cursor-pointer">
-                      <span className="font-medium text-xs truncate max-w-[140px] sm:max-w-[220px]">
+                    <DropdownMenuTrigger className="flex min-h-9 max-w-full items-center gap-1.5 rounded-xl px-2.5 py-1 text-sm transition-colors hover:bg-secondary/70">
+                      <span className="max-w-[calc(100vw-7rem)] truncate text-xs font-medium sm:max-w-[220px]">
                         {selectedModelLabel}
                       </span>
                       <ChevronDown size={14} className="text-muted-foreground" />
@@ -482,7 +483,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                 ) : (
                   <button
                     onClick={() => nav.toServices()}
-                    className="text-xs text-muted-foreground/50 hover:text-primary transition-colors"
+                    className="min-h-9 rounded-xl px-2.5 text-xs text-muted-foreground/50 transition-colors hover:text-primary"
                   >
                     配置模型 →
                   </button>
@@ -512,14 +513,14 @@ function ModelPickerContent({
   const filtered = useMemo(() => filterModelGroups(groupedModels, search), [groupedModels, search]);
 
   return (
-    <DropdownMenuContent side="top" align="start" className="w-64 max-h-80 flex flex-col">
-      <div className="px-2 py-1.5 border-b border-border/30">
+    <DropdownMenuContent side="top" align="start" className="flex max-h-[56dvh] w-[min(22rem,calc(100vw-1rem))] flex-col rounded-2xl p-1.5">
+      <div className="border-b border-border/30 px-2 py-2">
         <input
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="搜索模型..."
-          className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground/40"
+          className="h-10 w-full rounded-xl bg-secondary/35 px-3 text-base outline-none placeholder:text-muted-foreground/40 sm:text-sm"
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
         />
@@ -538,8 +539,8 @@ function ModelPickerContent({
                   onClick={() => onSelect(m.id, group.service)}
                   className={isSelected ? "bg-muted/50" : ""}
                 >
-                  <div className="flex flex-1 items-center justify-between">
-                    <span className="text-sm">{m.name ?? m.id}</span>
+                  <div className="flex min-h-10 flex-1 items-center justify-between gap-3">
+                    <span className="truncate text-sm">{m.name ?? m.id}</span>
                     {isSelected && <Check size={14} className="text-primary shrink-0" />}
                   </div>
                 </DropdownMenuItem>
@@ -554,7 +555,7 @@ function ModelPickerContent({
         )}
       </div>
       <div className="border-t border-border/30">
-        <DropdownMenuItem onClick={onManage} className="text-primary">
+        <DropdownMenuItem onClick={onManage} className="min-h-10 text-primary">
           管理服务商
         </DropdownMenuItem>
       </div>

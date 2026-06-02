@@ -3,6 +3,7 @@ import { fetchJson, useApi, postApi } from "../hooks/use-api";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
+import { StudioSelect } from "../components/StudioSelect";
 import { Wand2, Upload, BarChart3 } from "lucide-react";
 
 interface StyleProfile {
@@ -178,16 +179,13 @@ export function StyleManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
                   <Upload size={14} />
                   {t("style.importToBook")}
                 </h4>
-                <select
+                <StudioSelect
                   value={importBookId}
-                  onChange={(e) => setImportBookId(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm"
-                >
-                  <option value="">{t("style.selectBook")}</option>
-                  {booksData?.books.map((b) => (
-                    <option key={b.id} value={b.id}>{b.title}</option>
-                  ))}
-                </select>
+                  onValueChange={setImportBookId}
+                  options={booksData?.books.map((b) => ({ value: b.id, label: b.title })) ?? []}
+                  placeholder={t("style.selectBook")}
+                  triggerClassName="bg-secondary/30 shadow-none"
+                />
                 <button
                   onClick={handleImport}
                   disabled={!importBookId}
