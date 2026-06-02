@@ -31,11 +31,14 @@ WORKDIR /app
 
 # Copy built artifacts and dependencies
 COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/packages/core/node_modules ./packages/core/node_modules
 COPY --from=builder /app/packages/core/dist ./packages/core/dist
 COPY --from=builder /app/packages/core/package.json ./packages/core/
 COPY --from=builder /app/packages/core/genres ./packages/core/genres
+COPY --from=builder /app/packages/cli/node_modules ./packages/cli/node_modules
 COPY --from=builder /app/packages/cli/dist ./packages/cli/dist
 COPY --from=builder /app/packages/cli/package.json ./packages/cli/
+COPY --from=builder /app/packages/studio/node_modules ./packages/studio/node_modules
 COPY --from=builder /app/packages/studio/dist ./packages/studio/dist
 COPY --from=builder /app/packages/studio/package.json ./packages/studio/
 COPY --from=builder /app/packages/studio/index.html ./packages/studio/
