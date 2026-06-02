@@ -1,0 +1,34 @@
+# ─── InkOS Studio 自部署 docker-compose ───
+# 使用方法：
+#   1. cp .env.docker .env && vim .env  # 编辑 API Key 等配置
+#   2. docker compose up -d             # 启动
+#   3. docker compose logs -f           # 查看日志
+#   4. 访问 http://<服务器IP>:8080
+
+services:
+  inkos-studio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: inkos-studio
+    restart: unless-stopped
+    ports:
+      - "${INKOS_PORT:-8080}:8080"
+    volumes:
+      # 持久化数据目录（书籍、状态、配置、SQLite 数据库）
+      - ./inkos-data:/data
+    environment:
+      - INKOS_STUDIO_PORT=8080
+      - INKOS_PROJECT_ROOT=/data
+      - NODE_ENV=production
+      # LLM 配置（从 .env 文件读取）
+      - INKOS_LLM_PROVIDER=${INKOS_LLM_PROVIDER:-openai}
+      - INKOS_LLM_BASE_URL=${INKOS_LLM_BASE_URL:-}
+      - INKOS_LLM_API_KEY=${INKOS_LLM_API_KEY:-}
+      - INKOS_LLM_MODEL=${INKOS_LLM_MODEL:-}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/api/v1/doctor').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

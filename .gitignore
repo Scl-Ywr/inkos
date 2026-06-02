@@ -78,6 +78,9 @@ web_modules/
 # inkos local data (secrets, sessions)
 .inkos/
 
+# Docker persistent data volume
+inkos-data/
+
 # Claude Code local settings
 .claude/
 .env.development.local
