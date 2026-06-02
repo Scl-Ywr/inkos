@@ -12,31 +12,31 @@
     "E:\\inkos-1.4.1\\books\\都市灵瞳-暗影崛起\\story\\memory.db"
   ],
   "composerInputs": [
-    "E:\\inkos-1.4.1\\books\\都市灵瞳-暗影崛起\\story\\runtime\\chapter-0003.intent.md"
+    "E:\\inkos\\books\\都市灵瞳-暗影崛起\\story\\runtime\\chapter-0003.intent.md"
   ],
   "selectedSources": [
     "runtime/chapter_memo",
     "story/current_focus.md",
+    "story/audit_drift.md",
     "story/current_state.md",
     "story/outline/story_frame.md",
     "story/outline/volume_map.md",
     "story/chapter_summaries.md#recent_titles",
     "story/chapter_summaries.md#recent_mood_type_trail",
     "story/chapters#recent_endings",
-    "runtime/hook_debt#H002",
-    "runtime/hook_debt#H008",
-    "runtime/hook_debt#H009",
-    "story/current_state.md#当前冲突",
     "story/current_state.md#当前目标",
+    "story/current_state.md#当前冲突",
     "story/current_state.md#主角状态",
     "story/current_state.md#当前限制",
     "story/chapter_summaries.md#2",
-    "story/pending_hooks.md#H001",
-    "story/pending_hooks.md#surveillance-灵管局巡查机-制与阈值检测-手段的后续博",
-    "story/pending_hooks.md#H008",
-    "story/pending_hooks.md#H009",
-    "story/pending_hooks.md#H002",
-    "story/pending_hooks.md#H007"
+    "story/pending_hooks.md#hook-7",
+    "story/pending_hooks.md#hook-1",
+    "story/pending_hooks.md#hook-2",
+    "story/pending_hooks.md#hook-3",
+    "story/pending_hooks.md#hook-4",
+    "story/pending_hooks.md#hook-5",
+    "story/pending_hooks.md#hook-6",
+    "story/pending_hooks.md#hook-8"
   ],
   "notes": []
 }

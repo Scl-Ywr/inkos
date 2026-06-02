@@ -1,0 +1,53 @@
+{
+  "chapter": 3,
+  "facts": [
+    {
+      "subject": "protagonist",
+      "predicate": "当前位置",
+      "object": "厂区地下控制室 / B3层屏蔽密室入口处",
+      "validFromChapter": 3,
+      "validUntilChapter": null,
+      "sourceChapter": 3
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "主角状态",
+      "object": "凝元灵渣注入生效（体温回升、经脉暂稳），灵瞳过载损伤（眼底毛细血管破裂渗血、视力边缘发黑），剩余可用次数0；视网膜倒计时1093天；胸口隐痛缓解但未根除",
+      "validFromChapter": 3,
+      "validUntilChapter": null,
+      "sourceChapter": 3
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "当前目标",
+      "object": "获取灵渣暂稳病情，锁定妹妹交接坐标（市立第三医院地下灵枢室，72小时窗口）",
+      "validFromChapter": 3,
+      "validUntilChapter": null,
+      "sourceChapter": 3
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "当前限制",
+      "object": "灵瞳今日不可用；灵管局无人机群收网中；H002追踪协议激活（离厂超500米触发）；B3层存在独立屏蔽场阻断数据读取",
+      "validFromChapter": 3,
+      "validUntilChapter": null,
+      "sourceChapter": 3
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "当前敌我",
+      "object": "厂区自动化巡守系统（二级警报）、灵管局外勤无人机群（单向监视/拦截）",
+      "validFromChapter": 3,
+      "validUntilChapter": null,
+      "sourceChapter": 3
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "当前冲突",
+      "object": "72小时救援倒计时 vs 灵管局封锁；B3盲区情报缺失 vs 潜入需求；灵渣成分异常线索待验",
+      "validFromChapter": 3,
+      "validUntilChapter": null,
+      "sourceChapter": 3
+    }
+  ]
+}

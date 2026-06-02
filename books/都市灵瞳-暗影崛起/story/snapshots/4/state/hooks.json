@@ -1,0 +1,99 @@
+{
+  "hooks": [
+    {
+      "hookId": "hook-1",
+      "startChapter": 0,
+      "type": "unspecified",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "中程",
+      "payoffTiming": "mid-arc",
+      "notes": "灵渣中检测到“人血淬炼”残留，待交叉验证"
+    },
+    {
+      "hookId": "hook-2",
+      "startChapter": 0,
+      "type": "unspecified",
+      "status": "resolved",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "已回收",
+      "notes": "苏晚晴结构图缺失B3层已验证，信息差缺口填补"
+    },
+    {
+      "hookId": "hook-3",
+      "startChapter": 0,
+      "type": "unspecified",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "立即",
+      "notes": "离厂超500米回传定位协议待测，撤离时高危"
+    },
+    {
+      "hookId": "hook-4",
+      "startChapter": 0,
+      "type": "unspecified",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "中程",
+      "payoffTiming": "mid-arc",
+      "notes": "代价机制实感强化，透支伤根基确立"
+    },
+    {
+      "hookId": "hook-5",
+      "startChapter": 0,
+      "type": "unspecified",
+      "status": "deferred",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "中程",
+      "payoffTiming": "mid-arc",
+      "notes": "留待撤离厂区时验证无人机收网"
+    },
+    {
+      "hookId": "hook-6",
+      "startChapter": 0,
+      "type": "unspecified",
+      "status": "resolved",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "中程",
+      "payoffTiming": "mid-arc",
+      "notes": "抽吸网络物理节点已落地，暂告段落"
+    },
+    {
+      "hookId": "hook-7",
+      "startChapter": 0,
+      "type": "unspecified",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "立即",
+      "notes": "枯竭症人为痕迹待样本交叉验证"
+    },
+    {
+      "hookId": "hook-8",
+      "startChapter": 0,
+      "type": "unspecified",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "立即",
+      "notes": "灵瞳身世关联待境界突破或暗楼接触"
+    },
+    {
+      "hookId": "hook-9",
+      "startChapter": 4,
+      "type": "人物/立场",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "中程",
+      "payoffTiming": "mid-arc",
+      "notes": "盟友立场存疑，确认其提前介入中转站数据维护"
+    },
+    {
+      "hookId": "hook-10",
+      "startChapter": 4,
+      "type": "威胁/行动",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "立即",
+      "notes": "战术小队已逼近B3走廊，撤离路线受堵"
+    }
+  ]
+}

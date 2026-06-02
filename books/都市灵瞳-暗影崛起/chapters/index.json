@@ -68,16 +68,13 @@
   {
     "number": 3,
     "title": "锈阀之下",
-    "status": "state-degraded",
-    "wordCount": 2179,
+    "status": "ready-for-review",
+    "wordCount": 2393,
     "createdAt": "2026-06-01T09:17:17.292Z",
-    "updatedAt": "2026-06-01T09:17:17.292Z",
+    "updatedAt": "2026-06-01T13:02:51.692Z",
     "auditIssues": [
-      "[info] 守阵傀儡的优先级判定与协议切换段落采用偏系统日志的客观叙述，虽未合并视角，但稍显抽离。备忘要求‘圆心法’三方在同一时空节点各自过一遍反应与算计，当前写法傀儡的‘算计’未完全绑定主角感知。",
-      "[info] 章尾林玄在无人机逼近、撤离窗口仅剩三分钟的情况下，立即放弃撤退转而暴力撬开B3屏蔽门，决策转换极快。虽符合倒计时驱动的人设，但缺乏半句心理权衡或风险计算的过渡，略显‘为开新钩而行动’。",
-      "[critical] memo 在 advance/resolve 里声明要处理 surveillance-灵管局，但正文没有对应的落地动作",
-      "[critical] memo 在 advance/resolve 里声明要处理 H008，但正文没有对应的落地动作",
-      "[warning] 状态校验不可用：Error: 无法连接到 API 服务。可能原因：\n  1. baseUrl 地址不正确（当前：https://api.apifree.ai/agent/v1）\n  2. 网络不通或被防火墙拦截\n  3. API 服务暂时不可用\n  建议：检查 INKOS_LLM_BASE_URL 是否包含完整路径（如 /v1）"
+      "[warning] Memo明确要求核心事件按‘圆心法’展开，且‘三方在同一时空节点各自过一遍反应与算计，不合并视角’。当前正文高度聚焦林玄主观体验，苏晚晴仅以通讯语音输出结论，傀儡仅表现为环境异变与林玄的心理推断。三方‘各自过一遍反应与算计’的结构意图未完全转化为可见文本，圆心辐射的立体感略有削弱。",
+      "[info] 本章动作与信息密度极高（潜入-遇袭-超频-解密-注射-读日志-接通话-警报-撬门）。从注入灵渣缓解剧痛到发现B3盲区并决定强攻，转折极快。生理恢复与心理决策之间的缓冲略短，可能导致读者情绪未能随主角状态完成一次微幅沉降。"
     ],
     "lengthWarnings": [],
     "reviewNote": "{\"kind\":\"state-degraded\",\"baseStatus\":\"audit-failed\",\"injectedIssues\":[\"[warning] 状态校验不可用：Error: 无法连接到 API 服务。可能原因：\\n  1. baseUrl 地址不正确（当前：https://api.apifree.ai/agent/v1）\\n  2. 网络不通或被防火墙拦截\\n  3. API 服务暂时不可用\\n  建议：检查 INKOS_LLM_BASE_URL 是否包含完整路径（如 /v1）\"]}",
@@ -89,9 +86,9 @@
       "hardMax": 2545,
       "countingMode": "zh_chars",
       "writerCount": 2179,
-      "postWriterNormalizeCount": 2179,
-      "postReviseCount": 0,
-      "finalCount": 2179,
+      "postWriterNormalizeCount": 0,
+      "postReviseCount": 2393,
+      "finalCount": 2393,
       "normalizeApplied": false,
       "lengthWarning": false
     },
@@ -99,6 +96,142 @@
       "promptTokens": 77370,
       "completionTokens": 25641,
       "totalTokens": 103011
+    }
+  },
+  {
+    "number": 4,
+    "title": "盲区夺盘",
+    "status": "audit-failed",
+    "wordCount": 2430,
+    "createdAt": "2026-06-01T13:20:43.025Z",
+    "updatedAt": "2026-06-01T13:20:43.025Z",
+    "auditIssues": [
+      "[critical] 出现了「不是……而是……」句式",
+      "[warning] 当前有 13 个活跃伏笔，已经高于建议上限 12 个。",
+      "[warning] 这些伏笔已经进入回收/推进压力，但本章没有真正处理：hook-3（立即，已逾期）、hook-7（立即，已逾期）、hook-8（立即，已逾期）。"
+    ],
+    "lengthWarnings": [],
+    "lengthTelemetry": {
+      "target": 3000,
+      "softMin": 2591,
+      "softMax": 3409,
+      "hardMin": 2182,
+      "hardMax": 3818,
+      "countingMode": "zh_chars",
+      "writerCount": 2031,
+      "postWriterNormalizeCount": 2430,
+      "postReviseCount": 2430,
+      "finalCount": 2430,
+      "normalizeApplied": true,
+      "lengthWarning": false
+    },
+    "tokenUsage": {
+      "promptTokens": 78195,
+      "completionTokens": 35257,
+      "totalTokens": 113452
+    }
+  },
+  {
+    "number": 5,
+    "title": "锈梯惊变",
+    "status": "audit-failed",
+    "wordCount": 3551,
+    "createdAt": "2026-06-01T13:33:45.112Z",
+    "updatedAt": "2026-06-01T13:33:45.112Z",
+    "auditIssues": [
+      "[info] 章节备忘中的伏笔账目要求将 H003（离厂定位协议）推进至 near_payoff，具体动作描述为“利用消防栓和管道制造小范围水雾+金属干扰，短暂扰乱清道夫热成像”。成稿中，林玄的干扰方式是通过触发烟雾报警器和消防栓喷射的干粉粉尘引燃，制造火情和烟雾。两者都属于“利用环境制造混乱以干扰清道夫判断”，核心意图一致，但具体手段与账目描述存在微小差异。这不算偏离，但可供后续核对。",
+      "[warning] 套话词（似乎/可能/或许等）密度为3.0次/千字（阈值>3），语气过于模糊犹豫",
+      "[critical] 出现了「不是……而是……」句式"
+    ],
+    "lengthWarnings": [],
+    "lengthTelemetry": {
+      "target": 3000,
+      "softMin": 2591,
+      "softMax": 3409,
+      "hardMin": 2182,
+      "hardMax": 3818,
+      "countingMode": "zh_chars",
+      "writerCount": 3363,
+      "postWriterNormalizeCount": 3551,
+      "postReviseCount": 3551,
+      "finalCount": 3551,
+      "normalizeApplied": false,
+      "lengthWarning": false
+    },
+    "tokenUsage": {
+      "promptTokens": 84795,
+      "completionTokens": 17205,
+      "totalTokens": 102000
+    }
+  },
+  {
+    "number": 6,
+    "title": "裂纹与残响",
+    "status": "ready-for-review",
+    "wordCount": 3281,
+    "createdAt": "2026-06-01T13:41:50.003Z",
+    "updatedAt": "2026-06-01T13:41:50.003Z",
+    "auditIssues": [
+      "[warning] hook-1（人血淬炼残留）与hook-7（枯竭症人为痕迹）等背景伏笔在本章未得到明确推进。虽然符纸的“同源但古老”特性可视为对它们的间接侧证，但未触发“交叉验证”的下一步动作。这些伏笔长期处于open但无主动推进状态。",
+      "[info] 段落“他的灵力接触只持续了不到两秒就立刻撤回……这符纸的材质，或者说上面残留的符文波动，与他体内的灵力（或者说与灵脉枯竭症相关的力量）存在某种微弱的、同源但更古老晦涩的联系。”中，“或者说”连续使用两次，略显解释性口吻，可能影响阅读的流畅感。",
+      "[warning] 套话词（似乎/可能/或许等）密度为5.1次/千字（阈值>3），语气过于模糊犹豫",
+      "[warning] 最近3章持续高压（紧绷、凝重、决断 -> 窒息、紧绷、决绝、疑惧 -> 紧张、痛苦、困惑、警觉），缺少明显的情绪释放。"
+    ],
+    "lengthWarnings": [],
+    "lengthTelemetry": {
+      "target": 3000,
+      "softMin": 2591,
+      "softMax": 3409,
+      "hardMin": 2182,
+      "hardMax": 3818,
+      "countingMode": "zh_chars",
+      "writerCount": 3330,
+      "postWriterNormalizeCount": 3281,
+      "postReviseCount": 3281,
+      "finalCount": 3281,
+      "normalizeApplied": false,
+      "lengthWarning": false
+    },
+    "tokenUsage": {
+      "promptTokens": 91677,
+      "completionTokens": 14965,
+      "totalTokens": 106642
+    }
+  },
+  {
+    "number": 7,
+    "title": "暗巷符光",
+    "status": "audit-failed",
+    "wordCount": 2267,
+    "createdAt": "2026-06-01T13:54:35.752Z",
+    "updatedAt": "2026-06-01T13:54:35.752Z",
+    "auditIssues": [
+      "[info] \"仿佛\"一词在本章出现2次（\"每一扇窗户后都仿佛藏着眼睛\"、\"仿佛多看一眼都会招致祸端\"），接近每3000字1次的warning阈值。建议替换为\"好似\"\"似乎\"或直接删减。",
+      "[info] 文本中出现英文单词\"pulsating\"（\"pulsating着危险的能量\"），在中文网络小说正文中属于异常残留，可能是翻译或编辑失误。",
+      "[info] 本章成稿约2500字，对于推进章来说偏短。虽然sparse memo合法（喘息/过渡章memo可只有goal+骨架），但黑市入场+摊主接触两个核心场景的展开深度有限，摊主对话仅3句即结束，可能让读者感觉\"刚进入就离开\"。",
+      "[warning] 套话词（似乎/可能/或许等）密度为4.4次/千字（阈值>3），语气过于模糊犹豫",
+      "[critical] 出现了「不是……而是……」句式",
+      "[critical] memo 在 advance/resolve 里声明要处理 H004，但正文没有对应的落地动作"
+    ],
+    "lengthWarnings": [],
+    "lengthTelemetry": {
+      "target": 2000,
+      "softMin": 1728,
+      "softMax": 2272,
+      "hardMin": 1455,
+      "hardMax": 2545,
+      "countingMode": "zh_chars",
+      "writerCount": 1410,
+      "postWriterNormalizeCount": 2267,
+      "postReviseCount": 2267,
+      "finalCount": 2267,
+      "normalizeApplied": true,
+      "lengthWarning": false
+    },
+    "tokenUsage": {
+      "promptTokens": 89099,
+      "completionTokens": 24238,
+      "totalTokens": 113337
     }
   }
 ]

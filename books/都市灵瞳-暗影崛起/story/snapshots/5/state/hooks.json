@@ -1,0 +1,93 @@
+{
+  "hooks": [
+    {
+      "hookId": "hook-9",
+      "startChapter": 4,
+      "type": "人物/立场",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "中程",
+      "payoffTiming": "mid-arc",
+      "notes": "盟友立场存疑，确认其提前介入中转站数据维护，现提供关键逃生帮助但信息真伪待辨"
+    },
+    {
+      "hookId": "hook-10",
+      "startChapter": 4,
+      "type": "威胁/行动",
+      "status": "resolved",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "立即",
+      "notes": "战术小队已逼近B3走廊，撤离路线受堵 -> 已通过智斗脱身，但搜索仍在继续"
+    },
+    {
+      "hookId": "hook-1",
+      "startChapter": 0,
+      "type": "unspecified",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "中程",
+      "payoffTiming": "mid-arc",
+      "notes": "灵渣中检测到“人血淬炼”残留，待交叉验证 -> 新环境线索出现，但需更多样本与研究"
+    },
+    {
+      "hookId": "hook-3",
+      "startChapter": 0,
+      "type": "unspecified",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "中程",
+      "payoffTiming": "mid-arc",
+      "notes": "离厂超500米回传定位协议待测，撤离时高危 -> 实际脱险，但原因不明"
+    },
+    {
+      "hookId": "hook-4",
+      "startChapter": 0,
+      "type": "unspecified",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "中程",
+      "payoffTiming": "mid-arc",
+      "notes": "代价机制实感强化，透支伤根基确立 -> 反噬加剧，生存窗口缩短"
+    },
+    {
+      "hookId": "hook-7",
+      "startChapter": 0,
+      "type": "unspecified",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "立即",
+      "payoffTiming": "mid-arc",
+      "notes": "枯竭症人为痕迹待样本交叉验证 -> 反噬实感强化，新线索指向环境异常"
+    },
+    {
+      "hookId": "hook-8",
+      "startChapter": 0,
+      "type": "unspecified",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "立即",
+      "payoffTiming": "mid-arc",
+      "notes": "灵瞳身世关联待境界突破或暗楼接触"
+    },
+    {
+      "hookId": "hook-11",
+      "startChapter": 5,
+      "type": "线索/身份",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "中程",
+      "payoffTiming": "mid-arc",
+      "notes": "清道夫小队特殊徽章与编码，指向灵管局内部复杂历史或派系，为后续揭露组织内部矛盾埋线"
+    },
+    {
+      "hookId": "hook-12",
+      "startChapter": 5,
+      "type": "超自然/伏笔",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "长程",
+      "payoffTiming": "mid-arc",
+      "notes": "符纸血光反应，可能关联养老院历史、符箓特性或林玄特殊体质（纯灵体/人血淬炼相关？），待后续调查"
+    }
+  ]
+}

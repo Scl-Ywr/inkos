@@ -12,9 +12,14 @@
       "excerpt": "（描述接下来 1-3 章最需要优先推进的内容。）"
     },
     {
+      "source": "story/audit_drift.md",
+      "reason": "Carry forward audit drift guidance from the previous chapter without polluting hard state facts.",
+      "excerpt": "> 第3章审计发现以下问题，下一章写作时必须避免："
+    },
+    {
       "source": "story/current_state.md",
       "reason": "Preserve hard state facts referenced by the active chapter brief or hard constraints.",
-      "excerpt": "| 字段 | 值 |"
+      "excerpt": "H002"
     },
     {
       "source": "story/outline/story_frame.md",
@@ -42,39 +47,24 @@
       "excerpt": "ch1: 他缓缓放下手机，指尖在屏幕上摩挲了一下，最终没有回拨。周围的乘客上下车，无人知晓刚才那通电话里藏着怎样的危机。林玄... | ch2: 林玄盯着那行字，指尖收紧。手机壳的边缘硌进掌心，留下四个月牙形的白印。他没有回复，没有报警，没有拨通妹妹的电话。他..."
     },
     {
-      "source": "runtime/hook_debt#H002",
-      "reason": "含原始种子文本的叙事债务简报。",
-      "excerpt": "H002（threat，备忘引用旧债，已开2章） | 读者承诺：未知发送者身份及其与地脉抽吸装置的关联 | 种于第0章：ch2 地底漩涡 - 林玄在地铁站设备间主动开启灵瞳，确认地脉节点正被机械装置抽吸，并推演出能量流向东南废弃厂区；遭遇灵管局巡逻队后成功隐匿；收到未知号码发来的妹妹学校照片及胁迫短信，决定顺气脉前往厂区调查。"
-    },
-    {
-      "source": "runtime/hook_debt#H008",
-      "reason": "含原始种子文本的叙事债务简报。",
-      "excerpt": "H008（mystery，备忘引用旧债，已开2章） | 读者承诺：城市灵脉节点网络/抽吸源头 | 种于第1章：ch2 地底漩涡 - 林玄在地铁站设备间主动开启灵瞳，确认地脉节点正被机械装置抽吸，并推演出能量流向东南废弃厂区；遭遇灵管局巡逻队后成功隐匿；收到未知号码发来的妹妹学校照片及胁迫短信，决定顺气脉前往厂区调查。"
-    },
-    {
-      "source": "runtime/hook_debt#H009",
-      "reason": "含原始种子文本的叙事债务简报。",
-      "excerpt": "H009（mechanic，备忘引用旧债，已开2章） | 读者承诺：金手指代价机制/寿命限制 | 种于第1章：ch2 地底漩涡 - 林玄在地铁站设备间主动开启灵瞳，确认地脉节点正被机械装置抽吸，并推演出能量流向东南废弃厂区；遭遇灵管局巡逻队后成功隐匿；收到未知号码发来的妹妹学校照片及胁迫短信，决定顺气脉前往厂区调查。"
+      "source": "story/current_state.md#当前目标",
+      "reason": "Relevant current-state fact retrieved for the current chapter goal.",
+      "excerpt": "当前目标 | 获取灵渣暂稳病情，锁定妹妹交接坐标（市立第三医院地下灵枢室，72小时窗口）"
     },
     {
       "source": "story/current_state.md#当前冲突",
       "reason": "Relevant current-state fact retrieved for the current chapter goal.",
-      "excerpt": "当前冲突 | 地脉被人为抽吸 vs 林玄调查；灵管局监视 vs 林玄隐匿；未知发送者胁迫 vs 保护妹妹"
-    },
-    {
-      "source": "story/current_state.md#当前目标",
-      "reason": "Relevant current-state fact retrieved for the current chapter goal.",
-      "excerpt": "当前目标 | 顺能量流向调查东南老城区废弃厂区，应对妹妹被胁迫危机"
+      "excerpt": "当前冲突 | 72小时救援倒计时 vs 灵管局封锁；B3盲区情报缺失 vs 潜入需求；灵渣成分异常线索待验"
     },
     {
       "source": "story/current_state.md#主角状态",
       "reason": "Relevant current-state fact retrieved for the current chapter goal.",
-      "excerpt": "主角状态 | 灵瞳主动开启消耗气血（太阳穴跳动、指尖发麻、丹田空虚、后颈冷汗），剩余可用次数二；视网膜倒计时1094天；胸口隐痛未消"
+      "excerpt": "主角状态 | 凝元灵渣注入生效（体温回升、经脉暂稳），灵瞳过载损伤（眼底毛细血管破裂渗血、视力边缘发黑），剩余可用次数0；视网膜倒计时1093天；胸口隐痛缓解但未根除"
     },
     {
       "source": "story/current_state.md#当前限制",
       "reason": "Relevant current-state fact retrieved for the current chapter goal.",
-      "excerpt": "当前限制 | 灵瞳剩余次数二（过度使用折寿）；灵管局按固定路线巡查并检测灵气残留阈值；未知势力以妹妹安全施压"
+      "excerpt": "当前限制 | 灵瞳今日不可用；灵管局无人机群收网中；H002追踪协议激活（离厂超500米触发）；B3层存在独立屏蔽场阻断数据读取"
     },
     {
       "source": "story/chapter_summaries.md#2",
@@ -82,34 +72,44 @@
       "excerpt": "地底漩涡 | 林玄在地铁站设备间主动开启灵瞳，确认地脉节点正被机械装置抽吸，并推演出能量流向东南废弃厂区；遭遇灵管局巡逻队后成功隐匿；收到未知号码发来的妹妹学校照片及胁迫短信，决定顺气脉前往厂区调查。 | 灵瞳剩余次数降至二，身体承受气血消耗；行动目标锁定东南废弃厂区；妹妹危机升级为直接威胁。 | H002 advanced, H008 advanced, H009 advanced"
     },
     {
-      "source": "story/pending_hooks.md#H001",
+      "source": "story/pending_hooks.md#hook-7",
       "reason": "Carry forward unresolved hooks that match the chapter focus.",
-      "excerpt": "后台 | open | 第3卷中段 | slow-burn | 灵脉枯竭症的人为痕迹"
+      "excerpt": "unspecified | open | 这条线索 \"枯竭症人为痕迹\" → 本章仅留成分异常线索，不揭幕后，理由：需积累足够灵渣样本与医院线索交叉验证，等到此前"
     },
     {
-      "source": "story/pending_hooks.md#surveillance-灵管局巡查机-制与阈值检测-手段的后续博",
+      "source": "story/pending_hooks.md#hook-1",
       "reason": "Carry forward unresolved hooks that match the chapter focus.",
-      "excerpt": "surveillance | open | 灵管局巡查机制与阈值检测手段的后续博弈 | mid-arc | 确认灵管局外勤按固定路线巡查，使用仪器检测灵气残留阈值，林玄需保持低阈值躲避"
+      "excerpt": "unspecified | open | [new] 灵渣中检测到“人血淬炼”残留 || 理由：呼应这条线索人为痕迹，为此前成分推演与势力溯源埋线"
     },
     {
-      "source": "story/pending_hooks.md#H008",
+      "source": "story/pending_hooks.md#hook-2",
       "reason": "Carry forward unresolved hooks that match the chapter focus.",
-      "excerpt": "mystery | progressing | 城市灵脉节点网络/抽吸源头 | near-term | 确认节点为机械装置强行抽吸，能量流向东南废弃厂区，成为下一步行动目标"
+      "excerpt": "unspecified | open | [new] 苏晚晴提供的结构图缺了B3层 || 理由：暗示厂区有未登记密室，与妹妹线索强关联，制造信息差缺口"
     },
     {
-      "source": "story/pending_hooks.md#H009",
+      "source": "story/pending_hooks.md#hook-3",
       "reason": "Carry forward unresolved hooks that match the chapter focus.",
-      "excerpt": "mechanic | progressing | 金手指代价机制/寿命限制 | slow-burn | 主动开启9分40秒，体验实打实气血消耗，剩余次数降至二，确立资源稀缺性"
+      "excerpt": "unspecified | open | 这条线索 \"未知发送者胁迫\" → 终端日志显示发送者IP伪装成灵管局内网，威胁升级为定时追踪协议（progressing → pressured）。注：协议绑定“离厂超500米回传定位”，本章未触发，预留第4-5章短距移动测试验证。"
     },
     {
-      "source": "story/pending_hooks.md#H002",
+      "source": "story/pending_hooks.md#hook-4",
       "reason": "Carry forward unresolved hooks that match the chapter focus.",
-      "excerpt": "threat | progressing | 未知发送者身份及其与地脉抽吸装置的关联 | near-term | 威胁升级，发送者发来妹妹学校照片并直接胁迫'顺着气脉走'，危机与地脉异常绑定"
+      "excerpt": "unspecified | open | 这条线索 \"灵瞳代价机制\" → 强行超频导致眼底毛细血管破裂，今日次数清零，确立“透支即伤根基”的实感（progressing → near_payoff）"
     },
     {
-      "source": "story/pending_hooks.md#H007",
+      "source": "story/pending_hooks.md#hook-5",
       "reason": "Carry forward unresolved hooks that match the chapter focus.",
-      "excerpt": "后台 | open | 第5卷终章 | endgame | 主角身世与灵瞳的关联"
+      "excerpt": "unspecified | open | surveillance-灵管局 \"巡查阈值\" → 厂区触发二级灵气扰动警报，灵管局外勤无人机群已起飞并向东南方向收网（open → progressing）"
+    },
+    {
+      "source": "story/pending_hooks.md#hook-6",
+      "reason": "Carry forward unresolved hooks that match the chapter focus.",
+      "excerpt": "unspecified | open | 这条线索 \"地脉抽吸源头\" → 林玄定位厂区主阀并获取灵渣，抽吸网络物理节点首次落地（progressing → resolved_for_now）"
+    },
+    {
+      "source": "story/pending_hooks.md#hook-8",
+      "reason": "Carry forward unresolved hooks that match the chapter focus.",
+      "excerpt": "unspecified | open | 这条线索 \"灵瞳身世关联\" → 本章不动，理由：金手指代价已充分展示，身世线需等境界突破或暗楼接触后再推"
     }
   ]
 }

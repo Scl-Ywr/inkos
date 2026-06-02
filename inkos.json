@@ -4,10 +4,10 @@
   "language": "zh",
   "llm": {
     "provider": "openai",
-    "service": "custom:apifree",
+    "service": "custom:mimo",
     "configSource": "studio",
-    "baseUrl": "https://api.apifree.ai/agent/v1",
-    "model": "skywork-ai/skyclaw-v1",
+    "baseUrl": "https://token-plan-cn.xiaomimimo.com/v1",
+    "model": "mimo-v2-omni",
     "apiFormat": "chat",
     "stream": true,
     "services": [
@@ -26,9 +26,17 @@
         "temperature": 0.7,
         "apiFormat": "chat",
         "stream": true
+      },
+      {
+        "service": "custom",
+        "name": "mimo",
+        "baseUrl": "https://token-plan-cn.xiaomimimo.com/v1",
+        "temperature": 0.7,
+        "apiFormat": "chat",
+        "stream": true
       }
     ],
-    "defaultModel": "skywork-ai/skyclaw-v1",
+    "defaultModel": "mimo-v2-omni",
     "temperature": 0.7
   },
   "notify": [],

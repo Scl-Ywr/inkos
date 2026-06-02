@@ -1,0 +1,103 @@
+{
+  "hooks": [
+    {
+      "hookId": "hook-11",
+      "startChapter": 5,
+      "type": "线索/身份",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "中程",
+      "payoffTiming": "mid-arc",
+      "notes": "指向灵管局内部历史或清洗，具体关联仍需查证"
+    },
+    {
+      "hookId": "hook-12",
+      "startChapter": 5,
+      "type": "超自然/伏笔",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "长程",
+      "payoffTiming": "mid-arc",
+      "notes": "可能关联养老院历史、符箓体系或林玄特殊体质（纯灵体/人血淬炼？），需进一步鉴定"
+    },
+    {
+      "hookId": "hook-9",
+      "startChapter": 4,
+      "type": "人物/立场",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "中程",
+      "payoffTiming": "mid-arc",
+      "notes": "立场模糊，但提供的信息具有现实参考价值，信任度仍需验证"
+    },
+    {
+      "hookId": "hook-1",
+      "startChapter": 0,
+      "type": "unspecified",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "中程",
+      "payoffTiming": "mid-arc",
+      "notes": "灵渣人血淬炼痕迹，需更多样本与研究"
+    },
+    {
+      "hookId": "hook-3",
+      "startChapter": 0,
+      "type": "unspecified",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "中程",
+      "payoffTiming": "mid-arc",
+      "notes": "离厂协议具体规则与规避条件待测"
+    },
+    {
+      "hookId": "hook-4",
+      "startChapter": 0,
+      "type": "unspecified",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "中程",
+      "payoffTiming": "mid-arc",
+      "notes": "透支伤根基确立，生存窗口持续缩短"
+    },
+    {
+      "hookId": "hook-7",
+      "startChapter": 0,
+      "type": "unspecified",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "立即",
+      "payoffTiming": "mid-arc",
+      "notes": "枯竭症人为痕迹待样本交叉验证"
+    },
+    {
+      "hookId": "hook-8",
+      "startChapter": 0,
+      "type": "unspecified",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "立即",
+      "payoffTiming": "mid-arc",
+      "notes": "待境界突破或暗楼接触"
+    },
+    {
+      "hookId": "hook-13",
+      "startChapter": 6,
+      "type": "风险/新启",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "短程",
+      "notes": "符纸异常能量可能不可控，成为下一个风险源"
+    },
+    {
+      "hookId": "hook-14",
+      "startChapter": 6,
+      "type": "线索/行动",
+      "status": "open",
+      "lastAdvancedChapter": 0,
+      "expectedPayoff": "中程",
+      "payoffTiming": "mid-arc",
+      "notes": "对“已解散部门”的猜想，为接触黑市/灵管旧部铺垫，涉及新的社交与安全风险"
+    }
+  ]
+}

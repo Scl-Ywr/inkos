@@ -1,0 +1,53 @@
+{
+  "chapter": 5,
+  "facts": [
+    {
+      "subject": "protagonist",
+      "predicate": "当前位置",
+      "object": "慈安养老院外后巷（垃圾堆旁，正被清道夫搜索逼近）",
+      "validFromChapter": 5,
+      "validUntilChapter": null,
+      "sourceChapter": 5
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "主角状态",
+      "object": "左臂灼伤及左膝挫伤；动用残存灵力引燃报警器加剧枯竭症反噬（经脉灼痛加剧、咳血、视野发黑、心脏负担加重）；获得符纸碎片一角；收到两条矛盾的定位信息（苏晚晴vs未知号码）",
+      "validFromChapter": 5,
+      "validUntilChapter": null,
+      "sourceChapter": 5
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "当前目标",
+      "object": "脱离清道夫对养老院区域的搜索网；判断两条逃生信息的真伪并做出选择",
+      "validFromChapter": 5,
+      "validUntilChapter": null,
+      "sourceChapter": 5
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "当前限制",
+      "object": "灵瞳持续停摆；左臂重伤、左膝受伤影响行动；枯竭症反噬严重恶化，身体濒临极限；清道夫小队持续搜索并逼近；面临两难信息陷阱",
+      "validFromChapter": 5,
+      "validUntilChapter": null,
+      "sourceChapter": 5
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "当前敌我",
+      "object": "清道夫协议小队（装备特殊徽章，正缩小搜索网至后巷）、未知势力（发送矛盾短信者）、苏晚晴（立场复杂，提供帮助但信息存疑）",
+      "validFromChapter": 5,
+      "validUntilChapter": null,
+      "sourceChapter": 5
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "当前冲突",
+      "object": "重伤恶化与持续逃亡的矛盾；苏晚晴与未知信息的真伪对立；保命时限与妹妹救援倒计时的双重压迫",
+      "validFromChapter": 5,
+      "validUntilChapter": null,
+      "sourceChapter": 5
+    }
+  ]
+}

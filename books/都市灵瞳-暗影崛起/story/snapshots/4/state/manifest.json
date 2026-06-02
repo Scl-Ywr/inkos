@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 2,
+  "language": "zh",
+  "lastAppliedChapter": 4,
+  "projectionVersion": 1,
+  "migrationWarnings": [
+    "H001:status normalized from \"未激活\" to \"open\"",
+    "H002:status normalized from \"未激活\" to \"open\"",
+    "H003:status normalized from \"未激活\" to \"open\"",
+    "H004:status normalized from \"未激活\" to \"open\"",
+    "H005:status normalized from \"未激活\" to \"open\"",
+    "H006:status normalized from \"未激活\" to \"open\"",
+    "H007:status normalized from \"未激活\" to \"open\"",
+    "H001:lastAdvancedChapter normalized from \"第1章：体检报告\"灵脉活性异常衰减\"被医生轻描淡写为\"仪器误差\"，暗示非自然病因\" to 0",
+    "H002:lastAdvancedChapter normalized from \"第1章：林雨电话被威胁，背景有陌生男声说\"挂了\"，确认已被卷入\" to 0",
+    "H007:lastAdvancedChapter normalized from \"第1章：灵瞳首次开启，与父母事故地点的关联待后续展开\" to 0",
+    "H008:lastAdvancedChapter normalized from \"第1章：地铁站柱子上的灵脉节点，绿色漩涡连接地底深处，被抽取能量\" to 0",
+    "H009:lastAdvancedChapter normalized from \"第1章：灵瞳使用限制（每日3次×10分钟，过度燃烧寿元）\" to 0",
+    "hook-1:lastAdvancedChapter normalized from \"无\" to 0",
+    "hook-2:lastAdvancedChapter normalized from \"Ch4 B3面板开启，确认隐藏机房存在\" to 0",
+    "hook-3:lastAdvancedChapter normalized from \"未触发（仍在厂区内）\" to 0",
+    "hook-4:status normalized from \"advanced(near_payoff)\" to \"open\"",
+    "hook-4:lastAdvancedChapter normalized from \"Ch4 枯竭症反噬爆发，经脉灼痛/咳血，灵瞳恢复延后\" to 0",
+    "hook-5:lastAdvancedChapter normalized from \"因断电与室内屏蔽未触发\" to 0",
+    "hook-6:lastAdvancedChapter normalized from \"无\" to 0",
+    "hook-7:lastAdvancedChapter normalized from \"无\" to 0",
+    "hook-8:lastAdvancedChapter normalized from \"无\" to 0",
+    "hook-9:lastAdvancedChapter normalized from \"Ch4 终端发现苏晚晴加密签名与备注\" to 0",
+    "hook-10:lastAdvancedChapter normalized from \"Ch4 执事远程下达清道夫协议\" to 0"
+  ]
+}

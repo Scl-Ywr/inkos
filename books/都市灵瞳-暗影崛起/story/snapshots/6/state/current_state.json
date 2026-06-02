@@ -1,0 +1,53 @@
+{
+  "chapter": 6,
+  "facts": [
+    {
+      "subject": "protagonist",
+      "predicate": "当前位置",
+      "object": "老旧小区储物间（相对安全但临时的藏身点，距养老院直线距离不到一公里）",
+      "validFromChapter": 6,
+      "validUntilChapter": null,
+      "sourceChapter": 6
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "主角状态",
+      "object": "左臂灼伤恶化（布料皮肉黏连，皮下出现异常灵力乱流）；右肩肿痛；服食“固元散”并短暂冥想后，身体从“濒危”暂时恢复到“勉强能行动”；掌握符纸与自身力量“同源”的初步认知；徽章线索具体化为“外勤三处-废止项目组”；手机电量耗尽关机",
+      "validFromChapter": 6,
+      "validUntilChapter": null,
+      "sourceChapter": 6
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "当前目标",
+      "object": "前往黑市验证徽章线索（“外勤三处-废止项目组”），并寻找符纸鉴定渠道；为可能的午夜城西废品站之行做准备（但非首要）；在完全天黑前离开当前储物间",
+      "validFromChapter": 6,
+      "validUntilChapter": null,
+      "sourceChapter": 6
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "当前限制",
+      "object": "符纸可能成为追踪或风险源（研究引发未知反冲）；左臂伤势出现新恶化迹象（灵力乱流）；身体依然虚弱，行动能力有限；计划中的黑市接触本身风险极高；资金为零；对黑市网络及中间人不熟悉",
+      "validFromChapter": 6,
+      "validUntilChapter": null,
+      "sourceChapter": 6
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "当前敌我",
+      "object": "清道夫协议小队（暂脱离直接接触，但其背后代表的“非总局”势力及徽章关联的历史谜团更显复杂）；未知邀约方（发送城西废品站短信，身份、动机、陷阱可能性均不明）；苏晚晴（立场模糊，但其“非总局令”信息与徽章线索有部分印证价值）",
+      "validFromChapter": 6,
+      "validUntilChapter": null,
+      "sourceChapter": 6
+    },
+    {
+      "subject": "protagonist",
+      "predicate": "当前冲突",
+      "object": "验证线索的紧迫性（关乎自身秘密与可能的自救路径）与身体/资源极度受限的矛盾；符纸的价值（潜在关键证据）与潜在风险（可能暴露或引发更糟状况）的两难；午夜陷阱邀约与自主调查路线的选择博弈",
+      "validFromChapter": 6,
+      "validUntilChapter": null,
+      "sourceChapter": 6
+    }
+  ]
+}

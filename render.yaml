@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: inkos-studio
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - key: INKOS_STUDIO_PORT
+        value: "8080"
+      - key: INKOS_PROJECT_ROOT
+        value: /data
+      - key: NODE_ENV
+        value: production
+      # ─── 在 Render Dashboard 中手动添加以下环境变量（API Key 请设为 Secret） ───
+      # - INKOS_LLM_PROVIDER     (例如 openai)
+      # - INKOS_LLM_BASE_URL     (例如 https://api.openai.com/v1)
+      # - INKOS_LLM_API_KEY      (你的 API Key，建议设为 Secret)
+      # - INKOS_LLM_MODEL        (例如 gpt-4o)
+    # ─── 持久存储说明 ───
+    # Render 免费套餐不支持 Disk。数据在重新部署后会丢失。
+    # 如需持久存储，建议使用 Railway（有免费 Volume）或 Fly.io（有免费 Volume）。
