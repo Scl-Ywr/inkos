@@ -217,25 +217,25 @@ export function Sidebar({ nav, activePage, sse, t, onClose }: {
   };
 
   const sidebarContent = (
-    <aside className="w-[272px] shrink-0 border-r border-border/65 claude-sidebar flex flex-col h-full overflow-hidden select-none">
+    <aside className="w-[288px] shrink-0 border-r border-border/45 claude-sidebar flex flex-col h-full overflow-hidden select-none shadow-2xl shadow-primary/5">
       {/* Logo Area */}
       <div className="px-5 py-5 flex items-center justify-between">
         <button
           onClick={nav.toDashboard}
-          className="group flex items-center gap-2.5 rounded-2xl px-2 py-1.5 hover:bg-card/45 transition-all duration-200"
+          className="group flex items-center gap-3 rounded-3xl px-2 py-1.5 hover:bg-card/45 transition-all duration-200"
         >
-          <div className="w-8 h-8 rounded-xl bg-primary flex items-center justify-center text-primary-foreground shadow-sm shadow-primary/20 group-hover:scale-105 transition-transform">
+          <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-primary-foreground shadow-lg shadow-primary/25 ring-4 ring-primary/10 group-hover:scale-105 transition-transform">
             <ScrollText size={18} />
           </div>
           <div className="flex flex-col">
-            <span className="text-lg leading-none font-semibold tracking-[-0.01em]">InkOS</span>
-            <span className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground font-semibold mt-1">Studio</span>
+            <span className="font-serif text-xl leading-none font-semibold">InkOS</span>
+            <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground font-semibold mt-1">Studio</span>
           </div>
         </button>
         {onClose && (
           <button
             onClick={onClose}
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-card/45 transition-colors"
+            className="w-9 h-9 rounded-full flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-card/45 transition-colors"
           >
             <X size={18} />
           </button>
@@ -272,7 +272,7 @@ export function Sidebar({ nav, activePage, sse, t, onClose }: {
                       type="button"
                       onClick={() => toggleBook(book.id)}
                       data-active={isActiveBook}
-                      className={`claude-nav-item flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5 rounded-xl text-sm transition-colors ${
+                      className={`claude-nav-item flex min-w-0 flex-1 items-center gap-1.5 px-2.5 py-2 rounded-2xl text-sm transition-colors ${
                         isActiveBook ? "text-foreground font-medium" : "text-muted-foreground hover:text-foreground hover:bg-card/45"
                       }`}
                     >
@@ -294,7 +294,7 @@ export function Sidebar({ nav, activePage, sse, t, onClose }: {
                         return (
                           <div
                             key={session.sessionId}
-                            className={`group/session flex items-center rounded-xl ${isActiveSession ? "bg-card/65 shadow-sm" : "hover:bg-card/45"}`}
+                            className={`group/session flex items-center rounded-2xl ${isActiveSession ? "bg-card/70 shadow-sm" : "hover:bg-card/45"}`}
                           >
                             <button
                               type="button"
@@ -314,7 +314,7 @@ export function Sidebar({ nav, activePage, sse, t, onClose }: {
                             </button>
 
                             <DropdownMenu>
-                              <DropdownMenuTrigger className="flex h-6 w-6 shrink-0 items-center justify-center rounded opacity-0 group-hover/session:opacity-100 text-muted-foreground hover:text-foreground transition-opacity">
+                              <DropdownMenuTrigger className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full opacity-0 group-hover/session:opacity-100 text-muted-foreground hover:text-foreground transition-opacity">
                                 <MoreHorizontal size={14} />
                               </DropdownMenuTrigger>
                               <DropdownMenuContent side="right" align="start" className="w-36">
@@ -355,7 +355,7 @@ export function Sidebar({ nav, activePage, sse, t, onClose }: {
             })}
 
             {books.length === 0 && (
-              <div className="px-3 py-6 text-xs text-muted-foreground/50 italic text-center">
+            <div className="soft-pill mx-3 px-3 py-6 text-xs text-muted-foreground italic text-center rounded-3xl">
                 {t("dash.noBooks")}
               </div>
             )}
@@ -419,7 +419,7 @@ export function Sidebar({ nav, activePage, sse, t, onClose }: {
                     }
                   }}
                   data-active={activePage === "chat"}
-                  className={`claude-nav-item flex min-w-0 flex-1 items-center gap-3 px-3 py-2 rounded-xl text-sm transition-all duration-200 ${
+                  className={`claude-nav-item flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 rounded-2xl text-sm transition-all duration-200 ${
                     activePage === "chat"
                       ? "text-foreground font-medium"
                       : "text-foreground font-medium hover:text-foreground hover:bg-card/45"
@@ -442,7 +442,7 @@ export function Sidebar({ nav, activePage, sse, t, onClose }: {
                     return (
                       <div
                         key={session.sessionId}
-                        className={`group/session flex items-center rounded-xl ${isActiveSession ? "bg-card/65 shadow-sm" : "hover:bg-card/45"}`}
+                        className={`group/session flex items-center rounded-2xl ${isActiveSession ? "bg-card/70 shadow-sm" : "hover:bg-card/45"}`}
                       >
                         <button
                           type="button"
@@ -462,7 +462,7 @@ export function Sidebar({ nav, activePage, sse, t, onClose }: {
                         </button>
 
                         <DropdownMenu>
-                          <DropdownMenuTrigger className="flex h-6 w-6 shrink-0 items-center justify-center rounded opacity-0 group-hover/session:opacity-100 text-muted-foreground hover:text-foreground transition-opacity">
+                          <DropdownMenuTrigger className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full opacity-0 group-hover/session:opacity-100 text-muted-foreground hover:text-foreground transition-opacity">
                             <MoreHorizontal size={14} />
                           </DropdownMenuTrigger>
                           <DropdownMenuContent side="right" align="start" className="w-36">
@@ -529,8 +529,8 @@ export function Sidebar({ nav, activePage, sse, t, onClose }: {
 
       {/* Footer / Status Area — only show when agent is online */}
       {daemon?.running && (
-        <div className="p-4 border-t border-border/65 bg-secondary/35">
-          <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-card/65 border border-border/70 shadow-sm">
+        <div className="p-4 border-t border-border/45 bg-secondary/25">
+          <div className="soft-pill flex items-center gap-3 px-3 py-2 rounded-2xl">
             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             <span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">
               {t("nav.agentOnline")}
@@ -567,7 +567,7 @@ export function Sidebar({ nav, activePage, sse, t, onClose }: {
               }
             }}
             placeholder="输入新标题"
-            className="w-full rounded-xl border border-border/70 bg-card/70 px-3 py-2 text-sm outline-none focus:border-ring"
+            className="w-full rounded-2xl border border-border/70 bg-card/70 px-3 py-2 text-sm outline-none focus:border-ring"
           />
           <DialogFooter className="gap-1 sm:gap-1">
             <button
@@ -584,7 +584,7 @@ export function Sidebar({ nav, activePage, sse, t, onClose }: {
               type="button"
               onClick={() => void handleRenameConfirm()}
               disabled={!renameValue.trim()}
-              className="px-3 py-1.5 text-xs font-medium rounded-xl bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-30"
+              className="px-3 py-1.5 text-xs font-medium rounded-full bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-30"
             >
               保存
             </button>
@@ -659,7 +659,7 @@ function SidebarItem({ label, icon, active, onClick, badge, badgeColor }: {
     <button
       onClick={onClick}
       data-active={active}
-      className={`claude-nav-item w-full group flex items-center gap-3 px-3 py-2 rounded-xl text-sm transition-all duration-200 ${
+      className={`claude-nav-item w-full group flex items-center gap-3 px-3 py-2.5 rounded-2xl text-sm transition-all duration-200 ${
         active
           ? "text-foreground font-medium"
           : "text-foreground font-medium hover:text-foreground hover:bg-card/45"

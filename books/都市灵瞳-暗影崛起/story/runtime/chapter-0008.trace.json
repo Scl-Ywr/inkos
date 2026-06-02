@@ -1,0 +1,44 @@
+{
+  "chapter": 8,
+  "plannerInputs": [
+    "E:\\inkos\\books\\都市灵瞳-暗影崛起\\story\\author_intent.md",
+    "E:\\inkos\\books\\都市灵瞳-暗影崛起\\story\\current_focus.md",
+    "E:\\inkos\\books\\都市灵瞳-暗影崛起\\story\\outline\\story_frame.md",
+    "E:\\inkos\\books\\都市灵瞳-暗影崛起\\story\\outline\\volume_map.md",
+    "E:\\inkos\\books\\都市灵瞳-暗影崛起\\story\\chapter_summaries.md",
+    "E:\\inkos\\books\\都市灵瞳-暗影崛起\\story\\book_rules.md",
+    "E:\\inkos\\books\\都市灵瞳-暗影崛起\\story\\current_state.md",
+    "E:\\inkos\\books\\都市灵瞳-暗影崛起\\story\\pending_hooks.md",
+    "E:\\inkos\\books\\都市灵瞳-暗影崛起\\story\\memory.db"
+  ],
+  "composerInputs": [
+    "E:\\inkos\\books\\都市灵瞳-暗影崛起\\story\\runtime\\chapter-0008.intent.md"
+  ],
+  "selectedSources": [
+    "runtime/chapter_memo",
+    "story/current_focus.md",
+    "story/audit_drift.md",
+    "story/current_state.md",
+    "story/outline/story_frame.md",
+    "story/outline/volume_map.md",
+    "story/chapter_summaries.md#recent_titles",
+    "story/chapter_summaries.md#recent_mood_type_trail",
+    "story/chapters#recent_endings",
+    "story/current_state.md#当前目标",
+    "story/current_state.md#当前冲突",
+    "story/current_state.md#当前限制",
+    "story/current_state.md#当前位置",
+    "story/chapter_summaries.md#5",
+    "story/chapter_summaries.md#6",
+    "story/chapter_summaries.md#7",
+    "story/pending_hooks.md#hook-11",
+    "story/pending_hooks.md#hook-14",
+    "story/pending_hooks.md#hook-15",
+    "story/pending_hooks.md#hook-16",
+    "story/pending_hooks.md#hook-13",
+    "story/pending_hooks.md#hook-12",
+    "story/pending_hooks.md#hook-9",
+    "story/pending_hooks.md#hook-1"
+  ],
+  "notes": []
+}

@@ -165,17 +165,20 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
 
   if (!data?.books.length) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center fade-in">
-        <div className="w-20 h-20 rounded-full bg-primary/5 flex items-center justify-center mb-8">
-          <BookOpen size={40} className="text-primary/20" />
+      <div className="aurora-hero flex min-h-[54vh] flex-col items-start justify-end rounded-[1.5rem] border border-border/55 p-5 text-left shadow-2xl shadow-primary/10 sm:min-h-[62vh] sm:rounded-[2rem] sm:p-10 fade-in">
+        <div className="soft-pill mb-5 inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-semibold text-primary sm:mb-6 sm:text-xs">
+          <BookOpen size={14} />
+          <span className="truncate">{t("dash.noBooks")}</span>
         </div>
-        <h2 className="font-serif text-3xl italic text-foreground/80 mb-3">{t("dash.noBooks")}</h2>
-        <p className="text-sm text-muted-foreground max-w-xs leading-relaxed mb-10">
+        <h2 className="max-w-2xl font-serif text-4xl leading-tight text-foreground sm:text-6xl">
+          {t("dash.title")}
+        </h2>
+        <p className="mt-3 max-w-xl text-sm leading-7 text-muted-foreground sm:mt-4 sm:text-base">
           {t("dash.createFirst")}
         </p>
         <button
           onClick={nav.toBookCreate}
-          className="group flex items-center gap-2 px-8 py-3.5 rounded-xl text-sm font-bold bg-primary text-primary-foreground hover:scale-105 active:scale-95 transition-all shadow-lg shadow-primary/20"
+          className="mt-6 group flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-primary px-7 py-3 text-sm font-bold text-primary-foreground shadow-xl shadow-primary/25 transition-all hover:scale-[1.02] active:scale-95 sm:mt-8 sm:w-auto"
         >
           <Plus size={18} />
           {t("nav.newBook")}
@@ -184,61 +187,90 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
     );
   }
 
+  const totalChapters = data.books.reduce((sum, book) => sum + book.chaptersWritten, 0);
+  const activeBooks = data.books.filter((book) => book.status === "active").length;
+
   return (
-    <div className="space-y-12">
+    <div className="space-y-5 sm:space-y-8">
+      <section className="aurora-hero rounded-[1.5rem] border border-border/55 p-4 shadow-2xl shadow-primary/10 sm:rounded-[2rem] sm:p-8 lg:p-10">
+        <div className="flex flex-col gap-5 sm:gap-8 lg:flex-row lg:items-end lg:justify-between">
+          <div className="max-w-3xl">
+            <div className="soft-pill mb-4 inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-semibold text-primary sm:mb-5 sm:text-xs">
+              <CheckCircle2 size={14} />
+              <span className="truncate">Autonomous story workbench</span>
+            </div>
+            <h1 className="font-serif text-[2.55rem] leading-tight text-foreground sm:text-5xl lg:text-6xl">
+              {t("dash.title")}
+            </h1>
+            <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground sm:mt-4 sm:text-base">
+              {t("dash.subtitle")}
+            </p>
+          </div>
+          <button
+            onClick={nav.toBookCreate}
+            className="group flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-primary px-7 py-3 text-sm font-bold text-primary-foreground shadow-xl shadow-primary/25 transition-all hover:scale-[1.02] active:scale-95 sm:w-auto"
+          >
+            <Plus size={18} />
+            {t("nav.newBook")}
+          </button>
+        </div>
+
+        <div className="mt-5 grid grid-cols-3 gap-2 sm:mt-9 sm:gap-3">
+          <div className="soft-pill rounded-2xl px-3 py-3 sm:rounded-3xl sm:px-5 sm:py-4">
+            <div className="text-2xl font-semibold text-foreground sm:text-3xl">{data.books.length}</div>
+            <div className="mt-1 text-[11px] uppercase tracking-[0.06em] text-muted-foreground sm:text-xs sm:tracking-[0.18em]">{t("nav.books")}</div>
+          </div>
+          <div className="soft-pill rounded-2xl px-3 py-3 sm:rounded-3xl sm:px-5 sm:py-4">
+            <div className="text-2xl font-semibold text-foreground sm:text-3xl">{activeBooks}</div>
+            <div className="mt-1 text-[11px] uppercase tracking-[0.06em] text-muted-foreground sm:text-xs sm:tracking-[0.18em]">{t("book.statusActive")}</div>
+          </div>
+          <div className="soft-pill rounded-2xl px-3 py-3 sm:rounded-3xl sm:px-5 sm:py-4">
+            <div className="text-2xl font-semibold text-foreground sm:text-3xl">{totalChapters}</div>
+            <div className="mt-1 text-[11px] uppercase tracking-[0.06em] text-muted-foreground sm:text-xs sm:tracking-[0.18em]">{t("dash.chapters")}</div>
+          </div>
+        </div>
+      </section>
+
       {!hasServices && (
-        <div className="rounded-lg border border-border/60 bg-card px-4 sm:px-5 py-4 mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="glass-panel rounded-3xl px-4 sm:px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
             <div className="text-sm font-medium">还没有配置 AI 模型</div>
             <div className="text-xs text-muted-foreground mt-0.5">配好一个服务商才能开始创作</div>
           </div>
           <button
             onClick={nav.toServices}
-            className="px-4 py-2 text-xs rounded-lg bg-primary text-primary-foreground font-medium hover:bg-primary/90 transition-colors shrink-0"
+            className="px-4 py-2 text-xs rounded-full bg-primary text-primary-foreground font-medium hover:bg-primary/90 transition-colors shrink-0"
           >
             去配置
           </button>
         </div>
       )}
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between border-b border-border/40 pb-6 sm:pb-8 gap-4">
-        <div>
-          <h1 className="font-serif text-3xl sm:text-4xl mb-2">{t("dash.title")}</h1>
-          <p className="text-sm text-muted-foreground">{t("dash.subtitle")}</p>
-        </div>
-        <button
-          onClick={nav.toBookCreate}
-          className="group flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold bg-primary text-primary-foreground hover:scale-105 active:scale-95 transition-all shadow-lg shadow-primary/20"
-        >
-          <Plus size={16} />
-          {t("nav.newBook")}
-        </button>
-      </div>
 
-      <div className="grid gap-6">
+      <div className="grid gap-4 sm:gap-6">
         {data.books.map((book, index) => {
           const isWriting = writingBooks.has(book.id);
           const staggerClass = `stagger-${Math.min(index + 1, 5)}`;
           return (
             <div
               key={book.id}
-              className={`paper-sheet group relative rounded-2xl fade-in ${staggerClass} ${menuOpenBookId === book.id ? "z-50" : ""}`}
+              className={`paper-sheet group relative rounded-[1.5rem] fade-in sm:rounded-2xl ${staggerClass} ${menuOpenBookId === book.id ? "z-50" : ""}`}
             >
-              <div className="p-4 sm:p-8 flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+              <div className="p-4 sm:p-7 flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-3 mb-3">
-                    <div className="p-2 rounded-lg bg-primary/5 text-primary">
+                    <div className="shrink-0 p-2.5 rounded-2xl bg-primary/10 text-primary shadow-inner">
                       <BookOpen size={20} />
                     </div>
                     <button
                       onClick={() => nav.toBook(book.id)}
-                      className="font-serif text-xl sm:text-2xl hover:text-primary transition-all text-left truncate block font-medium hover:underline underline-offset-4 decoration-primary/30"
+                      className="block min-w-0 flex-1 truncate text-left font-serif text-xl font-medium transition-all hover:text-primary hover:underline underline-offset-4 decoration-primary/30 sm:text-2xl"
                     >
                       {book.title}
                     </button>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-y-2 gap-x-4 text-[13px] text-muted-foreground font-medium">
-                    <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-secondary/50">
+                    <div className="soft-pill flex items-center gap-1.5 rounded-full px-3 py-1">
                       <span className="uppercase tracking-wider">{book.genre}</span>
                     </div>
                     <div className="flex items-center gap-1.5">
@@ -261,7 +293,7 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
                       }</span>
                     </div>
                     {book.language === "en" && (
-                      <span className="px-1.5 py-0.5 rounded border border-primary/20 text-primary text-[10px] font-bold">EN</span>
+                      <span className="px-2 py-0.5 rounded-full border border-primary/20 text-primary text-[10px] font-bold">EN</span>
                     )}
                     {book.fanficMode && (
                       <span className="flex items-center gap-1 text-purple-500">
@@ -272,17 +304,17 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 sm:gap-3 shrink-0 sm:ml-6">
+                <div className="flex w-full shrink-0 items-center gap-2 sm:ml-6 sm:w-auto sm:gap-3">
                   <button
                     onClick={async () => {
                       try { await postApi(`/books/${book.id}/write-next`); }
                       catch (e) { alert(e instanceof Error ? e.message : "Write failed"); }
                     }}
                     disabled={isWriting}
-                    className={`flex items-center gap-2 px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl text-sm font-bold transition-all shadow-sm ${
+                    className={`flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-bold transition-all shadow-sm sm:flex-none sm:px-6 sm:py-3 ${
                       isWriting
                         ? "bg-primary/20 text-primary cursor-wait animate-pulse"
-                        : "bg-secondary text-foreground hover:bg-primary hover:text-primary-foreground hover:shadow-lg hover:shadow-primary/20 hover:scale-105 active:scale-95"
+                        : "bg-secondary text-foreground hover:bg-primary hover:text-primary-foreground hover:shadow-lg hover:shadow-primary/20 hover:scale-[1.02] active:scale-95"
                     }`}
                   >
                     {isWriting ? (
@@ -299,7 +331,7 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
                   </button>
                   <button
                     onClick={() => nav.toAnalytics(book.id)}
-                    className="p-2.5 sm:p-3 rounded-xl bg-secondary text-muted-foreground hover:text-primary hover:bg-primary/10 hover:border-primary/30 hover:shadow-md hover:scale-105 active:scale-95 transition-all border border-border/50 shadow-sm"
+                    className="p-2.5 sm:p-3 rounded-full bg-secondary text-muted-foreground hover:text-primary hover:bg-primary/10 hover:border-primary/30 hover:shadow-md hover:scale-105 active:scale-95 transition-all border border-border/50 shadow-sm"
                     title={t("dash.stats")}
                   >
                     <BarChart2 size={18} />
@@ -328,10 +360,10 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
 
       {/* Modern writing progress panel */}
       {writingBooks.size > 0 && logEvents.length > 0 && (
-        <div className="glass-panel rounded-2xl p-4 sm:p-8 border-primary/20 bg-primary/[0.02] shadow-2xl shadow-primary/5 fade-in">
+        <div className="glass-panel rounded-[2rem] p-4 sm:p-8 border-primary/20 bg-primary/[0.02] shadow-2xl shadow-primary/5 fade-in">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 sm:mb-6 gap-3">
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-primary text-primary-foreground shadow-lg shadow-primary/20">
+              <div className="p-2 rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-primary/20">
                 <Flame size={18} className="animate-pulse" />
               </div>
               <div>
@@ -340,7 +372,7 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
               </div>
             </div>
             {progressEvent && (
-              <div className="flex items-center gap-4 text-xs font-bold text-primary px-4 py-2 rounded-full bg-primary/10 border border-primary/20">
+              <div className="soft-pill flex items-center gap-4 text-xs font-bold text-primary px-4 py-2 rounded-full">
                 <div className="flex items-center gap-2">
                   <Clock size={12} />
                   <span>{Math.round(((progressEvent.data as { elapsedMs?: number })?.elapsedMs ?? 0) / 1000)}s</span>
@@ -354,7 +386,7 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
             )}
           </div>
 
-          <div className="space-y-2 font-mono text-xs bg-black/5 dark:bg-black/20 p-3 sm:p-6 rounded-xl border border-border/50 max-h-[200px] overflow-y-auto scrollbar-thin">
+          <div className="space-y-2 font-mono text-xs bg-black/5 dark:bg-black/20 p-3 sm:p-6 rounded-3xl border border-border/50 max-h-[200px] overflow-y-auto scrollbar-thin">
             {logEvents.map((msg, i) => {
               const d = msg.data as { tag?: string; message?: string };
               return (

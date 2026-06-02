@@ -1,0 +1,125 @@
+{
+  "chapter": 8,
+  "selectedContext": [
+    {
+      "source": "runtime/chapter_memo",
+      "reason": "Carry the planner's chapter memo into governed writing.",
+      "excerpt": "goal=在追踪阴影下，从黑市“活”下来，并从旁观者口中打探到“废止项目组”的只言片语。 | ## 当前任务\n林玄带着受伤的左臂和泄露的符纸，被迫在危机四伏的黑市中短暂停留观察，学习这里的生存规则，同时尝试从非直接交易的途径（偷听、观察、解读）获取关于“外勤三处-废止项目组”的模糊信息。\n\n## 读者此刻在等什么\n1) 读者知道符纸泄露可能引来清道夫（H016），担心林玄下一刻就会被找到。\n2) 读者对摊主的真实身份和“血符”的更深背景（H015）抱有好奇，期待林玄能揭开一点。\n- 本章对这个期待做什么：大幅强化追踪压力（H016），让威胁感如影随形；通过侧面信息部分兑现摊主线索，让他“认识这东西”具体化，但拒绝给出完整答案，制造更强的“他到底是谁”的缺口。\n\n## 该兑现的 / 暂不掀的\n- 该兑现：H015 摊主身份 → 兑现到他透露出“曾见过类似符文的灾难后果”，坐实其知情者身份，但不说具体缘由。\n- 暂不掀：H015 摊主具体背景/组织立场 → 先压住，留到第10章后与“废止项目组”的正式线索交叉验证。\n- 该兑现：H016 符纸泄露追踪风险 → 本章必须让风险实质化（如被不明修士扫视、发现跟踪迹象），并让林玄做出一次成功的紧急规避，暂时（非永久）解除。\n\n## 日常/过渡承担什么任务\n[段落位置] → [承担功能]\n- 林玄紧急包扎伤口、处理血迹 → 承担“代价实感（H004）”的持续展示，并创造“必须尽快找到更安全疗伤方式”的短期目标。\n- 黑市内部的“观察期”段落 → 承担世界观构建任务：展示黑市明暗规则、修士间的非接触式信息交换、对“血符”的普遍忌讳。每一条规则都需是伏笔或未来可用线索。\n- 林玄回忆摊主只言片语 → 承担信息沉淀与推理功能，将“血符”、“废止项目组”、“灾难”三个关键词强行挂钩，明确下一阶段调查方向。\n\n## 关键抉择过三连问\n- 主角本章最关键的一次选择：\n  - 为什么选择在左臂渗血、符纸泄露的高风险下，不立刻逃离黑市周边，而是冒险进入黑市内部的“观猎区”停留？\n  - 因为直接逃离等于放弃唯一可能获取信息的渠道，且无头苍蝇般更容易被追踪。黑市人流复杂，既是险地，也是屏障。符合他“沉稳内敛、善于在压力下寻找最优解”的人设。\n  - 符合当前利益：以有限的风险（利用黑市复杂性）换取关键情报可能性，优于盲目逃亡。\n- 对手/配角（摊主）本章最关键的一次选择：\n  - 为什么在林玄离开后，又用某种方式（如一个不易察觉的眼神或轻微动作）指给他一个相对安全的、可旁观的区域，而非彻底驱赶或交易？\n  - 他认出了“血符”，可能对林玄的来源（废止项目组相关者或受害者）产生了某种复杂情绪（警惕、怜悯或验证兴趣）。提供有限帮助，既不彻底结盟，也不立刻树敌，符合其深藏不露、观察局势的人设。\n  - 符合当前利益：以极低成本引导一个潜在的“信息提供者”或“麻烦制造者”去试探黑市水深，对自己无害。\n\n## 章尾必须发生的改变\n1. 信息改变：林玄获得“废止项目组”与“某种人血符文引发的灾难”存在关联的模糊情报，调查目标从“找到这个组”细化为“查清当年那场灾难是什么”。\n2. 状态改变：左臂的紧急处理暂时止住渗血，但灵力乱流加剧，反噬进入新阶段（如开始出现间歇性灵识刺痛）。符纸的泄露问题被临时应对（如用从黑市垃圾堆找到的特殊油布包裹），但风险未根除。\n3. 关系暗示：摊主与林玄之间建立了极其微弱的、基于“共同认知（血符）”的单向联系，摊主处于信息优势的观察者位置。\n\n## 本章 hook 账\n**本章对活跃伏笔的账本：**\n\nopen:\n- [new] “观猎区”的旁听规矩 || 理由：这是黑市信息交换的核心场景，规矩本身是后续章节反复利用的工具，不能一笔带过。\n- [new] “老档案”这个词 || 理由：从旁听者口中无意听到，作为“废止项目组”新线索的种子，与H009（苏晚晴立场）可能产生后续关联。\n\nadvance:\n- H016 “符纸泄露追踪风险” → 林玄在“观猎区”感受到一次冰冷的、针对性的灵识扫描，迅速混入人群规避，随后用油布包裹符纸，暂时屏蔽泄露（pressured → temporarily neutralized）。\n- H015 “摊主身份成谜” → 摊主向林玄示意一个安全旁观位，并低声提了一句“有些东西，看了会后悔，但不看，死得更明白。”坐实其知情者身份（open → advanced）。\n\nresolve:\n- （本章不彻底解决任何长期伏笔，仅对H016进行阶段性应对）\n\ndefer:\n- H009 “苏晚晴立场” → 本章不动，理由：林玄当前处境无法主动联系任何人，且苏晚晴与“废止项目组”的关联需更强证据触发。\n\n## 不要做\n1. 不要让林玄的伤势在本章神奇好转或找到根治办法。反噬必须持续并展现新症状。\n2. 不要让摊主主动透露任何“废止项目组”的实质信息，他只能是引子和态度展示。\n3. 不要让清道夫或其他追踪者在本章立刻现身，威胁应以“被察觉”、“被扫描”、“环境异动”的间接形式存在。\n4. 不要引入新势力或新盟友，本章聚焦于林玄的单人观察与潜行，以及黑市环境的刻画。"
+    },
+    {
+      "source": "story/current_focus.md",
+      "reason": "Current task focus for this chapter.",
+      "excerpt": "（描述接下来 1-3 章最需要优先推进的内容。）"
+    },
+    {
+      "source": "story/audit_drift.md",
+      "reason": "Carry forward audit drift guidance from the previous chapter without polluting hard state facts.",
+      "excerpt": "> 第7章审计发现以下问题，下一章写作时必须避免："
+    },
+    {
+      "source": "story/current_state.md",
+      "reason": "Preserve hard state facts referenced by the active chapter brief or hard constraints.",
+      "excerpt": "| 字段 | 值 |"
+    },
+    {
+      "source": "story/outline/story_frame.md",
+      "reason": "Preserve canon constraints referenced by the active chapter brief or hard constraints.",
+      "excerpt": "---"
+    },
+    {
+      "source": "story/outline/volume_map.md",
+      "reason": "Anchor the default planning node for this chapter.",
+      "excerpt": "五卷，每卷约 100 章。第一卷\"压抑与试探\"，情绪曲线是低开高走——开篇即生死危机，林玄在公司加班时胸口剧痛，灵瞳首次被动开启，看到地铁站方向有异常灵脉波动，三年倒计时从这一刻开始具象化；中间压抑蛰伏，主角在灵管局监视下小心翼翼地寻找第一个灵脉节点，每一次灵瞳使用都伴随着生理痛苦；卷尾第一次小爆发，林玄在公共场合被迫使用灵瞳，引起灵管局注意，身份从\"隐藏者\"变为\"被监视者\"。第二卷\"暗流与同盟\"，情绪曲线是波动上升——林玄与苏晚晴结成利益同盟，但每一次信任都有代价；发现灵脉枯竭症的非自然痕迹，暗影楼第一次正面交锋，主角被迫暴露部分灵瞳能力；卷尾盟友背叛或牺牲，林玄意识到信任是有成本的。第三卷\"阴谋与裂变\"，情绪曲线是陡升陡降——真相碎片拼出全貌，灵管局高层与暗影楼的交易证据浮出，一名核心盟友的立场发生不可逆变化；主角修为突破至凝元境，但灵瞳过度使用导致第一次寿元透支；卷尾阴谋全貌拼出，林玄从\"求生\"转向\"复仇\"。第四卷\"曝光与突围\"，情绪曲线是高压释放——将高层交易证据公之于灵管局内部，引发权力震荡；主角突破筑基境，灵脉枯竭症暂时缓解；暗影楼楼主首次正面现身，与主角达成一次未分胜负的对峙；卷尾筑基境突破完成，但代价是灵瞳出现永久性损伤。第五卷\"终局与抉择\"，情绪曲线是悲壮收束——灵脉核心真相完全揭露，主角做出斩断/继承/摧毁的选择，付出不可逆代价；妹妹的命运得到最终安置，暗影楼残党被清算或蛰伏，灵管局进入新秩序；卷尾灵脉核心抉择完成，城市灵脉网络被重塑，林玄失去灵瞳但活下来了。"
+    },
+    {
+      "source": "story/chapter_summaries.md#recent_titles",
+      "reason": "Keep recent title history visible to avoid repetitive chapter naming.",
+      "excerpt": "7: 暗巷符光 | 6: 裂纹与残响 | 5: 锈梯惊变 | 4: 盲区夺盘 | 2: 地底漩涡"
+    },
+    {
+      "source": "story/chapter_summaries.md#recent_mood_type_trail",
+      "reason": "Keep recent mood and chapter-type cadence visible before writing the next chapter.",
+      "excerpt": "7: 紧张、警觉、紧迫感升级，从策略性冷静转向危机应对 / 推进章/风险验证 | 6: 疲惫、痛苦、警觉但带有策略性的冷静，信息梳理中的微弱主动感 / 信息整理/线索推进/状态重整 | 5: 紧张、痛苦、困惑、警觉 / 高压冲突/智斗脱身/信息迷雾 | 4: 窒息、紧绷、决绝、疑惧 / 推进章/智斗破局 | 2: 紧绷、凝重、决断 / 推进章"
+    },
+    {
+      "source": "story/chapters#recent_endings",
+      "reason": "Show how recent chapters ended so the writer avoids structural repetition (e.g. 3 consecutive collapse endings).",
+      "excerpt": "ch5: 心脏在胸腔里沉重地跳动。他压下所有思绪，将注意力完全集中到即将临近的、第二次生死时速上。身体在恶化，信任在崩塌，时... | ch6: 身体移动时，左臂传来一阵尖锐的刺痛，比之前更甚。他闷哼一声，脚步踉跄了一下。符纸研究带来的反冲，似乎加速了灼伤处灵... | ch7: 走出巷口时，夜风更冷了，吹得衣角猎猎作响。林玄摸了摸胸口，符纸已经恢复了冰冷，但那种危险的气息却更深了，仿佛烙印在..."
+    },
+    {
+      "source": "story/current_state.md#当前目标",
+      "reason": "Relevant current-state fact retrieved for the current chapter goal.",
+      "excerpt": "当前目标 | 尽快处理/封印符纸（紧迫性升级）；前往黑市深处寻找\"外勤三处-废止项目组\"线索（但需先解决符纸风险）；避免被清道夫追踪定位"
+    },
+    {
+      "source": "story/current_state.md#当前冲突",
+      "reason": "Relevant current-state fact retrieved for the current chapter goal.",
+      "excerpt": "当前冲突 | 符纸风险实证化后的紧迫处理需求与身体/资源极度受限的矛盾；黑市内部调查的必要性与摊主警告带来的警惕之间的博弈；撤离黑市后下一步路线选择（继续深入黑市 vs 寻找临时安全点）"
+    },
+    {
+      "source": "story/current_state.md#当前限制",
+      "reason": "Relevant current-state fact retrieved for the current chapter goal.",
+      "excerpt": "当前限制 | 符纸能量不可控，成为追踪风险源；左臂伤势渗血恶化，元气流紊乱加剧；身体虚弱，无法正面冲突；黑市内部风险未知；资金为零；对黑市网络及中间人不熟悉"
+    },
+    {
+      "source": "story/current_state.md#当前位置",
+      "reason": "Relevant current-state fact retrieved for the current chapter goal.",
+      "excerpt": "当前位置 | 老城区黑市外（刚离开黑市入口，正在夜色中撤离）"
+    },
+    {
+      "source": "story/chapter_summaries.md#5",
+      "reason": "Relevant episodic memory retrieved for the current chapter goal.",
+      "excerpt": "锈梯惊变 | 清道夫逼近储物间；林玄收到苏晚晴逃生提示（“非总局令”）；主动使用残存灵力制造走廊火警混乱；通过通风管道、外墙排水管逃离养老院；落地时咳血溅在符纸上引发微光；逃离后收到另一条矛盾的引导短信；瞥见清道夫特殊徽章与编码 | 身体状态严重恶化（反噬加剧、受伤）；获得符纸碎片；陷入两条矛盾信息的决策困境；对苏晚晴及清道夫背后势力认知加深但更复杂 | H009(苏晚晴立场)推进（帮助但信息矛盾）；H010(清道夫威胁)化解（本章脱身）；H003(离厂协议)疑似规避；H004(代价实感)强化；H007(枯竭症痕迹)侧证；新增H0011(清道夫特殊徽章)与H0012(符纸血光反应)"
+    },
+    {
+      "source": "story/chapter_summaries.md#6",
+      "reason": "Relevant episodic memory retrieved for the current chapter goal.",
+      "excerpt": "裂纹与残响 | 在储物间暂歇，初步研究符纸与徽章；回忆起徽章图案关联“外勤三处-废止项目组”；用灵力试探符纸感知到同源共鸣；服用“固元散”进行基础疗伤；制定前往黑市验证线索、寻找符纸鉴定的计划；左臂伤势因研究反冲加剧；最终离开储物间。 | 身体从“濒危”暂时恢复至“勉强能行动”，但左臂灼伤恶化伴灵力乱流；掌握了“外勤三处-废止项目组”初步线索；确认符纸与自身力量同源；手机关机，未回复任何信息；行动目标细化为黑市调查。 | H011(清道夫徽章) advanced；H012(符纸血光) advanced；H009(苏晚晴立场) pressured；新增H013(符纸风险)、H014(黑市行动)"
+    },
+    {
+      "source": "story/chapter_summaries.md#7",
+      "reason": "Relevant episodic memory retrieved for the current chapter goal.",
+      "excerpt": "暗巷符光 | 林玄离开储物间前往黑市，途中符纸能量泄露迫使他绕道废弃地铁通道；抵达黑市入口后与神秘摊主接触，摊主认出符纸为\"血符\"并警告；林玄左臂伤势因符纸刺激进一步恶化渗血，未进行任何交易匆匆离开 | 左臂伤势恶化（渗血、灵力乱流加剧）；符纸风险从\"假设\"转为\"实证\"；黑市入场完成但未深入交易；摊主与林玄建立初步接触但立场未明 | H013 verified（符纸风险实证）；H014 advanced（黑市入场）；H004 pressured（代价实感强化）；新增H015（摊主身份成谜）、H016（符纸泄露追踪风险）"
+    },
+    {
+      "source": "story/pending_hooks.md#hook-11",
+      "reason": "Carry forward unresolved hooks that match the chapter focus.",
+      "excerpt": "线索/身份 | open | 中程 | mid-arc | 黑市侧证\"外勤三处-废止项目组\""
+    },
+    {
+      "source": "story/pending_hooks.md#hook-14",
+      "reason": "Carry forward unresolved hooks that match the chapter focus.",
+      "excerpt": "线索/行动 | open | 中程 | mid-arc | 黑市入场完成，但核心线索未获取"
+    },
+    {
+      "source": "story/pending_hooks.md#hook-15",
+      "reason": "Carry forward unresolved hooks that match the chapter focus.",
+      "excerpt": "人物/新启 | open | 中程 | mid-arc | 新角色，可能是盟友/敌人/中间人，立场未明"
+    },
+    {
+      "source": "story/pending_hooks.md#hook-16",
+      "reason": "Carry forward unresolved hooks that match the chapter focus.",
+      "excerpt": "风险/新启 | open | 短程 | 符纸能量泄露引发新的追踪风险"
+    },
+    {
+      "source": "story/pending_hooks.md#hook-13",
+      "reason": "Carry forward unresolved hooks that match the chapter focus.",
+      "excerpt": "风险/新启 | open | 短程 | 从\"假设\"转为\"实证\"，紧迫性升级"
+    },
+    {
+      "source": "story/pending_hooks.md#hook-12",
+      "reason": "Carry forward unresolved hooks that match the chapter focus.",
+      "excerpt": "超自然/伏笔 | open | 长程 | mid-arc | 可能关联人血淬炼，需第9章交叉验证"
+    },
+    {
+      "source": "story/pending_hooks.md#hook-9",
+      "reason": "Carry forward unresolved hooks that match the chapter focus.",
+      "excerpt": "人物/立场 | open | 中程 | mid-arc | 摊主可能是新信息源，可信度待验证"
+    },
+    {
+      "source": "story/pending_hooks.md#hook-1",
+      "reason": "Carry forward unresolved hooks that match the chapter focus.",
+      "excerpt": "unspecified | open | 中程 | mid-arc | 暂不交叉验证，留到第9章与灵渣样本对照"
+    }
+  ]
+}

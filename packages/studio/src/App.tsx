@@ -126,35 +126,35 @@ export function App() {
       )}
 
       {/* Center Content */}
-      <div className="flex-1 flex flex-col min-w-0 bg-background/35">
+      <div className="flex-1 flex flex-col min-w-0 bg-background/20">
         {/* Header Strip */}
-        <header className="h-14 shrink-0 flex items-center justify-between px-4 md:px-8 border-b border-border/55 claude-topbar">
-          <div className="flex items-center gap-2">
+        <header className="h-14 sm:h-16 shrink-0 flex items-center justify-between gap-2 px-3 sm:px-4 md:px-8 border-b border-border/45 claude-topbar shadow-sm shadow-primary/5">
+          <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
              <button
                onClick={() => setSidebarOpen(true)}
-               className="md:hidden flex h-8 w-8 items-center justify-center rounded-xl text-muted-foreground hover:bg-secondary/80 hover:text-foreground transition-colors"
+               className="md:hidden flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl text-muted-foreground hover:bg-secondary/80 hover:text-foreground transition-colors"
              >
                <Menu size={18} />
              </button>
              <button
                onClick={nav.toDashboard}
-               className="inline-flex items-center gap-2 rounded-xl border border-border/65 bg-card/60 px-3 py-1.5 text-sm font-medium text-foreground shadow-sm hover:bg-card transition-colors"
+               className="soft-pill inline-flex min-w-0 max-w-[48vw] items-center gap-2 rounded-full px-3 py-2 text-sm font-medium text-foreground hover:border-primary/40 transition-colors sm:max-w-none sm:px-3.5"
              >
                <House size={14} />
                <span className="hidden sm:inline">首页</span>
                <span className="hidden sm:inline text-muted-foreground/70">/</span>
-               <span className="font-serif">InkOS Studio</span>
+               <span className="truncate font-serif">InkOS Studio</span>
              </button>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="flex gap-0.5 bg-secondary/80 rounded-xl border border-border/45 p-0.5">
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+            <div className="soft-pill flex gap-0.5 rounded-full p-0.5">
               <button
                 onClick={async () => {
                   await putApi("/project", { language: "zh" });
                   refetchProject();
                 }}
-                className={`text-xs px-2 py-0.5 rounded-lg transition-colors ${currentLang === "zh" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                className={`text-xs px-2 py-1 rounded-full transition-colors sm:px-2.5 ${currentLang === "zh" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
               >
                 中
               </button>
@@ -163,7 +163,7 @@ export function App() {
                   await putApi("/project", { language: "en" });
                   refetchProject();
                 }}
-                className={`text-xs px-2 py-0.5 rounded-lg transition-colors ${currentLang === "en" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                className={`text-xs px-2 py-1 rounded-full transition-colors sm:px-2.5 ${currentLang === "en" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
               >
                 EN
               </button>
@@ -171,7 +171,7 @@ export function App() {
 
             <button
               onClick={() => setTheme(isDark ? "light" : "dark")}
-              className="flex h-8 w-8 items-center justify-center rounded-xl text-muted-foreground hover:bg-secondary/80 hover:text-foreground transition-colors"
+              className="soft-pill flex h-10 w-10 items-center justify-center rounded-full text-muted-foreground hover:text-foreground transition-colors sm:h-9 sm:w-9"
             >
               {isDark ? <Sun size={14} /> : <Moon size={14} />}
             </button>
@@ -181,7 +181,7 @@ export function App() {
         {/* Main Content Area */}
         <main className="flex-1 relative overflow-y-auto scroll-smooth">
           {route.page === "dashboard" && (
-            <div className="max-w-4xl mx-auto px-4 py-8 md:px-12 md:py-12 lg:py-16 fade-in">
+            <div className="max-w-6xl mx-auto px-3 py-4 sm:px-4 sm:py-6 md:px-10 md:py-10 lg:py-12 fade-in">
               <Dashboard nav={nav} sse={sse} theme={theme} t={t} />
             </div>
           )}
@@ -222,37 +222,37 @@ export function App() {
             </div>
           )}
           {route.page === "book-settings" && (
-            <div className="max-w-4xl mx-auto px-4 py-8 md:px-12 md:py-12 lg:py-16 fade-in">
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
               <BookDetail bookId={route.bookId} nav={nav} theme={theme} t={t} sse={sse} />
             </div>
           )}
           {route.page === "chapter" && (
-            <div className="max-w-4xl mx-auto px-4 py-8 md:px-12 md:py-12 lg:py-16 fade-in">
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
               <ChapterReader bookId={route.bookId} chapterNumber={route.chapterNumber} nav={nav} theme={theme} t={t} />
             </div>
           )}
           {route.page === "analytics" && (
-            <div className="max-w-4xl mx-auto px-4 py-8 md:px-12 md:py-12 lg:py-16 fade-in">
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
               <Analytics bookId={route.bookId} nav={nav} theme={theme} t={t} />
             </div>
           )}
           {route.page === "services" && (
-            <div className="max-w-4xl mx-auto px-4 py-8 md:px-12 md:py-12 lg:py-16 fade-in">
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
               <ServiceListPage nav={nav} />
             </div>
           )}
           {route.page === "service-detail" && (
-            <div className="max-w-4xl mx-auto px-4 py-8 md:px-12 md:py-12 lg:py-16 fade-in">
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
               <ServiceDetailPage serviceId={route.serviceId} nav={nav} />
             </div>
           )}
           {route.page === "truth" && (
-            <div className="max-w-4xl mx-auto px-4 py-8 md:px-12 md:py-12 lg:py-16 fade-in">
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
               <TruthFiles bookId={route.bookId} nav={nav} theme={theme} t={t} />
             </div>
           )}
           {route.page === "daemon" && (
-            <div className="max-w-4xl mx-auto px-4 py-8 md:px-12 md:py-12 lg:py-16 fade-in">
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
               <DaemonControl nav={nav} theme={theme} t={t} sse={sse} />
             </div>
           )}
