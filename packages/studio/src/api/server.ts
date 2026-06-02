@@ -502,6 +502,43 @@ type EventHandler = (event: string, data: unknown) => void;
 const subscribers = new Set<EventHandler>();
 const bookCreateStatus = new Map<string, { status: "creating" | "error"; error?: string }>();
 
+// Track active operations for session recovery after page refresh
+interface ActiveOperation {
+  readonly type: "write" | "rewrite" | "agent" | "revise";
+  readonly bookId: string;
+  readonly startedAt: number;
+  readonly sessionId?: string;
+  readonly chapter?: number;
+  readonly instruction?: string;
+}
+const activeOperations = new Map<string, ActiveOperation>();
+function setOperation(key: string, op: Omit<ActiveOperation, "startedAt">) {
+  activeOperations.set(key, { ...op, startedAt: Date.now() });
+}
+function clearOperation(key: string) {
+  activeOperations.delete(key);
+}
+
+// --- Log buffer (ring buffer, keeps last N entries) ---
+const LOG_BUFFER_SIZE = 500;
+const logBuffer: LogEntry[] = [];
+function pushLog(entry: LogEntry): void {
+  logBuffer.push(entry);
+  if (logBuffer.length > LOG_BUFFER_SIZE) {
+    logBuffer.splice(0, logBuffer.length - LOG_BUFFER_SIZE);
+  }
+}
+
+/** Quick server-side log that goes to buffer + SSE broadcast + console */
+function serverLog(level: LogEntry["level"], tag: string, message: string): void {
+  const entry: LogEntry = { level, tag, message, timestamp: new Date().toISOString() };
+  pushLog(entry);
+  broadcast("log", { level: entry.level, tag: entry.tag, message: entry.message, timestamp: entry.timestamp });
+  if (level === "error") console.error(`[${tag}]`, message);
+  else if (level === "warn") console.warn(`[${tag}]`, message);
+  else console.log(`[${tag}]`, message);
+}
+
 // 内存缓存：service -> 模型列表 + 更新时间戳；避免每次 sidebar 挂载时都打真实 LLM /models
 const modelListCache = new Map<string, { models: Array<{ id: string; name: string }>; at: number }>();
 
@@ -1248,10 +1285,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     await next();
   });
 
-  // Logger sink that broadcasts to SSE
+  // Logger sink that broadcasts to SSE and stores in buffer
   const sseSink: LogSink = {
     write(entry: LogEntry): void {
-      broadcast("log", { level: entry.level, tag: entry.tag, message: entry.message });
+      pushLog(entry);
+      broadcast("log", { level: entry.level, tag: entry.tag, message: entry.message, timestamp: entry.timestamp });
     },
   };
 
@@ -1284,11 +1322,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     const scopedSseSink: LogSink = overrides?.sessionIdForSSE
       ? {
           write(entry) {
+            pushLog(entry);
             broadcast("log", {
               sessionId: overrides.sessionIdForSSE,
               level: entry.level,
               tag: entry.tag,
               message: entry.message,
+              timestamp: entry.timestamp,
             });
           },
         }
@@ -1604,15 +1644,24 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     const body = await c.req.json<{ wordCount?: number }>().catch(() => ({ wordCount: undefined }));
 
     broadcast("write:start", { bookId: id });
+    serverLog("info", "write", `开始写作书籍 ${id}`);
+
+    // Track active operation for session recovery
+    setOperation(`write:${id}`, { type: "write", bookId: id });
 
     // Fire and forget — progress/completion/errors pushed via SSE
     const pipeline = new PipelineRunner(await buildPipelineConfig({ bookId: id }));
     pipeline.writeNextChapter(id, body.wordCount).then(
       (result) => {
+        clearOperation(`write:${id}`);
+        serverLog("info", "write", `书籍 ${id} 第 ${result.chapterNumber} 章写作完成: ${result.title} (${result.wordCount} 字)`);
         broadcast("write:complete", { bookId: id, chapterNumber: result.chapterNumber, status: result.status, title: result.title, wordCount: result.wordCount });
       },
       (e) => {
-        broadcast("write:error", { bookId: id, error: e instanceof Error ? e.message : String(e) });
+        clearOperation(`write:${id}`);
+        const msg = e instanceof Error ? e.message : String(e);
+        serverLog("error", "write", `书籍 ${id} 写作失败: ${msg}`);
+        broadcast("write:error", { bookId: id, error: msg });
       },
     );
 
@@ -1624,14 +1673,23 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     const body = await c.req.json<{ wordCount?: number; context?: string }>().catch(() => ({ wordCount: undefined, context: undefined }));
 
     broadcast("draft:start", { bookId: id });
+    serverLog("info", "draft", `开始草稿书籍 ${id}`);
+
+    // Track active operation for session recovery
+    setOperation(`draft:${id}`, { type: "write", bookId: id });
 
     const pipeline = new PipelineRunner(await buildPipelineConfig({ bookId: id }));
     pipeline.writeDraft(id, body.context, body.wordCount).then(
       (result) => {
+        clearOperation(`draft:${id}`);
+        serverLog("info", "draft", `书籍 ${id} 草稿完成: ${result.title} (${result.wordCount} 字)`);
         broadcast("draft:complete", { bookId: id, chapterNumber: result.chapterNumber, title: result.title, wordCount: result.wordCount });
       },
       (e) => {
-        broadcast("draft:error", { bookId: id, error: e instanceof Error ? e.message : String(e) });
+        clearOperation(`draft:${id}`);
+        const msg = e instanceof Error ? e.message : String(e);
+        serverLog("error", "draft", `书籍 ${id} 草稿失败: ${msg}`);
+        broadcast("draft:error", { bookId: id, error: msg });
       },
     );
 
@@ -1679,6 +1737,30 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     }
   });
 
+  // --- Active operations (for session recovery after page refresh) ---
+
+  app.get("/api/v1/active-operations", (c) => {
+    return c.json({ operations: [...activeOperations.values()] });
+  });
+
+  // --- Logs ---
+
+  app.get("/api/v1/logs", (c) => {
+    const limit = Math.min(parseInt(c.req.query("limit") ?? "200", 10) || 200, LOG_BUFFER_SIZE);
+    const entries = logBuffer.slice(-limit).map((e) => ({
+      level: e.level,
+      tag: e.tag,
+      message: e.message,
+      timestamp: e.timestamp,
+    }));
+    return c.json({ entries });
+  });
+
+  app.delete("/api/v1/logs", (c) => {
+    logBuffer.length = 0;
+    return c.json({ status: "cleared" });
+  });
+
   // --- SSE ---
 
   app.get("/api/v1/events", (c) => {
@@ -1688,6 +1770,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       };
       subscribers.add(handler);
       await stream.writeSSE({ event: "ping", data: "" });
+
+      // Send active operations on connect so frontend can restore state
+      if (activeOperations.size > 0) {
+        await stream.writeSSE({
+          event: "operations:restore",
+          data: JSON.stringify({ operations: [...activeOperations.values()] }),
+        });
+      }
 
       // Keep alive
       const keepAlive = setInterval(() => {
@@ -2325,6 +2415,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
   });
 
   app.post("/api/v1/agent", async (c) => {
+    // Parse request body first (before entering SSE stream)
     const { instruction, activeBookId, sessionId: reqSessionId, model: reqModel, service: reqService } = await c.req.json<{
       instruction: string;
       activeBookId?: string;
@@ -2333,6 +2424,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       service?: string;
     }>();
     const sessionId = reqSessionId;
+
+    // Validation - return JSON for simple errors (before SSE stream starts)
     if (!instruction?.trim()) {
       return c.json({ error: "No instruction provided" }, 400);
     }
@@ -2344,11 +2437,36 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       return c.json({ error: message, response: message }, 400);
     }
 
-    broadcast("agent:start", { instruction, activeBookId, sessionId });
+    // Use SSE stream for long-running operations (prevents Cloudflare 524 timeout)
+    return streamSSE(c, async (stream) => {
+      // Helper to send JSON response via SSE event and close stream
+      const sendResult = async (data: Record<string, unknown>, status?: number) => {
+        await stream.writeSSE({
+          event: "result",
+          data: JSON.stringify({ ...data, status: status ?? 200 }),
+        });
+      };
 
-    try {
-      // Load config + create LLM client (pipeline created after model resolution)
-      const config = await loadCurrentProjectConfig({ requireApiKey: false });
+      // Keep-alive ping every 60 seconds (Cloudflare timeout is 100s)
+      const keepAlive = setInterval(() => {
+        stream.writeSSE({ event: "ping", data: "" }).catch(() => {});
+      }, 60_000);
+
+      stream.onAbort(() => {
+        clearInterval(keepAlive);
+      });
+
+      try {
+        broadcast("agent:start", { instruction, activeBookId, sessionId });
+        serverLog("info", "agent", `开始处理指令: ${instruction.slice(0, 60)}${instruction.length > 60 ? "..." : ""}`);
+
+        // Track active operation for session recovery
+        if (activeBookId) {
+          setOperation(`agent:${sessionId}`, { type: "agent", bookId: activeBookId, sessionId, instruction });
+        }
+
+        // Load config + create LLM client (pipeline created after model resolution)
+        const config = await loadCurrentProjectConfig({ requireApiKey: false });
       const client = createLLMClient(config.llm);
 
       const loadedBookSession = await loadBookSession(root, sessionId);
@@ -2417,13 +2535,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
         }], instruction);
         await refreshBookSessionFromTranscript();
         broadcast("agent:complete", { instruction, activeBookId: externalEdit.activeBookId, sessionId: bookSession.sessionId });
-        return c.json({
+        await sendResult({
           response: externalEdit.responseText,
           session: {
             sessionId: bookSession.sessionId,
             ...(externalEdit.activeBookId ? { activeBookId: externalEdit.activeBookId } : {}),
           },
         });
+        return;
       }
 
       // Resolve model — multi-service resolution
@@ -2446,10 +2565,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
         } catch (e: any) {
           const msg = e?.message ?? String(e);
           if (/API key/i.test(msg)) {
-            return c.json({
+            await sendResult({
               error: `请先为 ${reqService} 配置 API Key`,
               response: `请先在模型配置中为 ${reqService} 填写 API Key，然后再试。`,
             }, 400);
+            return;
           }
           throw e;
         }
@@ -2592,13 +2712,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
           }], instruction);
           await refreshBookSessionFromTranscript();
           broadcast("agent:complete", { instruction, activeBookId: agentBookId, sessionId: bookSession.sessionId });
-          return c.json({
+          await sendResult({
             response: responseText,
             session: {
               sessionId: bookSession.sessionId,
               activeBookId: agentBookId,
             },
           });
+          return;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           const toolResult = { content: [{ type: "text", text: message }] };
@@ -2610,10 +2731,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
             isError: true,
           });
           broadcast("agent:error", { instruction, activeBookId: agentBookId, sessionId: bookSession.sessionId, error: message });
-          return c.json({
+          await sendResult({
             error: { code: "AGENT_ACTION_FAILED", message },
             response: message,
           }, 502);
+          return;
         }
       }
 
@@ -2730,10 +2852,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
           collectedToolExecs,
         });
         if (actionExecutionError) {
-          return c.json({
+          await sendResult({
             error: { code: "AGENT_ACTION_NOT_EXECUTED", message: actionExecutionError },
             response: actionExecutionError,
           }, 502);
+          return;
         }
       }
 
@@ -2771,10 +2894,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
           if (resolveCreatedBookIdFromToolExecs(collectedToolExecs)) {
             await finalizeCreatedBook();
           }
-          return c.json({
+          await sendResult({
             error: { code: "AGENT_LLM_ERROR", message: result.errorMessage },
             response: result.errorMessage,
           }, 502);
+          return;
         }
 
         try {
@@ -2804,10 +2928,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
               collectedToolExecs,
             });
             if (actionExecutionError) {
-              return c.json({
+              await sendResult({
                 error: { code: "AGENT_ACTION_NOT_EXECUTED", message: actionExecutionError },
                 response: actionExecutionError,
               }, 502);
+              return;
             }
             await appendManualSessionMessages(root, bookSession.sessionId, [{
               role: "assistant",
@@ -2828,13 +2953,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
             }], instruction);
             await refreshBookSessionFromTranscript();
             const createdBookId = await finalizeCreatedBook();
-            return c.json({
+            await sendResult({
               response: fallback.content,
               session: {
                 sessionId: bookSession.sessionId,
                 ...(createdBookId ? { activeBookId: createdBookId } : {}),
               },
             });
+            return;
           }
         } catch {
           // fall through to probe-based diagnosis below
@@ -2861,27 +2987,30 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
           if (resolveCreatedBookIdFromToolExecs(collectedToolExecs)) {
             await finalizeCreatedBook();
           }
-          return c.json({
+          await sendResult({
             error: { code: "AGENT_EMPTY_RESPONSE", message: probeMessage },
             response: probeMessage,
           }, 502);
+          return;
         }
 
         const emptyMessage = "模型未返回文本内容。请检查协议类型（chat/responses）、流式开关或上游服务兼容性。";
         if (resolveCreatedBookIdFromToolExecs(collectedToolExecs)) {
           await finalizeCreatedBook();
         }
-        return c.json({
+        await sendResult({
           error: { code: "AGENT_EMPTY_RESPONSE", message: emptyMessage },
           response: emptyMessage,
         }, 502);
+        return;
       }
       await refreshBookSessionFromTranscript();
       await finalizeCreatedBook();
 
       broadcast("agent:complete", { instruction, activeBookId, sessionId: bookSession.sessionId });
+      serverLog("info", "agent", `指令完成: ${instruction.slice(0, 40)}${instruction.length > 40 ? "..." : ""}`);
 
-      return c.json({
+      await sendResult({
         response: result.responseText,
         session: {
           sessionId: bookSession.sessionId,
@@ -2890,28 +3019,36 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       });
     } catch (e) {
       if (e instanceof ApiError) {
-        throw e;
+        serverLog("warn", "agent", `API错误: ${e.message}`);
+        await sendResult({ error: { code: e.code, message: e.message } }, e.status);
+        return;
       }
       if (e instanceof SessionAlreadyMigratedError) {
         const migratedMessage = e instanceof Error ? e.message : String(e);
-        throw new ApiError(409, "SESSION_ALREADY_MIGRATED", migratedMessage);
+        await sendResult({ error: { code: "SESSION_ALREADY_MIGRATED", message: migratedMessage } }, 409);
+        return;
       }
       const msg = e instanceof Error ? e.message : String(e);
+      serverLog("error", "agent", `指令失败: ${msg}`);
       broadcast("agent:error", { instruction, activeBookId, sessionId, error: msg });
 
       // Agent busy — return 429 with user-friendly message
       if (/already processing|prompt.*queue/i.test(msg)) {
-        return c.json({
+        await sendResult({
           error: { code: "AGENT_BUSY", message: "正在处理中，请等待当前操作完成" },
           response: "正在处理中，请等待当前操作完成后再发送。",
         }, 429);
+        return;
       }
 
-      return c.json(
-        { error: { code: "AGENT_ERROR", message: msg } },
-        500,
-      );
+      await sendResult({ error: { code: "AGENT_ERROR", message: msg } }, 500);
+    } finally {
+      clearInterval(keepAlive);
+      if (activeBookId) {
+        clearOperation(`agent:${sessionId}`);
+      }
     }
+    });
   });
 
   // --- Language setup ---
@@ -2976,13 +3113,18 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       .catch(() => ({ mode: "spot-fix", brief: undefined }));
 
     broadcast("revise:start", { bookId: id, chapter: chapterNum });
+    serverLog("info", "revise", `开始修订书籍 ${id} 第 ${chapterNum} 章`);
+    setOperation(`revise:${id}:${chapterNum}`, { type: "revise", bookId: id, chapter: chapterNum });
     try {
       const book = await state.loadBookConfig(id);
       const chaptersDir = join(bookDir, "chapters");
       const files = await readdir(chaptersDir);
       const paddedNum = String(chapterNum).padStart(4, "0");
       const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
+      if (!match) {
+        clearOperation(`revise:${id}:${chapterNum}`);
+        return c.json({ error: "Chapter not found" }, 404);
+      }
 
       const pipeline = new PipelineRunner(await buildPipelineConfig({
         externalContext: body.brief,
@@ -2994,9 +3136,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
         chapterNum,
         normalizedMode as "polish" | "rewrite" | "rework" | "spot-fix" | "anti-detect",
       );
+      clearOperation(`revise:${id}:${chapterNum}`);
+      serverLog("info", "revise", `书籍 ${id} 第 ${chapterNum} 章修订完成`);
       broadcast("revise:complete", { bookId: id, chapter: chapterNum });
       return c.json(result);
     } catch (e) {
+      clearOperation(`revise:${id}:${chapterNum}`);
+      serverLog("error", "revise", `书籍 ${id} 第 ${chapterNum} 章修订失败: ${String(e)}`);
       broadcast("revise:error", { bookId: id, error: String(e) });
       return c.json({ error: String(e) }, 500);
     }
@@ -3237,6 +3383,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       .catch(() => ({}));
 
     broadcast("rewrite:start", { bookId: id, chapter: chapterNum });
+    serverLog("info", "rewrite", `开始重写书籍 ${id} 第 ${chapterNum} 章`);
+
+    // Track active operation for session recovery
+    setOperation(`rewrite:${id}`, { type: "rewrite", bookId: id, chapter: chapterNum });
+
     try {
       const rollbackTarget = chapterNum - 1;
       const discarded = await state.rollbackToChapter(id, rollbackTarget);
@@ -3245,11 +3396,20 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
         bookId: id,
       }));
       pipeline.writeNextChapter(id).then(
-        (result) => broadcast("rewrite:complete", { bookId: id, chapterNumber: result.chapterNumber, title: result.title, wordCount: result.wordCount }),
-        (e) => broadcast("rewrite:error", { bookId: id, error: e instanceof Error ? e.message : String(e) }),
+        (result) => {
+          clearOperation(`rewrite:${id}`);
+          serverLog("info", "rewrite", `书籍 ${id} 第 ${result.chapterNumber} 章重写完成: ${result.title} (${result.wordCount} 字)`);
+          broadcast("rewrite:complete", { bookId: id, chapterNumber: result.chapterNumber, title: result.title, wordCount: result.wordCount });
+        },
+        (e) => {
+          clearOperation(`rewrite:${id}`);
+          serverLog("error", "rewrite", `书籍 ${id} 重写失败: ${e instanceof Error ? e.message : String(e)}`);
+          broadcast("rewrite:error", { bookId: id, error: e instanceof Error ? e.message : String(e) });
+        },
       );
       return c.json({ status: "rewriting", bookId: id, chapter: chapterNum, rolledBackTo: rollbackTarget, discarded });
     } catch (e) {
+      serverLog("error", "rewrite", `书籍 ${id} 重写失败: ${String(e)}`);
       broadcast("rewrite:error", { bookId: id, error: String(e) });
       return c.json({ error: String(e) }, 500);
     }

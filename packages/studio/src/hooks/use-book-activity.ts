@@ -1,7 +1,7 @@
 import type { SSEMessage } from "./use-sse";
 
-const START_EVENTS = new Set(["write:start", "draft:start"]);
-const TERMINAL_EVENTS = new Set(["write:complete", "write:error", "draft:complete", "draft:error"]);
+const START_EVENTS = new Set(["write:start", "draft:start", "rewrite:start"]);
+const TERMINAL_EVENTS = new Set(["write:complete", "write:error", "draft:complete", "draft:error", "rewrite:complete", "rewrite:error"]);
 const BOOK_REFRESH_EVENTS = new Set([
   "write:complete",
   "write:error",
@@ -83,6 +83,18 @@ export function deriveActiveBookIds(messages: ReadonlyArray<SSEMessage>): Readon
   const active = new Set<string>();
 
   for (const message of messages) {
+    // Handle operations:restore — server sends active operations on SSE connect
+    if (message.event === "operations:restore") {
+      const data = message.data as { operations?: Array<{ type?: string; bookId?: string }> } | null;
+      const ops = data?.operations ?? [];
+      for (const op of ops) {
+        if (op.bookId && (op.type === "write" || op.type === "rewrite" || op.type === "agent")) {
+          active.add(op.bookId);
+        }
+      }
+      continue;
+    }
+
     const bookId = getBookId(message);
     if (!bookId) continue;
 
@@ -105,6 +117,20 @@ export function deriveBookActivity(messages: ReadonlyArray<SSEMessage>, bookId: 
   let lastError: string | null = null;
 
   for (const message of messages) {
+    // Handle operations:restore — server sends active operations on SSE connect
+    if (message.event === "operations:restore") {
+      const data = message.data as { operations?: Array<{ type?: string; bookId?: string }> } | null;
+      const ops = data?.operations ?? [];
+      for (const op of ops) {
+        if (op.bookId !== bookId) continue;
+        if (op.type === "write" || op.type === "rewrite") {
+          writing = true;
+          lastError = null;
+        }
+      }
+      continue;
+    }
+
     if (getBookId(message) !== bookId) continue;
 
     const data = message.data as { error?: unknown } | null;
@@ -119,6 +145,18 @@ export function deriveBookActivity(messages: ReadonlyArray<SSEMessage>, bookId: 
         lastError = null;
         break;
       case "write:error":
+        writing = false;
+        lastError = typeof data?.error === "string" ? data.error : "Unknown error";
+        break;
+      case "rewrite:start":
+        writing = true;
+        lastError = null;
+        break;
+      case "rewrite:complete":
+        writing = false;
+        lastError = null;
+        break;
+      case "rewrite:error":
         writing = false;
         lastError = typeof data?.error === "string" ? data.error : "Unknown error";
         break;

@@ -561,11 +561,51 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
     if (!bookCreateSessionId) {
       setBookCreateSessionIdState(sessionId);
     }
-    return fetchJson<AgentResponse>("/agent", {
+
+    // Use SSE stream for agent request (prevents Cloudflare 524 timeout)
+    const response = await fetch("/api/v1/agent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(buildBookCreateAgentRequest(instruction, sessionId)),
     });
+
+    // Parse SSE stream to get result
+    let data: AgentResponse | null = null;
+    if (response.body) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith("event: result")) {
+            continue;
+          }
+          if (line.startsWith("data: ")) {
+            try {
+              const parsed = JSON.parse(line.slice(6));
+              if (parsed.status !== undefined) {
+                data = parsed;
+              }
+            } catch {
+              // Ignore parse errors for ping events
+            }
+          }
+        }
+      }
+    }
+
+    if (!data) {
+      throw new Error("未收到服务器响应");
+    }
+    return data;
   };
 
   const handleDraftSubmit = async () => {
