@@ -7,7 +7,7 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 WORKDIR /app
 
 # Copy workspace config first for dependency caching
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml .npmrc ./
 COPY packages/core/package.json packages/core/
 COPY packages/cli/package.json packages/cli/
 COPY packages/studio/package.json packages/studio/
