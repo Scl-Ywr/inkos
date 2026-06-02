@@ -85,6 +85,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [followingLatest, setFollowingLatest] = useState(true);
 
   const isZh = t("nav.connected") === "\u5DF2\u8FDE\u63A5";
   const hasBook = Boolean(activeBookId);
@@ -186,12 +187,32 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [input]);
 
-  // Auto-scroll on new messages
+  const isNearScrollBottom = (el: HTMLDivElement) => {
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 96;
+  };
+
+  const scrollToLatest = (behavior: ScrollBehavior = "auto") => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+  };
+
+  const handleMessageScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setFollowingLatest(isNearScrollBottom(el));
+  };
+
+  // Follow the latest message while the user remains near the bottom.
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-    }
-  }, [messages]);
+    if (!followingLatest) return;
+    requestAnimationFrame(() => scrollToLatest("auto"));
+  }, [followingLatest, messages]);
+
+  useEffect(() => {
+    setFollowingLatest(true);
+    requestAnimationFrame(() => scrollToLatest("auto"));
+  }, [activeSessionId]);
 
   // Entering a book loads its latest session; book-create mode persists its orphan session in localStorage.
   useEffect(() => {
@@ -281,6 +302,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
       {/* Message scroll area */}
       <div
         ref={scrollRef}
+        onScroll={handleMessageScroll}
         className="chat-message-scroll flex-1 overflow-y-auto [scrollbar-gutter:stable] px-3 sm:px-4 py-4 sm:py-6"
       >
         {messages.length === 0 && !loading ? (
@@ -387,6 +409,19 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
             )}
 
           </div>
+        )}
+        {!followingLatest && (
+          <button
+            type="button"
+            onClick={() => {
+              setFollowingLatest(true);
+              requestAnimationFrame(() => scrollToLatest("auto"));
+            }}
+            className="sticky bottom-4 left-1/2 z-20 mx-auto mt-4 flex w-max -translate-x-1/2 items-center gap-2 rounded-full border border-border/70 bg-card/95 px-3 py-2 text-xs font-medium text-foreground shadow-lg shadow-primary/10 backdrop-blur transition-all hover:border-primary/40 hover:text-primary"
+          >
+            <ChevronDown size={14} />
+            {isZh ? "追踪最新位置" : "Follow latest"}
+          </button>
         )}
       </div>
 

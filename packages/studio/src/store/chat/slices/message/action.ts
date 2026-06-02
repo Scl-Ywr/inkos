@@ -17,6 +17,23 @@ import {
   updateSession,
   upsertSessionSummary,
 } from "./runtime";
+import type { Message } from "../../types";
+
+function shouldUseRemoteMessages(
+  localMessages: ReadonlyArray<Message>,
+  remoteMessages: ReadonlyArray<Message>,
+): boolean {
+  if (remoteMessages.length === 0) return localMessages.length === 0;
+  if (localMessages.length === 0) return true;
+  if (remoteMessages.length > localMessages.length) return true;
+  if (remoteMessages.length < localMessages.length) return false;
+
+  const localLast = localMessages[localMessages.length - 1];
+  const remoteLast = remoteMessages[remoteMessages.length - 1];
+  if (!localLast || !remoteLast) return false;
+  if (remoteLast.role !== localLast.role) return false;
+  return remoteLast.content.length >= localLast.content.length;
+}
 
 export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions> = (set, get) => ({
   activateSession: (sessionId) =>
@@ -236,10 +253,8 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
 
   loadSessionDetail: async (sessionId) => {
     // 草稿会话：磁盘上还没有文件，直接跳过远端拉取。
-    // 本地已有消息：不拉取远端，避免流式中或未持久化的消息被覆盖。
     const existing = get().sessions[sessionId];
     if (existing?.isDraft) return;
-    if (existing && existing.messages.length > 0) return;
 
     try {
       const data = await fetchJson<SessionResponse>(`/sessions/${sessionId}`);
@@ -250,9 +265,12 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
 
       set((state) => {
         const runtime = state.sessions[detailSessionId];
-        // set 执行到这里可能已有本地消息写入（比如并发 sendMessage），再查一次。
-        if (runtime && runtime.messages.length > 0) return {};
         const nextBookId = detail.bookId ?? runtime?.bookId ?? null;
+        const nextMessages = runtime?.isStreaming
+          ? runtime.messages
+          : shouldUseRemoteMessages(runtime?.messages ?? [], messages)
+            ? messages
+            : runtime?.messages ?? messages;
         return {
           sessions: {
             ...state.sessions,
@@ -264,7 +282,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
               })),
               bookId: nextBookId,
               title: detail.title ?? runtime?.title ?? null,
-              messages,
+              messages: nextMessages,
             },
           },
           sessionIdsByBook: {
