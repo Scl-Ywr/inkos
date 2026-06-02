@@ -1,8 +1,11 @@
 #!/bin/sh
 set -e
 
-DATA_DIR="/data"
+DATA_DIR="${INKOS_PROJECT_ROOT:-/data}"
 TEMPLATE_DIR="/app/_templates"
+
+# Ensure data directory exists (may not exist without a mounted volume)
+mkdir -p "$DATA_DIR"
 
 # ─── First-run initialization: copy project scaffolding to persistent volume ───
 if [ ! -f "$DATA_DIR/inkos.json" ]; then
