@@ -2,7 +2,7 @@
 FROM node:22-slim AS builder
 
 # Install pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@9 --activate
 
 WORKDIR /app
 
@@ -13,7 +13,7 @@ COPY packages/cli/package.json packages/cli/
 COPY packages/studio/package.json packages/studio/
 
 # Install dependencies (cached layer)
-RUN pnpm install --no-frozen-lockfile --config.ignore-build-scripts=false
+RUN pnpm install --no-frozen-lockfile
 
 # Copy source code
 COPY tsconfig.json ./
