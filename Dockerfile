@@ -13,7 +13,7 @@ COPY packages/cli/package.json packages/cli/
 COPY packages/studio/package.json packages/studio/
 
 # Install dependencies (cached layer)
-RUN pnpm install --no-frozen-lockfile
+RUN pnpm install --no-frozen-lockfile --config.ignore-build-scripts=false
 
 # Copy source code
 COPY tsconfig.json ./
