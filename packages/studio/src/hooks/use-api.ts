@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import { localizeKnownRuntimeMessage } from "../lib/error-copy";
 
 const BASE = "/api/v1";
 const API_INVALIDATE_EVENT = "inkos:api-invalidate";
+const apiDataCache = new Map<string, unknown>();
 
 interface ApiInvalidateDetail {
   readonly paths: ReadonlyArray<string>;
@@ -117,8 +119,16 @@ export async function fetchJson<T>(
   return await res.json() as T;
 }
 
+function getCachedApiData<T>(path: string): T | null {
+  const url = buildApiUrl(path);
+  if (!url || !apiDataCache.has(url)) {
+    return null;
+  }
+  return apiDataCache.get(url) as T;
+}
+
 export function useApi<T>(path: string) {
-  const [data, setData] = useState<T | null>(null);
+  const [data, setData] = useState<T | null>(() => getCachedApiData<T>(path));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -135,12 +145,30 @@ export function useApi<T>(path: string) {
     setError(null);
     try {
       const json = await fetchJson<T>(url);
+      apiDataCache.set(url, json);
       setData(json);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
+  }, [path]);
+
+  const mutate = useCallback<Dispatch<SetStateAction<T | null>>>((value) => {
+    const url = buildApiUrl(path);
+    setData((current) => {
+      const next = typeof value === "function"
+        ? (value as (prev: T | null) => T | null)(current)
+        : value;
+      if (url) {
+        if (next === null) {
+          apiDataCache.delete(url);
+        } else {
+          apiDataCache.set(url, next);
+        }
+      }
+      return next;
+    });
   }, [path]);
 
   useEffect(() => {
@@ -165,7 +193,7 @@ export function useApi<T>(path: string) {
     };
   }, [path, refetch]);
 
-  return { data, loading, error, refetch, mutate: setData };
+  return { data, loading, error, refetch, mutate };
 }
 
 export async function postApi<T>(path: string, body?: unknown): Promise<T> {

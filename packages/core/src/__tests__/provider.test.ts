@@ -160,6 +160,22 @@ describe("chatCompletion via pi-ai", () => {
     expect(mockStreamSimple).toHaveBeenCalledOnce();
   });
 
+  it("uses stable pi-ai message timestamps so identical prompts can hit upstream cache", async () => {
+    mockStreamSimple.mockReturnValue(makeTextStream("ok"));
+
+    const client = makeClient();
+    await chatCompletion(client, "test-model", [
+      { role: "system", content: "Write concise prose." },
+      { role: "user", content: "ping" },
+      { role: "assistant", content: "pong" },
+    ]);
+
+    const context = mockStreamSimple.mock.calls[0]?.[1] as {
+      messages: Array<{ timestamp: number }>;
+    };
+    expect(context.messages.map((message) => message.timestamp)).toEqual([0, 0]);
+  });
+
   it("throws when stream produces no text content", async () => {
     mockStreamSimple.mockReturnValue(makeEmptyStream());
 
@@ -881,7 +897,7 @@ describe("createLLMClient with providers lookup", () => {
     expect(client.defaults.maxTokens).toBe(4096);
   });
 
-  it("未知 model 走 8192 * 3 的写作兜底预算", async () => {
+  it("未知 model 走 16384 的安全兜底预算", async () => {
     const { createLLMClient } = await import("../llm/provider.js");
     const { LLMConfigSchema } = await import("../models/project.js");
     const client = createLLMClient(LLMConfigSchema.parse({
@@ -891,8 +907,8 @@ describe("createLLMClient with providers lookup", () => {
       apiKey: "test",
       baseUrl: "https://middleman.example/v1",
     }));
-    expect(client.defaults.maxTokens).toBe(24_576);
-    expect(client._piModel?.maxTokens).toBe(24_576);
+    expect(client.defaults.maxTokens).toBe(16_384);
+    expect(client._piModel?.maxTokens).toBe(16_384);
   });
 
   it("config.maxTokens 命中 modelCard 后被覆盖（用户填 4000 还是用 modelCard 的 64000）", async () => {

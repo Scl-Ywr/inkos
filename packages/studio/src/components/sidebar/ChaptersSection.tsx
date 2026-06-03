@@ -3,6 +3,7 @@ import { fetchJson } from "../../hooks/use-api";
 import { useChatStore } from "../../store/chat";
 import { SidebarCard } from "./SidebarCard";
 import { cn } from "../../lib/utils";
+import { loadArtifactContent, prefetchArtifactContents } from "./artifact-content-cache";
 
 interface ChapterMeta {
   number: number;
@@ -10,6 +11,8 @@ interface ChapterMeta {
   status: string;
   wordCount: number;
 }
+
+const chaptersCache = new Map<string, ReadonlyArray<ChapterMeta>>();
 
 const STATUS_INDICATOR: Record<string, { symbol: string; color: string }> = {
   approved: { symbol: "✓", color: "text-emerald-500" },
@@ -25,13 +28,38 @@ interface ChaptersSectionProps {
 }
 
 export function ChaptersSection({ bookId, isZh }: ChaptersSectionProps) {
-  const [chapters, setChapters] = useState<ReadonlyArray<ChapterMeta>>([]);
+  const [chapters, setChapters] = useState<ReadonlyArray<ChapterMeta>>(
+    () => chaptersCache.get(bookId) ?? [],
+  );
   const bookDataVersion = useChatStore((s) => s.bookDataVersion);
 
   useEffect(() => {
+    let ignore = false;
+    const cached = chaptersCache.get(bookId);
+    if (cached) {
+      setChapters(cached);
+    }
+
     fetchJson<{ chapters: ChapterMeta[] }>(`/books/${bookId}`)
-      .then((data) => setChapters(data.chapters))
-      .catch(() => setChapters([]));
+      .then((data) => {
+        if (ignore) return;
+        const nextChapters = data.chapters ?? [];
+        chaptersCache.set(bookId, nextChapters);
+        setChapters(nextChapters);
+        prefetchArtifactContents(
+          bookId,
+          nextChapters.map((chapter) => ({ type: "chapter", chapter: chapter.number })),
+        );
+      })
+      .catch(() => {
+        if (!ignore && !chaptersCache.has(bookId)) {
+          setChapters([]);
+        }
+      });
+
+    return () => {
+      ignore = true;
+    };
   }, [bookId, bookDataVersion]);
 
   return (
@@ -48,6 +76,9 @@ export function ChaptersSection({ bookId, isZh }: ChaptersSectionProps) {
               <li
                 key={`${ch.number}-${ch.title ?? ""}`}
                 onClick={() => useChatStore.getState().openChapterArtifact(ch.number)}
+                onFocus={() => void loadArtifactContent(bookId, { type: "chapter", chapter: ch.number })}
+                onMouseEnter={() => void loadArtifactContent(bookId, { type: "chapter", chapter: ch.number })}
+                onPointerDown={() => void loadArtifactContent(bookId, { type: "chapter", chapter: ch.number })}
                 className="flex items-center gap-2 py-0.5 text-xs text-muted-foreground cursor-pointer hover:text-foreground transition-colors rounded px-1 -mx-1 hover:bg-secondary/50">
                 <span className={cn("text-[10px] shrink-0", ind.color)}>{ind.symbol}</span>
                 <span className="truncate flex-1">

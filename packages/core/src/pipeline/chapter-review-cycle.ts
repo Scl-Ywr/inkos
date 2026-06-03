@@ -49,6 +49,7 @@ export async function runChapterReviewCycle(params: {
   readonly reducedControlInput?: ChapterReviewCycleControlInput;
   readonly lengthSpec: LengthSpec;
   readonly initialUsage: ChapterReviewCycleUsage;
+  readonly skipAudit?: boolean;
   readonly createReviser: () => {
     reviseChapter: (
       bookDir: string,
@@ -109,6 +110,7 @@ export async function runChapterReviewCycle(params: {
   let normalizeApplied = false;
   let finalContent = params.initialOutput.content;
   let finalWordCount = params.initialOutput.wordCount;
+  const skipAudit = params.skipAudit ?? false;
 
   // Convert initial postWriteErrors into AuditIssues as fallback when runPostWriteChecks isn't provided.
   const initialPostWriteIssues: ReadonlyArray<AuditIssue> = params.initialOutput.postWriteErrors.map((violation) => ({
@@ -143,33 +145,66 @@ export async function runChapterReviewCycle(params: {
   params.assertChapterContentNotEmpty(finalContent, "draft generation");
 
   // ---------------------------------------------------------------------------
+  // Helper: build a deterministic-only audit result (skip LLM audit).
+  // ---------------------------------------------------------------------------
+  const buildDeterministicAudit = (
+    content: string,
+  ): { auditResult: AuditResult; score: number } => {
+    const aiTellsResult = params.analyzeAITells(content);
+    const sensitiveResult = params.analyzeSensitiveWords(content);
+    const hasBlockedWords = sensitiveResult.found.some((item) => item.severity === "block");
+    const postWriteIssues = params.runPostWriteChecks
+      ? params.runPostWriteChecks(content)
+      : initialPostWriteIssues;
+    const allIssues: AuditIssue[] = [
+      ...aiTellsResult.issues,
+      ...sensitiveResult.issues,
+      ...postWriteIssues,
+    ];
+    const hasPostWriteCritical = postWriteIssues.some((i) => i.severity === "critical");
+    const auditResult: AuditResult = {
+      passed: !(hasBlockedWords || hasPostWriteCritical),
+      issues: allIssues,
+      summary: "",
+      overallScore: hasBlockedWords || hasPostWriteCritical ? 0 : PASS_SCORE_THRESHOLD,
+    };
+    return { auditResult, score: auditResult.overallScore ?? 0 };
+  };
+
+  // ---------------------------------------------------------------------------
   // Helper: assess a chapter (audit + deterministic checks + length + score)
+  // All checks run in parallel for minimum wall-clock time.
   // ---------------------------------------------------------------------------
   const assess = async (
     content: string,
     options?: { temperature?: number },
   ): Promise<{ auditResult: AuditResult; score: number; lengthInRange: boolean }> => {
-    const llmAudit = await params.auditor.auditChapter(
-      params.bookDir,
-      content,
-      params.chapterNumber,
-      params.book.genre,
-      params.reducedControlInput
-        ? { ...params.reducedControlInput, ...(options ?? {}) }
-        : options,
-    );
-    totalUsage = params.addUsage(totalUsage, llmAudit.tokenUsage);
-    const aiTellsResult = params.analyzeAITells(content);
-    const sensitiveResult = params.analyzeSensitiveWords(content);
-    const hasBlockedWords = sensitiveResult.found.some((item) => item.severity === "block");
     const wordCount = countChapterLength(content, params.lengthSpec.countingMode);
     const lengthInRange = !isOutsideHardRange(wordCount, params.lengthSpec);
 
-    // Deterministic post-write checks: run every round, not just the first.
-    // If runPostWriteChecks is provided, use it; otherwise fall back to initial postWriteErrors.
-    const postWriteIssues = params.runPostWriteChecks
-      ? params.runPostWriteChecks(content)
-      : initialPostWriteIssues;
+    if (skipAudit) {
+      const { auditResult, score } = buildDeterministicAudit(content);
+      return { auditResult, score, lengthInRange };
+    }
+
+    const [llmAudit, aiTellsResult, sensitiveResult, postWriteIssues] = await Promise.all([
+      params.auditor.auditChapter(
+        params.bookDir,
+        content,
+        params.chapterNumber,
+        params.book.genre,
+        params.reducedControlInput
+          ? { ...params.reducedControlInput, ...(options ?? {}) }
+          : options,
+      ),
+      Promise.resolve(params.analyzeAITells(content)),
+      Promise.resolve(params.analyzeSensitiveWords(content)),
+      params.runPostWriteChecks
+        ? Promise.resolve(params.runPostWriteChecks(content))
+        : Promise.resolve(initialPostWriteIssues),
+    ]);
+    totalUsage = params.addUsage(totalUsage, llmAudit.tokenUsage);
+    const hasBlockedWords = sensitiveResult.found.some((item) => item.severity === "block");
 
     const allIssues: AuditIssue[] = [
       ...llmAudit.issues,

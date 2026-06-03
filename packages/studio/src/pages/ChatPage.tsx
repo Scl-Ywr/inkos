@@ -315,7 +315,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
             </p>
           </div>
         ) : (
-          <div className="mx-auto max-w-3xl space-y-3 sm:space-y-4">
+          <div className="mx-auto max-w-5xl space-y-3 sm:space-y-4">
             {messages.map((msg, i) => (
               <div key={`${msg.timestamp}-${i}`}>
                 {msg.role === "user" ? (
@@ -427,7 +427,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
 
       {/* Quick actions (only when a book is active) */}
       {hasBook && (
-        <div className="shrink-0 mx-auto w-full max-w-3xl px-2.5 sm:px-4">
+        <div className="shrink-0 mx-auto w-full max-w-5xl px-2.5 sm:px-4">
           <QuickActions
             onAction={handleQuickAction}
             disabled={loading || !activeSessionId}
@@ -438,7 +438,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
 
       {/* Input area */}
       <div className="shrink-0 border-t border-border/45 px-2.5 py-2 claude-topbar mobile-safe-bottom sm:px-4 sm:py-4">
-        <div className="mx-auto max-w-3xl">
+        <div className="mx-auto max-w-5xl">
             <div className="claude-composer rounded-[1.35rem] transition-all sm:rounded-2xl">
               <div className="flex items-end gap-2 px-3 py-2.5">
                 <textarea

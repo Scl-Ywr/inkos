@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AGENT_TOOLS, executeAgentTool } from "../pipeline/agent.js";
+import { AGENT_TOOLS, compactToolResultForAgent, executeAgentTool } from "../pipeline/agent.js";
 import { PipelineRunner, StateManager, type PipelineConfig } from "../index.js";
 import { PlannerAgent } from "../agents/planner.js";
 
@@ -122,6 +122,38 @@ describe("agent pipeline tools", () => {
     expect(toolNames).toContain("compose_chapter");
     expect(toolNames).toContain("update_author_intent");
     expect(toolNames).toContain("update_current_focus");
+  });
+
+  it("compacts truth-file tool results before feeding them back to the agent", () => {
+    const result = compactToolResultForAgent("read_truth_files", JSON.stringify({
+      currentState: "A".repeat(5000),
+      particleLedger: "B".repeat(5000),
+      pendingHooks: "C".repeat(5000),
+      storyBible: "D".repeat(5000),
+      volumeOutline: "E".repeat(5000),
+      bookRules: "F".repeat(5000),
+    }));
+    const parsed = JSON.parse(result);
+
+    expect(parsed._agentCompacted).toBe(true);
+    expect(parsed.currentState.length).toBeLessThan(5000);
+    expect(parsed.currentState).toContain("tool-result budget");
+    expect(parsed.pendingHooks).toContain("C");
+  });
+
+  it("keeps only recent chapter metadata in list_books agent context", () => {
+    const chapters = Array.from({ length: 8 }, (_, index) => ({
+      number: index + 1,
+      title: `Chapter ${index + 1}`,
+    }));
+    const result = compactToolResultForAgent("list_books", JSON.stringify([
+      { bookId: "b1", chapters },
+    ]));
+    const parsed = JSON.parse(result);
+
+    expect(parsed[0].chapters).toHaveLength(3);
+    expect(parsed[0].chapters[0].number).toBe(6);
+    expect(parsed[0].omittedOlderChaptersForAgent).toBe(5);
   });
 
   it("plans and composes chapters through the agent tool surface", async () => {

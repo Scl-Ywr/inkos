@@ -51,6 +51,7 @@ export class LengthNormalizerAgent extends BaseAgent {
       ],
       {
         temperature: 0.2,
+        maxTokens: 16_384,
       },
     );
 

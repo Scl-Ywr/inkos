@@ -1,4 +1,4 @@
-import { chatWithTools, type AgentMessage, type ToolDefinition } from "../llm/provider.js";
+import { chatWithTools, type AgentMessage, type ToolCall, type ToolDefinition } from "../llm/provider.js";
 import { PipelineRunner, type PipelineConfig } from "./runner.js";
 import { normalizePlatformOrOther, type Genre } from "../models/book.js";
 import { DEFAULT_REVISE_MODE, type ReviseMode } from "../agents/reviser.js";
@@ -219,6 +219,18 @@ const TOOLS: ReadonlyArray<ToolDefinition> = [
   },
 ];
 
+const READ_ONLY_AGENT_TOOLS = new Set([
+  "get_book_status",
+  "read_truth_files",
+  "list_books",
+  "web_fetch",
+]);
+
+const DEFAULT_AGENT_TOOL_RESULT_MAX_CHARS = 12_000;
+
+/** Hard cap on write_full_pipeline batch size to prevent unbounded token spend. */
+const MAX_PIPELINE_BATCH_SIZE = 5;
+
 export interface AgentLoopOptions {
   readonly onToolCall?: (name: string, args: Record<string, unknown>) => void;
   readonly onToolResult?: (name: string, result: string) => void;
@@ -310,7 +322,7 @@ export async function runAgentLoop(
   let lastAssistantMessage = "";
 
   for (let turn = 0; turn < maxTurns; turn++) {
-    const result = await chatWithTools(config.client, config.model, messages, TOOLS);
+    const result = await chatWithTools(config.client, config.model, messages, TOOLS, { maxTokens: 12_288 });
 
     // Push assistant message to history
     messages.push({
@@ -327,23 +339,164 @@ export async function runAgentLoop(
     // If no tool calls, we're done
     if (result.toolCalls.length === 0) break;
 
-    // Execute tool calls
-    for (const toolCall of result.toolCalls) {
-      let toolResult: string;
-      try {
-        const args = JSON.parse(toolCall.arguments) as Record<string, unknown>;
-        options?.onToolCall?.(toolCall.name, args);
-        toolResult = await executeTool(pipeline, state, config, toolCall.name, args);
-      } catch (e) {
-        toolResult = JSON.stringify({ error: String(e) });
-      }
+    const executedToolCalls = canExecuteToolCallsInParallel(result.toolCalls)
+      ? await Promise.all(result.toolCalls.map((toolCall) =>
+          executeToolCallForAgent(pipeline, state, config, toolCall, options),
+        ))
+      : await executeToolCallsSequentially(pipeline, state, config, result.toolCalls, options);
 
-      options?.onToolResult?.(toolCall.name, toolResult);
-      messages.push({ role: "tool" as const, toolCallId: toolCall.id, content: toolResult });
+    for (const executed of executedToolCalls) {
+      messages.push({
+        role: "tool" as const,
+        toolCallId: executed.toolCall.id,
+        content: executed.agentResult,
+      });
     }
   }
 
   return lastAssistantMessage;
+}
+
+interface ExecutedToolCall {
+  readonly toolCall: ToolCall;
+  readonly agentResult: string;
+}
+
+function canExecuteToolCallsInParallel(toolCalls: ReadonlyArray<ToolCall>): boolean {
+  return toolCalls.length > 1 && toolCalls.every((toolCall) => READ_ONLY_AGENT_TOOLS.has(toolCall.name));
+}
+
+async function executeToolCallsSequentially(
+  pipeline: PipelineRunner,
+  state: import("../state/manager.js").StateManager,
+  config: PipelineConfig,
+  toolCalls: ReadonlyArray<ToolCall>,
+  options?: AgentLoopOptions,
+): Promise<ExecutedToolCall[]> {
+  const executed: ExecutedToolCall[] = [];
+  for (const toolCall of toolCalls) {
+    executed.push(await executeToolCallForAgent(pipeline, state, config, toolCall, options));
+  }
+  return executed;
+}
+
+async function executeToolCallForAgent(
+  pipeline: PipelineRunner,
+  state: import("../state/manager.js").StateManager,
+  config: PipelineConfig,
+  toolCall: ToolCall,
+  options?: AgentLoopOptions,
+): Promise<ExecutedToolCall> {
+  let toolResult: string;
+  try {
+    const args = JSON.parse(toolCall.arguments) as Record<string, unknown>;
+    options?.onToolCall?.(toolCall.name, args);
+    toolResult = await executeTool(pipeline, state, config, toolCall.name, args);
+  } catch (e) {
+    toolResult = JSON.stringify({ error: String(e) });
+  }
+
+  options?.onToolResult?.(toolCall.name, toolResult);
+  return {
+    toolCall,
+    agentResult: compactToolResultForAgent(toolCall.name, toolResult),
+  };
+}
+
+export function compactToolResultForAgent(toolName: string, toolResult: string): string {
+  const parsed = parseJsonValue(toolResult);
+  if (toolName === "list_books" && Array.isArray(parsed)) {
+    return stringifyCompacted(parsed.map((book) => {
+      if (!isRecord(book) || !Array.isArray(book.chapters)) return book;
+      return {
+        ...book,
+        chapters: book.chapters.slice(-3),
+        omittedOlderChaptersForAgent: Math.max(0, book.chapters.length - 3),
+      };
+    }));
+  }
+
+  if (!isRecord(parsed)) {
+    return capTextForAgent(toolResult, toolName, DEFAULT_AGENT_TOOL_RESULT_MAX_CHARS);
+  }
+
+  if (toolName === "read_truth_files") {
+    return stringifyCompacted({
+      ...parsed,
+      currentState: capUnknownString(parsed.currentState, "currentState", 1_200),
+      particleLedger: capUnknownString(parsed.particleLedger, "particleLedger", 1_000),
+      pendingHooks: capUnknownString(parsed.pendingHooks, "pendingHooks", 1_500),
+      storyBible: capUnknownString(parsed.storyBible, "storyBible", 1_500),
+      volumeOutline: capUnknownString(parsed.volumeOutline, "volumeOutline", 1_500),
+      bookRules: capUnknownString(parsed.bookRules, "bookRules", 900),
+      _agentCompacted: true,
+    });
+  }
+
+  if (toolName === "get_book_status") {
+    const chapters = Array.isArray(parsed.chapters) ? parsed.chapters : undefined;
+    return stringifyCompacted({
+      ...parsed,
+      ...(chapters
+        ? {
+            chapters: chapters.slice(-5),
+            omittedOlderChaptersForAgent: Math.max(0, chapters.length - 5),
+          }
+        : {}),
+    });
+  }
+
+  if (toolName === "web_fetch") {
+    return stringifyCompacted({
+      ...parsed,
+      content: capUnknownString(parsed.content, "content", 6_000),
+      _agentCompacted: true,
+    });
+  }
+
+  return capTextForAgent(toolResult, toolName, DEFAULT_AGENT_TOOL_RESULT_MAX_CHARS);
+}
+
+function parseJsonValue(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function capUnknownString(value: unknown, label: string, maxChars: number): unknown {
+  return typeof value === "string" ? capTextForAgent(value, label, maxChars) : value;
+}
+
+function capTextForAgent(value: string, label: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  const marker = `\n[InkOS tool-result budget: omitted ${value.length - maxChars} chars from ${label}; kept head and latest tail.]\n`;
+  if (maxChars <= marker.length + 2) return value.slice(0, maxChars);
+  const keep = maxChars - marker.length;
+  const head = Math.max(1, Math.floor(keep * 0.45));
+  const tail = Math.max(1, keep - head);
+  return `${value.slice(0, head)}${marker}${value.slice(-tail)}`;
+}
+
+function stringifyCompacted(value: unknown): string {
+  const compacted = JSON.stringify(value);
+  if (compacted.length <= DEFAULT_AGENT_TOOL_RESULT_MAX_CHARS) {
+    return compacted;
+  }
+  return JSON.stringify({
+    _agentCompacted: true,
+    _agentCompactionReason: `tool result exceeded ${DEFAULT_AGENT_TOOL_RESULT_MAX_CHARS} chars after field-level compaction`,
+    preview: capTextForAgent(
+      compacted,
+      "tool-result-json",
+      DEFAULT_AGENT_TOOL_RESULT_MAX_CHARS - 320,
+    ),
+  });
 }
 
 export async function executeAgentTool(
@@ -494,13 +647,17 @@ export async function executeAgentTool(
       if (writeGuardError) {
         return JSON.stringify({ error: writeGuardError });
       }
-      const count = (args.count as number) ?? 1;
+      const rawCount = (args.count as number) ?? 1;
+      const count = Math.max(1, Math.min(Math.floor(rawCount), MAX_PIPELINE_BATCH_SIZE));
+      const countCappedNote = rawCount > MAX_PIPELINE_BATCH_SIZE
+        ? `count=${rawCount} capped to ${MAX_PIPELINE_BATCH_SIZE}`
+        : undefined;
       const results = [];
       for (let i = 0; i < count; i++) {
         const result = await pipeline.writeNextChapter(bookId);
         results.push(result);
       }
-      return JSON.stringify(results);
+      return JSON.stringify(countCappedNote ? { _note: countCappedNote, results } : results);
     }
 
     case "web_fetch": {

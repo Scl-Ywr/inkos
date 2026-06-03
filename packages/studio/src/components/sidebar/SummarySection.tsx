@@ -1,15 +1,9 @@
 import { useEffect } from "react";
-import { Streamdown } from "streamdown";
-import { cjk } from "@streamdown/cjk";
-import { code } from "@streamdown/code";
-import { math } from "@streamdown/math";
-import { mermaid } from "@streamdown/mermaid";
+import { LazyStreamdown } from "../ai-elements/lazy-streamdown";
 import { useChatStore } from "../../store/chat";
 import type { BookSummary } from "../../store/chat";
 import { fetchJson } from "../../hooks/use-api";
 import { SidebarCard } from "./SidebarCard";
-
-const streamdownPlugins = { cjk, code, math, mermaid };
 
 const SIDEBAR_MD_CLASS =
   "text-xs text-muted-foreground leading-relaxed " +
@@ -19,6 +13,8 @@ const SIDEBAR_MD_CLASS =
   "[&_h1]:hidden [&_h2]:text-xs [&_h2]:font-medium [&_h2]:text-foreground [&_h2]:mt-1.5 [&_h2]:mb-0.5 " +
   "[&_h3]:text-xs [&_h3]:font-medium [&_h3]:text-foreground [&_h3]:mt-1.5 [&_h3]:mb-0.5 " +
   "[&_code]:text-[11px] [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:bg-secondary/60";
+
+const bookSummaryCache = new Map<string, BookSummary | null>();
 
 function parseStoryBible(content: string): BookSummary {
   const sections = content.split(/^##\s+/m);
@@ -49,12 +45,25 @@ export function SummarySection({ bookId }: SummarySectionProps) {
   const bookDataVersion = useChatStore((s) => s.bookDataVersion);
 
   useEffect(() => {
-    setBookSummary(null);
+    let ignore = false;
+    if (bookSummaryCache.has(bookId)) {
+      setBookSummary(bookSummaryCache.get(bookId) ?? null);
+    } else {
+      setBookSummary(null);
+    }
+
     fetchJson<{ content: string | null }>(`/books/${bookId}/truth/story_bible.md`)
       .then((data) => {
-        if (data.content) setBookSummary(parseStoryBible(data.content));
+        if (ignore) return;
+        const nextSummary = data.content ? parseStoryBible(data.content) : null;
+        bookSummaryCache.set(bookId, nextSummary);
+        setBookSummary(nextSummary);
       })
       .catch(() => {});
+
+    return () => {
+      ignore = true;
+    };
   }, [bookId, bookDataVersion, setBookSummary]);
 
   if (!summary) return null;
@@ -63,23 +72,23 @@ export function SummarySection({ bookId }: SummarySectionProps) {
     <>
       {summary.world && (
         <SidebarCard title="世界观">
-          <Streamdown className={SIDEBAR_MD_CLASS} plugins={streamdownPlugins}>
+          <LazyStreamdown className={SIDEBAR_MD_CLASS}>
             {summary.world}
-          </Streamdown>
+          </LazyStreamdown>
         </SidebarCard>
       )}
       {(summary.protagonist || summary.cast) && (
         <SidebarCard title="角色">
           {summary.protagonist && (
-            <Streamdown className={SIDEBAR_MD_CLASS} plugins={streamdownPlugins}>
+            <LazyStreamdown className={SIDEBAR_MD_CLASS}>
               {summary.protagonist}
-            </Streamdown>
+            </LazyStreamdown>
           )}
           {summary.cast && (
             <div className={summary.protagonist ? "mt-2" : undefined}>
-              <Streamdown className={SIDEBAR_MD_CLASS} plugins={streamdownPlugins}>
+              <LazyStreamdown className={SIDEBAR_MD_CLASS}>
                 {summary.cast}
-              </Streamdown>
+              </LazyStreamdown>
             </div>
           )}
         </SidebarCard>

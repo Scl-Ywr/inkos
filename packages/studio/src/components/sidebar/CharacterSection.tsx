@@ -10,6 +10,8 @@ interface CharacterInfo {
   fields: Record<string, string>;
 }
 
+const charactersCache = new Map<string, ReadonlyArray<CharacterInfo>>();
+
 function parseCharacterMatrix(md: string): CharacterInfo[] {
   const characters: CharacterInfo[] = [];
   // Split by ## headings (level 2 only)
@@ -100,19 +102,37 @@ interface CharacterSectionProps {
 }
 
 export function CharacterSection({ bookId }: CharacterSectionProps) {
-  const [characters, setCharacters] = useState<CharacterInfo[]>([]);
+  const [characters, setCharacters] = useState<ReadonlyArray<CharacterInfo>>(
+    () => charactersCache.get(bookId) ?? [],
+  );
   const bookDataVersion = useChatStore((s) => s.bookDataVersion);
 
   useEffect(() => {
+    let ignore = false;
+    const cached = charactersCache.get(bookId);
+    if (cached) {
+      setCharacters(cached);
+    }
+
     fetchJson<{ content: string | null }>(`/books/${bookId}/truth/character_matrix.md`)
       .then((data) => {
+        if (ignore) return;
+        let nextCharacters: ReadonlyArray<CharacterInfo> = [];
         if (data.content) {
-          setCharacters(parseCharacterMatrix(data.content));
-        } else {
+          nextCharacters = parseCharacterMatrix(data.content);
+        }
+        charactersCache.set(bookId, nextCharacters);
+        setCharacters(nextCharacters);
+      })
+      .catch(() => {
+        if (!ignore && !charactersCache.has(bookId)) {
           setCharacters([]);
         }
-      })
-      .catch(() => setCharacters([]));
+      });
+
+    return () => {
+      ignore = true;
+    };
   }, [bookId, bookDataVersion]);
 
   if (characters.length === 0) return null;

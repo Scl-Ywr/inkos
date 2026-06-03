@@ -12,6 +12,13 @@ export interface FanficContext {
   readonly allowedDeviations: ReadonlyArray<string>;
 }
 
+const WRITER_SYSTEM_SECTION_BUDGET = {
+  genreBody: 8_000,
+  bookRulesBody: 6_000,
+  styleGuide: 8_000,
+  styleFingerprint: 2_000,
+} as const;
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -661,7 +668,7 @@ function buildGenreRules(gp: GenreProfile, genreBody: string): string {
     fatigueLine,
     pacingLine,
     chapterTypesLine,
-    genreBody,
+    capWriterSystemSection(genreBody, "genre profile", WRITER_SYSTEM_SECTION_BUDGET.genreBody),
   ].filter(Boolean).join("\n\n");
 }
 
@@ -705,7 +712,7 @@ function buildProtagonistRules(bookRules: BookRules | null): string {
 
 function buildBookRulesBody(body: string): string {
   if (!body) return "";
-  return `## 本书专属规则\n\n${body}`;
+  return `## 本书专属规则\n\n${capWriterSystemSection(body, "book rules", WRITER_SYSTEM_SECTION_BUDGET.bookRulesBody)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -714,7 +721,7 @@ function buildBookRulesBody(body: string): string {
 
 function buildStyleGuide(styleGuide: string): string {
   if (!styleGuide || styleGuide === "(文件尚未创建)") return "";
-  return `## 文风指南\n\n${styleGuide}`;
+  return `## 文风指南\n\n${capWriterSystemSection(styleGuide, "style guide", WRITER_SYSTEM_SECTION_BUDGET.styleGuide)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -727,7 +734,19 @@ function buildStyleFingerprint(fingerprint?: string): string {
 
 以下是从参考文本中提取的写作风格特征。你的输出必须尽量贴合这些特征：
 
-${fingerprint}`;
+${capWriterSystemSection(fingerprint, "style fingerprint", WRITER_SYSTEM_SECTION_BUDGET.styleFingerprint)}`;
+}
+
+function capWriterSystemSection(content: string, label: string, maxChars: number): string {
+  if (!content || content.length <= maxChars) return content;
+  const marker = `\n\n[InkOS prompt budget: omitted ${content.length - maxChars} chars from ${label}; kept beginning and latest tail.]\n\n`;
+  if (maxChars <= marker.length + 2) {
+    return content.slice(0, maxChars);
+  }
+  const keep = maxChars - marker.length;
+  const head = Math.max(1, Math.floor(keep * 0.55));
+  const tail = Math.max(1, keep - head);
+  return `${content.slice(0, head)}${marker}${content.slice(-tail)}`;
 }
 
 // ---------------------------------------------------------------------------

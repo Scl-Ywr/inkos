@@ -109,6 +109,36 @@ describe("buildWriterSystemPrompt", () => {
     expect(prompt).toContain("Keep the prose restrained");
   });
 
+  it("caps oversized style material in the writer system prompt", () => {
+    const oversizedStyleGuide = [
+      "STYLE-BEGIN",
+      "短句和克制叙述。".repeat(1600),
+      "STYLE-MIDDLE-MARKER",
+      "章尾保持余韵。".repeat(1600),
+      "STYLE-END",
+    ].join("\n");
+
+    const prompt = buildWriterSystemPrompt(
+      BOOK,
+      GENRE,
+      null,
+      "# Book Rules",
+      "# Genre Body",
+      oversizedStyleGuide,
+      undefined,
+      4,
+      "creative",
+      undefined,
+      "zh",
+      "governed",
+    );
+
+    expect(prompt).toContain("STYLE-BEGIN");
+    expect(prompt).toContain("STYLE-END");
+    expect(prompt).toContain("InkOS prompt budget");
+    expect(prompt).not.toContain("STYLE-MIDDLE-MARKER");
+  });
+
   it("injects the creative constitution and six pillars of immersion as prose (zh)", () => {
     const prompt = buildWriterSystemPrompt(
       BOOK,

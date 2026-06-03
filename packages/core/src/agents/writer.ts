@@ -3,8 +3,8 @@ import type { BookConfig } from "../models/book.js";
 import type { GenreProfile } from "../models/genre-profile.js";
 import type { BookRules } from "../models/book-rules.js";
 import { buildWriterSystemPrompt, type FanficContext } from "./writer-prompts.js";
+import { WRITING_MAX_OUTPUT_TOKENS } from "../llm/provider.js";
 import { buildSettlerSystemPrompt, buildSettlerUserPrompt } from "./settler-prompts.js";
-import { buildObserverSystemPrompt, buildObserverUserPrompt } from "./observer-prompts.js";
 import { parseSettlerDeltaOutput } from "./settler-delta-parser.js";
 import { parseSettlementOutput } from "./settler-parser.js";
 import { readGenreProfile, readBookRules } from "./rules-reader.js";
@@ -16,6 +16,7 @@ import {
   type PostWriteViolation,
 } from "./post-write-validator.js";
 import { analyzeAITells } from "./ai-tells.js";
+import type { FileCache } from "../utils/file-cache.js";
 import type { ChapterIntent, ChapterMemo, ContextPackage, RuleStack } from "../models/input-governance.js";
 import type { LengthSpec } from "../models/length-governance.js";
 import type { RuntimeStateDelta } from "../models/runtime-state.js";
@@ -83,6 +84,7 @@ export interface WriteChapterInput {
   readonly lengthSpec?: LengthSpec;
   readonly wordCountOverride?: number;
   readonly temperatureOverride?: number;
+  readonly fileCache?: FileCache;
 }
 
 export interface SettleChapterStateInput {
@@ -96,6 +98,7 @@ export interface SettleChapterStateInput {
   readonly contextPackage?: ContextPackage;
   readonly ruleStack?: RuleStack;
   readonly validationFeedback?: string;
+  readonly fileCache?: FileCache;
 }
 
 export interface TokenUsage {
@@ -149,42 +152,58 @@ export class WriterAgent extends BaseAgent {
     this.ctx.logger?.warn(this.localize(language, messages));
   }
 
+  private fileCache?: FileCache;
+
   async writeChapter(input: WriteChapterInput): Promise<WriteChapterOutput> {
     const { book, bookDir, chapterNumber } = input;
+    this.fileCache = input.fileCache;
 
     const placeholder = "(文件尚未创建)";
-    const [
-      storyBible, volumeOutline, styleGuide, currentState, ledger, hooks,
-      chapterSummaries, subplotBoard, emotionalArcs, characterMatrix, styleProfileRaw,
-      parentCanon, fanficCanonRaw,
-    ] = await Promise.all([
+    const cache = this.fileCache;
+    const truthFilesPromise = Promise.all([
         readStoryFrame(bookDir, placeholder),
         readVolumeMap(bookDir, placeholder),
-        this.readFileOrDefault(join(bookDir, "story/style_guide.md")),
+        this.readFileOrDefault(join(bookDir, "story/style_guide.md"), cache),
         // Phase 5 consolidation: architect no longer emits an initial current_state
         // section. When the file is only a seed placeholder, derive initial state
         // from roles/*.Current_State + pending_hooks startChapter=0 rows so the
         // writer still sees substantive content instead of a runtime-append note.
         readCurrentStateWithFallback(bookDir, placeholder),
-        this.readFileOrDefault(join(bookDir, "story/particle_ledger.md")),
-        this.readFileOrDefault(join(bookDir, "story/pending_hooks.md")),
-        this.readFileOrDefault(join(bookDir, "story/chapter_summaries.md")),
-        this.readFileOrDefault(join(bookDir, "story/subplot_board.md")),
-        this.readFileOrDefault(join(bookDir, "story/emotional_arcs.md")),
+        this.readFileOrDefault(join(bookDir, "story/particle_ledger.md"), cache),
+        this.readFileOrDefault(join(bookDir, "story/pending_hooks.md"), cache),
+        this.readFileOrDefault(join(bookDir, "story/chapter_summaries.md"), cache),
+        this.readFileOrDefault(join(bookDir, "story/subplot_board.md"), cache),
+        this.readFileOrDefault(join(bookDir, "story/emotional_arcs.md"), cache),
         readCharacterContext(bookDir, placeholder),
-        this.readFileOrDefault(join(bookDir, "story/style_profile.json")),
-        this.readFileOrDefault(join(bookDir, "story/parent_canon.md")),
-        this.readFileOrDefault(join(bookDir, "story/fanfic_canon.md")),
+        this.readFileOrDefault(join(bookDir, "story/style_profile.json"), cache),
+        this.readFileOrDefault(join(bookDir, "story/parent_canon.md"), cache),
+        this.readFileOrDefault(join(bookDir, "story/fanfic_canon.md"), cache),
       ]);
+    const recentChapterListPromise = this.loadRecentChapterList(bookDir, 5);
+    const genreProfilePromise = readGenreProfile(this.ctx.projectRoot, book.genre);
+    const bookRulesPromise = readBookRules(bookDir);
 
-    const recentChapters = await this.loadRecentChapters(bookDir, chapterNumber);
+    const [
+      [
+        storyBible, volumeOutline, styleGuide, currentState, ledger, hooks,
+        chapterSummaries, subplotBoard, emotionalArcs, characterMatrix, styleProfileRaw,
+        parentCanon, fanficCanonRaw,
+      ],
+      recentChapterList,
+      { profile: genreProfile, body: genreBody },
+      parsedBookRules,
+    ] = await Promise.all([
+      truthFilesPromise,
+      recentChapterListPromise,
+      genreProfilePromise,
+      bookRulesPromise,
+    ]);
+    const recentChapterPayload = recentChapterList as ReadonlyArray<string> | string;
+    const recentChapters = typeof recentChapterPayload === "string"
+      ? recentChapterPayload
+      : this.joinRecentChapterList(recentChapterPayload.slice(-1));
     // Load more chapters for dialogue fingerprint extraction (voice consistency over longer span)
-    const fingerprintChapters = await this.loadRecentChapters(bookDir, chapterNumber, 5);
-
-    // Load genre profile + book rules
-    const { profile: genreProfile, body: genreBody } =
-      await readGenreProfile(this.ctx.projectRoot, book.genre);
-    const parsedBookRules = await readBookRules(bookDir);
+    const fingerprintChapters = this.joinRecentChapterList(recentChapterPayload);
     const bookRules = parsedBookRules?.rules ?? null;
     const bookRulesBody = parsedBookRules?.body ?? "";
 
@@ -287,7 +306,7 @@ export class WriterAgent extends BaseAgent {
         { role: "system", content: creativeSystemPrompt },
         { role: "user", content: creativeUserPrompt },
       ],
-      { temperature: creativeTemperature },
+      { temperature: creativeTemperature, maxTokens: WRITING_MAX_OUTPUT_TOKENS },
     );
     const creativeUsage = creativeResponse.usage;
 
@@ -454,6 +473,8 @@ export class WriterAgent extends BaseAgent {
   }
 
   async settleChapterState(input: SettleChapterStateInput): Promise<WriteChapterOutput> {
+    this.fileCache = input.fileCache;
+    const cache = this.fileCache;
     const [
       currentState,
       ledger,
@@ -466,11 +487,11 @@ export class WriterAgent extends BaseAgent {
     ] = await Promise.all([
       // Phase 5 consolidation fallback: derive initial state when only seed on disk.
       readCurrentStateWithFallback(input.bookDir, "(文件尚未创建)"),
-      this.readFileOrDefault(join(input.bookDir, "story/particle_ledger.md")),
-      this.readFileOrDefault(join(input.bookDir, "story/pending_hooks.md")),
-      this.readFileOrDefault(join(input.bookDir, "story/chapter_summaries.md")),
-      this.readFileOrDefault(join(input.bookDir, "story/subplot_board.md")),
-      this.readFileOrDefault(join(input.bookDir, "story/emotional_arcs.md")),
+      this.readFileOrDefault(join(input.bookDir, "story/particle_ledger.md"), cache),
+      this.readFileOrDefault(join(input.bookDir, "story/pending_hooks.md"), cache),
+      this.readFileOrDefault(join(input.bookDir, "story/chapter_summaries.md"), cache),
+      this.readFileOrDefault(join(input.bookDir, "story/subplot_board.md"), cache),
+      this.readFileOrDefault(join(input.bookDir, "story/emotional_arcs.md"), cache),
       readCharacterContext(input.bookDir, "(文件尚未创建)"),
       readVolumeMap(input.bookDir, "(文件尚未创建)"),
     ]);
@@ -578,29 +599,9 @@ export class WriterAgent extends BaseAgent {
     };
     usage: TokenUsage;
   }> {
-    // Phase 2a: Observer — extract all facts from the chapter
+    // Phase 2: Settler — extract facts from chapter and update truth files
+    // (Observer extraction merged into Settler's enhanced analysis dimensions)
     const resolvedLang = params.book.language ?? params.genreProfile.language;
-    const observerSystem = buildObserverSystemPrompt(params.book, params.genreProfile, resolvedLang);
-    const observerUser = buildObserverUserPrompt(params.chapterNumber, params.title, params.content, resolvedLang);
-
-    this.logInfo(resolvedLang, {
-      zh: `阶段 2a：提取第${params.chapterNumber}章事实`,
-      en: `Phase 2a: observing facts for chapter ${params.chapterNumber}`,
-    });
-    const observerResponse = await this.chat(
-      [
-        { role: "system", content: observerSystem },
-        { role: "user", content: observerUser },
-      ],
-      { temperature: 0.5 },
-    );
-    const observations = observerResponse.content;
-
-    // Phase 2b: Reflector — merge observations into truth files
-    this.logInfo(resolvedLang, {
-      zh: "阶段 2b：把观察结果回写到真相文件",
-      en: "Phase 2b: reflecting observations into truth files",
-    });
     const settlerSystem = buildSettlerSystemPrompt(
       params.book, params.genreProfile, params.bookRules, resolvedLang,
     );
@@ -633,7 +634,6 @@ export class WriterAgent extends BaseAgent {
         LEGACY_WRITER_CONTEXT_BUDGET.characterMatrix,
       ),
       volumeOutline: this.capLegacyContext("volume_outline", params.volumeOutline, LEGACY_WRITER_CONTEXT_BUDGET.volumeOutline),
-      observations,
       selectedEvidenceBlock: params.selectedEvidenceBlock,
       governedControlBlock,
       validationFeedback: params.validationFeedback,
@@ -644,7 +644,7 @@ export class WriterAgent extends BaseAgent {
         { role: "system", content: settlerSystem },
         { role: "user", content: settlerUser },
       ],
-      { temperature: 0.3 },
+      { temperature: 0.3, maxTokens: WRITING_MAX_OUTPUT_TOKENS },
     );
 
     let mergedSettlement: ReturnType<typeof parseSettlementOutput> & {
@@ -1067,6 +1067,13 @@ ${overrides}\n`;
     currentChapter: number,
     count = 1,
   ): Promise<string> {
+    return this.joinRecentChapterList(await this.loadRecentChapterList(bookDir, count));
+  }
+
+  private async loadRecentChapterList(
+    bookDir: string,
+    count: number,
+  ): Promise<string[]> {
     const chaptersDir = join(bookDir, "chapters");
     try {
       const files = await readdir(chaptersDir);
@@ -1075,7 +1082,7 @@ ${overrides}\n`;
         .sort()
         .slice(-count);
 
-      if (mdFiles.length === 0) return "";
+      if (mdFiles.length === 0) return [];
 
       const contents = await Promise.all(
         mdFiles.map(async (f) => {
@@ -1084,16 +1091,28 @@ ${overrides}\n`;
         }),
       );
 
-      return contents.join("\n\n---\n\n");
+      return contents;
     } catch {
-      return "";
+      return [];
     }
   }
 
-  private async readFileOrDefault(path: string): Promise<string> {
+  private joinRecentChapterList(chapters: ReadonlyArray<string> | string): string {
+    if (typeof chapters === "string") return chapters;
+    return chapters.join("\n\n---\n\n");
+  }
+
+  private async readFileOrDefault(path: string, cache?: FileCache): Promise<string> {
+    if (cache) {
+      const cached = cache.get(path);
+      if (cached !== undefined) return cached ?? "(文件尚未创建)";
+    }
     try {
-      return await readFile(path, "utf-8");
+      const content = await readFile(path, "utf-8");
+      cache?.set(path, content);
+      return content;
     } catch {
+      cache?.set(path, null);
       return "(文件尚未创建)";
     }
   }

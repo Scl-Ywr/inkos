@@ -33,8 +33,11 @@ export interface StreamProgress {
 export type OnStreamProgress = (progress: StreamProgress) => void;
 
 const INKOS_USER_AGENT = "InkOS/1.3.5";
-const UNKNOWN_MODEL_FALLBACK_MAX_TOKENS = 8192 * 3;
+const UNKNOWN_MODEL_FALLBACK_MAX_TOKENS = 16_384;
+/** Dedicated max output tokens for creative writing agents (writer / settler). */
+export const WRITING_MAX_OUTPUT_TOKENS = 24_576;
 const TRANSIENT_LLM_RETRIES = 2;
+const STABLE_PI_CONTEXT_TIMESTAMP = 0;
 
 function isByteString(value: string): boolean {
   for (let i = 0; i < value.length; i++) {
@@ -1098,7 +1101,7 @@ function toPiContext(messages: ReadonlyArray<LLMMessage>): PiContext {
     .filter((m) => m.role !== "system")
     .map((m) => {
       if (m.role === "user") {
-        return { role: "user" as const, content: m.content, timestamp: Date.now() };
+        return { role: "user" as const, content: m.content, timestamp: STABLE_PI_CONTEXT_TIMESTAMP };
       }
       // assistant
       return {
@@ -1109,7 +1112,7 @@ function toPiContext(messages: ReadonlyArray<LLMMessage>): PiContext {
         model: "",
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
         stopReason: "stop" as const,
-        timestamp: Date.now(),
+        timestamp: STABLE_PI_CONTEXT_TIMESTAMP,
       };
     });
   return { systemPrompt, messages: piMessages };
@@ -1123,7 +1126,7 @@ function agentMessagesToPiContext(messages: ReadonlyArray<AgentMessage>): PiCont
   for (const msg of messages) {
     if (msg.role === "system") continue;
     if (msg.role === "user") {
-      piMessages.push({ role: "user", content: msg.content, timestamp: Date.now() });
+      piMessages.push({ role: "user", content: msg.content, timestamp: STABLE_PI_CONTEXT_TIMESTAMP });
       continue;
     }
     if (msg.role === "assistant") {
@@ -1148,7 +1151,7 @@ function agentMessagesToPiContext(messages: ReadonlyArray<AgentMessage>): PiCont
         model: "",
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
         stopReason: "stop",
-        timestamp: Date.now(),
+        timestamp: STABLE_PI_CONTEXT_TIMESTAMP,
       });
       continue;
     }
@@ -1159,7 +1162,7 @@ function agentMessagesToPiContext(messages: ReadonlyArray<AgentMessage>): PiCont
         toolName: "",
         content: [{ type: "text", text: msg.content }],
         isError: false,
-        timestamp: Date.now(),
+        timestamp: STABLE_PI_CONTEXT_TIMESTAMP,
       });
     }
   }

@@ -1,17 +1,22 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import type { Theme } from "../../hooks/use-theme";
 import type { TFunction } from "../../hooks/use-i18n";
 import type { SSEMessage } from "../../hooks/use-sse";
 import { useChatStore } from "../../store/chat";
 import { fetchJson } from "../../hooks/use-api";
 import { PanelRightClose, PanelRightOpen, ArrowLeft, Loader2, Pencil, Save, X } from "lucide-react";
-import { Streamdown } from "streamdown";
-import { cjk } from "@streamdown/cjk";
+import { LazyStreamdown } from "../ai-elements/lazy-streamdown";
 import { ProgressSection } from "../sidebar/ProgressSection";
 import { FoundationSection } from "../sidebar/FoundationSection";
 import { SummarySection } from "../sidebar/SummarySection";
 import { ChaptersSection } from "../sidebar/ChaptersSection";
 import { CharacterSection } from "../sidebar/CharacterSection";
+import {
+  getCachedArtifactContent,
+  loadArtifactContent,
+  setCachedArtifactContent,
+  type ArtifactContentTarget,
+} from "../sidebar/artifact-content-cache";
 
 export interface BookSidebarProps {
   readonly bookId: string;
@@ -31,8 +36,6 @@ const FOUNDATION_LABELS: Record<string, string> = {
   "character_matrix.md": "角色矩阵",
 };
 
-const streamdownPlugins = { cjk };
-
 function ArtifactView({ bookId }: { readonly bookId: string }) {
   const artifactFile = useChatStore((s) => s.artifactFile);
   const artifactChapter = useChatStore((s) => s.artifactChapter);
@@ -44,25 +47,46 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
   const [saving, setSaving] = useState(false);
 
   const isChapter = artifactChapter !== null;
+  const target = useMemo<ArtifactContentTarget | null>(
+    () => isChapter
+      ? { type: "chapter", chapter: artifactChapter }
+      : artifactFile ? { type: "truth", file: artifactFile } : null,
+    [artifactFile, artifactChapter, isChapter],
+  );
   const label = isChapter
     ? `第 ${artifactChapter} 章`
     : artifactFile ? FOUNDATION_LABELS[artifactFile] ?? artifactFile : "";
 
   useEffect(() => {
+    if (!target) return;
+    let ignore = false;
+    const cached = getCachedArtifactContent(bookId, target);
     setEditing(false);
-    setLoading(true);
-    if (isChapter) {
-      fetchJson<{ content: string }>(`/books/${bookId}/chapters/${artifactChapter}`)
-        .then((data) => setContent(data.content ?? ""))
-        .catch(() => setContent(null))
-        .finally(() => setLoading(false));
-    } else if (artifactFile) {
-      fetchJson<{ content: string | null }>(`/books/${bookId}/truth/${artifactFile}`)
-        .then((data) => setContent(data.content ?? ""))
-        .catch(() => setContent(null))
-        .finally(() => setLoading(false));
+
+    if (cached !== undefined) {
+      setContent(cached);
+      setLoading(false);
+    } else {
+      setContent(null);
+      setLoading(true);
     }
-  }, [bookId, artifactFile, artifactChapter, isChapter]);
+
+    loadArtifactContent(bookId, target)
+      .then((nextContent) => {
+        if (!ignore) {
+          setContent(nextContent);
+        }
+      })
+      .finally(() => {
+        if (!ignore) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [bookId, artifactFile, artifactChapter, target]);
 
   const handleEdit = useCallback(() => {
     setEditContent(content ?? "");
@@ -85,6 +109,9 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
           body: JSON.stringify({ content: editContent }),
         });
       }
+      if (target) {
+        setCachedArtifactContent(bookId, target, editContent);
+      }
       setContent(editContent);
       setEditing(false);
     } catch {
@@ -92,7 +119,7 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
     } finally {
       setSaving(false);
     }
-  }, [bookId, artifactFile, artifactChapter, isChapter, editContent]);
+  }, [bookId, artifactFile, artifactChapter, isChapter, editContent, target]);
 
   return (
     <div className="flex flex-col h-full">
@@ -145,7 +172,7 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
           />
         ) : (
           <div className="px-4 py-3 text-sm leading-7">
-            <Streamdown plugins={streamdownPlugins} mode="static">{content}</Streamdown>
+            <LazyStreamdown mode="static" pluginSet="cjk">{content}</LazyStreamdown>
           </div>
         )}
       </div>
@@ -266,31 +293,33 @@ export function BookSidebarToggle({ bookId, theme, t, sse }: BookSidebarProps) {
         <PanelRightOpen size={18} />
       </button>
 
-      {open && (
-        <div className="fixed inset-0 z-40 lg:hidden" onClick={() => setOpen(false)}>
-          <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" />
-          <aside
-            className="absolute right-0 top-0 h-full w-[min(28rem,calc(100vw-1rem))] overflow-y-auto border-l border-border/20 bg-background shadow-2xl shadow-primary/10"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-border/20 px-3 py-2.5 mobile-safe-top">
-              <span className="text-xs font-medium text-muted-foreground">书籍信息</span>
-              <button
-                onClick={() => setOpen(false)}
-                className="flex h-10 w-10 items-center justify-center rounded-xl text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
-                aria-label="关闭书籍信息"
-              >
-                <PanelRightClose size={16} />
-              </button>
-            </div>
-            {sidebarView === "artifact" ? (
-              <ArtifactView bookId={bookId} />
-            ) : (
-              <PanelView bookId={bookId} theme={theme} t={t} sse={sse} />
-            )}
-          </aside>
-        </div>
-      )}
+      <div
+        className={`fixed inset-0 z-40 lg:hidden transition-opacity duration-150 ${open ? "opacity-100" : "pointer-events-none opacity-0"}`}
+        aria-hidden={!open}
+        onClick={() => setOpen(false)}
+      >
+        <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" />
+        <aside
+          className={`absolute right-0 top-0 h-full w-[min(28rem,calc(100vw-1rem))] overflow-y-auto border-l border-border/20 bg-background shadow-2xl shadow-primary/10 transition-transform duration-150 ${open ? "translate-x-0" : "translate-x-full"}`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between border-b border-border/20 px-3 py-2.5 mobile-safe-top">
+            <span className="text-xs font-medium text-muted-foreground">书籍信息</span>
+            <button
+              onClick={() => setOpen(false)}
+              className="flex h-10 w-10 items-center justify-center rounded-xl text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+              aria-label="关闭书籍信息"
+            >
+              <PanelRightClose size={16} />
+            </button>
+          </div>
+          {sidebarView === "artifact" ? (
+            <ArtifactView bookId={bookId} />
+          ) : (
+            <PanelView bookId={bookId} theme={theme} t={t} sse={sse} />
+          )}
+        </aside>
+      </div>
     </>
   );
 }

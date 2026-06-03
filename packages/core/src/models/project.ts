@@ -91,6 +91,9 @@ export type FoundationConfig = z.infer<typeof FoundationConfigSchema>;
 
 export const WritingConfigSchema = z.object({
   reviewRetries: z.number().int().min(0).max(10).default(1),
+  draftMode: z.boolean().default(false),
+  skipAudit: z.boolean().default(false),
+  skipStateValidation: z.boolean().default(false),
 });
 
 export type WritingConfig = z.infer<typeof WritingConfigSchema>;
@@ -122,6 +125,9 @@ export const ProjectConfigSchema = z.object({
   }),
   writing: WritingConfigSchema.default({
     reviewRetries: 1,
+    draftMode: false,
+    skipAudit: false,
+    skipStateValidation: false,
   }),
   modelOverrides: z.record(z.string(), ModelOverrideValueSchema).optional(),
   inputGovernanceMode: InputGovernanceModeSchema.default("v2"),

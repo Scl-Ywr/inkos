@@ -142,13 +142,21 @@ export function buildPipelineConfig(
       }
     : undefined;
 
+  const writing = config.writing ?? { reviewRetries: 1 };
+  const draftMode = writing.draftMode ?? false;
+  const skipAudit = draftMode || (writing.skipAudit ?? false);
+  const skipStateValidation = draftMode || (writing.skipStateValidation ?? false);
+
   return {
     client: createLLMClient(config.llm),
     model: config.llm.model,
     projectRoot: root,
     defaultLLMConfig: config.llm,
     foundationReviewRetries: config.foundation.reviewRetries,
-    writingReviewRetries: config.writing?.reviewRetries ?? 1,
+    writingReviewRetries: writing.reviewRetries ?? 1,
+    draftMode,
+    skipAudit,
+    skipStateValidation,
     modelOverrides: config.modelOverrides,
     inputGovernanceMode: extra?.inputGovernanceMode ?? config.inputGovernanceMode,
     notifyChannels: extra?.notifyChannels ?? config.notify,

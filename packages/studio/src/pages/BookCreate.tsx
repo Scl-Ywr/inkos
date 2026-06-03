@@ -57,7 +57,7 @@ interface InteractionSessionResponse {
 
 interface AgentResponse {
   readonly response?: string;
-  readonly error?: string;
+  readonly error?: string | { readonly code?: string; readonly message?: string };
   readonly session?: {
     readonly sessionId?: string;
     readonly activeBookId?: string;
@@ -70,6 +70,31 @@ interface SessionResponse {
     readonly sessionId?: string;
     readonly bookId?: string | null;
   };
+}
+
+function parseAgentSseResult(text: string): AgentResponse | null {
+  const blocks = text.split(/\r?\n\r?\n/u);
+  for (const block of blocks) {
+    let eventName = "";
+    const dataLines: string[] = [];
+
+    for (const rawLine of block.split(/\r?\n/u)) {
+      const line = rawLine.trimEnd();
+      if (line.startsWith("event:")) {
+        eventName = line.slice("event:".length).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice("data:".length).trimStart());
+      }
+    }
+
+    if (eventName !== "result" || dataLines.length === 0) continue;
+    try {
+      return JSON.parse(dataLines.join("\n")) as AgentResponse;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 interface PlatformCopy {
@@ -563,16 +588,20 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
       setBookCreateSessionIdState(sessionId);
     }
 
-    // Use SSE stream for agent request (prevents Cloudflare 524 timeout)
     const response = await fetch("/api/v1/agent", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      },
       body: JSON.stringify(buildBookCreateAgentRequest(instruction, sessionId)),
     });
 
-    // Parse SSE stream to get result
     let data: AgentResponse | null = null;
-    if (response.body) {
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      data = await response.json() as AgentResponse;
+    } else if (response.body) {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
@@ -582,29 +611,13 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (line.startsWith("event: result")) {
-            continue;
-          }
-          if (line.startsWith("data: ")) {
-            try {
-              const parsed = JSON.parse(line.slice(6));
-              if (parsed.status !== undefined) {
-                data = parsed;
-              }
-            } catch {
-              // Ignore parse errors for ping events
-            }
-          }
-        }
       }
+      buffer += decoder.decode();
+      data = parseAgentSseResult(buffer);
     }
 
     if (!data) {
-      throw new Error("未收到服务器响应");
+      throw new Error(response.ok ? "未收到服务器响应" : `${response.status} ${response.statusText}`.trim());
     }
     return data;
   };

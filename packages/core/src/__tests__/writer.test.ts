@@ -249,10 +249,6 @@ describe("WriterAgent", () => {
         usage: ZERO_USAGE,
       })
       .mockResolvedValueOnce({
-        content: "=== OBSERVATIONS ===\n- observed",
-        usage: ZERO_USAGE,
-      })
-      .mockResolvedValueOnce({
         content: [
           "=== POST_SETTLEMENT ===",
           "| 伏笔变动 | mentor-oath 推进 | 同步更新伏笔池 |",
@@ -350,7 +346,7 @@ describe("WriterAgent", () => {
         lengthSpec: buildLengthSpec(220, "zh"),
       });
 
-      const settlePrompt = (chatSpy.mock.calls[2]?.[0] as ReadonlyArray<{ content: string }> | undefined)?.[1]?.content ?? "";
+      const settlePrompt = (chatSpy.mock.calls[1]?.[0] as ReadonlyArray<{ content: string }> | undefined)?.[1]?.content ?? "";
       expect(settlePrompt).toContain("## 本章控制输入");
       expect(settlePrompt).toContain("story/chapter_summaries.md#99");
       expect(settlePrompt).toContain("| 99 | Locked Gate |");
@@ -434,10 +430,6 @@ describe("WriterAgent", () => {
           "=== PRE_WRITE_CHECK ===",
           "- ok",
         ].join("\n"),
-        usage: ZERO_USAGE,
-      })
-      .mockResolvedValueOnce({
-        content: "=== OBSERVATIONS ===\n- observed",
         usage: ZERO_USAGE,
       })
       .mockResolvedValueOnce({
@@ -586,10 +578,6 @@ describe("WriterAgent", () => {
         usage: ZERO_USAGE,
       })
       .mockResolvedValueOnce({
-        content: "=== OBSERVATIONS ===\n- observed",
-        usage: ZERO_USAGE,
-      })
-      .mockResolvedValueOnce({
         content: [
           "=== POST_SETTLEMENT ===",
           "- mentor-debt advanced",
@@ -735,10 +723,6 @@ describe("WriterAgent", () => {
         usage: ZERO_USAGE,
       })
       .mockResolvedValueOnce({
-        content: "=== OBSERVATIONS ===\n- observed",
-        usage: ZERO_USAGE,
-      })
-      .mockResolvedValueOnce({
         content: [
           "=== POST_SETTLEMENT ===",
           "- source scope widens",
@@ -861,10 +845,6 @@ describe("WriterAgent", () => {
         usage: ZERO_USAGE,
       })
       .mockResolvedValueOnce({
-        content: "=== OBSERVATIONS ===\n- observed",
-        usage: ZERO_USAGE,
-      })
-      .mockResolvedValueOnce({
         content: [
           "=== POST_SETTLEMENT ===",
           "| 伏笔变动 | mentor-oath 推进 | 同步更新伏笔池 |",
@@ -912,8 +892,6 @@ describe("WriterAgent", () => {
       expect(infos).toEqual(expect.arrayContaining([
         "阶段 1：创作正文（第1章）",
         "阶段 2：状态结算（第1章，18字）",
-        "阶段 2a：提取第1章事实",
-        "阶段 2b：把观察结果回写到真相文件",
       ]));
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -978,10 +956,6 @@ describe("WriterAgent", () => {
           "=== PRE_WRITE_CHECK ===",
           "- ok",
         ].join("\n"),
-        usage: ZERO_USAGE,
-      })
-      .mockResolvedValueOnce({
-        content: "=== OBSERVATIONS ===\n- observed",
         usage: ZERO_USAGE,
       })
       .mockResolvedValueOnce({
@@ -1108,10 +1082,6 @@ describe("WriterAgent", () => {
           "=== PRE_WRITE_CHECK ===",
           "- ok",
         ].join("\n"),
-        usage: ZERO_USAGE,
-      })
-      .mockResolvedValueOnce({
-        content: "=== OBSERVATIONS ===\n- observed",
         usage: ZERO_USAGE,
       })
       .mockResolvedValueOnce({
@@ -1257,10 +1227,6 @@ describe("WriterAgent", () => {
           "=== PRE_WRITE_CHECK ===",
           "- ok",
         ].join("\n"),
-        usage: ZERO_USAGE,
-      })
-      .mockResolvedValueOnce({
-        content: "=== OBSERVATIONS ===\n- observed",
         usage: ZERO_USAGE,
       })
       .mockResolvedValueOnce({

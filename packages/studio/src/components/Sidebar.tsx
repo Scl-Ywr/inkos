@@ -63,12 +63,13 @@ interface Nav {
   toDoctor: () => void;
 }
 
-export function Sidebar({ nav, activePage, sse, t, onClose }: {
+export function Sidebar({ nav, activePage, sse, t, onClose, mobileOpen }: {
   nav: Nav;
   activePage: string;
   sse: { messages: ReadonlyArray<SSEMessage> };
   t: TFunction;
   onClose?: () => void;
+  mobileOpen?: boolean;
 }) {
   const { data, refetch: refetchBooks, mutate: mutateBooks } = useApi<{ books: ReadonlyArray<BookSummary> }>("/books");
   const { data: daemon, refetch: refetchDaemon } = useApi<{ running: boolean }>("/daemon");
@@ -608,10 +609,14 @@ export function Sidebar({ nav, activePage, sse, t, onClose }: {
 
   // Mobile overlay mode: wrap sidebar in a backdrop
   if (onClose) {
+    const isMobileOpen = mobileOpen ?? true;
     return (
-      <div className="fixed inset-0 z-50 md:hidden">
+      <div
+        className={`fixed inset-0 z-50 md:hidden transition-opacity duration-150 ${isMobileOpen ? "opacity-100" : "pointer-events-none opacity-0"}`}
+        aria-hidden={!isMobileOpen}
+      >
         <div className="absolute inset-0 bg-black/30 backdrop-blur-sm mobile-sidebar-backdrop" onClick={onClose} />
-        <div className="absolute inset-y-0 left-0 mobile-sidebar-drawer">
+        <div className={`absolute inset-y-0 left-0 mobile-sidebar-drawer transition-transform duration-150 ${isMobileOpen ? "translate-x-0" : "-translate-x-full"}`}>
           {sidebarContent}
         </div>
       </div>

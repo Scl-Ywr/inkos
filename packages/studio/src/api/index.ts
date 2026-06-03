@@ -13,8 +13,9 @@ const port = parseInt(process.env.INKOS_STUDIO_PORT ?? "4567", 10);
 const studioRoot = resolve(__dirname, "../..");
 const distDir = join(studioRoot, "dist");
 
-// Auto-build frontend if dist/ doesn't exist
-if (!existsSync(join(distDir, "index.html"))) {
+// Auto-build frontend if dist/ doesn't exist (skip in dev mode — Vite dev server handles frontend)
+const isDev = !!process.env.INKOS_DEV;
+if (!isDev && !existsSync(join(distDir, "index.html"))) {
   console.log("Building frontend...");
   try {
     execSync("npx vite build", { cwd: studioRoot, stdio: "inherit" });

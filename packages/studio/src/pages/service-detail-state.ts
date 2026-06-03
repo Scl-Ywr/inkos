@@ -166,7 +166,7 @@ export async function saveServiceConfig(args: {
         apiKey: trimmedKey,
         apiFormat: args.apiFormat,
         stream: args.stream,
-        model: args.detectedModel,
+        ...(args.detectedModel ? { model: args.detectedModel } : {}),
         ...(args.isCustom ? { baseUrl: trimmedBaseUrl } : {}),
       }, { fetchJsonImpl });
     } catch (error) {

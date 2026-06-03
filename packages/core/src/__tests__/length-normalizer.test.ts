@@ -130,7 +130,7 @@ describe("LengthNormalizerAgent", () => {
     expect(result.warning).toContain("outside");
   });
 
-  it("does not override provider output budget for large compression outputs", async () => {
+  it("sets explicit maxTokens=16384 to guard against unknown-model fallback", async () => {
     const agent = createAgent();
     const chatSpy = vi.spyOn(BaseAgent.prototype as never, "chat").mockResolvedValue({
       content: "压缩后的完整正文。".repeat(200),
@@ -152,7 +152,7 @@ describe("LengthNormalizerAgent", () => {
     });
 
     const options = chatSpy.mock.calls[0]?.[1] as { maxTokens?: number } | undefined;
-    expect(options?.maxTokens).toBeUndefined();
+    expect(options?.maxTokens).toBe(16_384);
   });
 
   it("falls back to the original chapter when normalized output is truncated mid-sentence", async () => {

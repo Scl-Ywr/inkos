@@ -20,6 +20,7 @@ import type { RadarSource } from "../agents/radar-source.js";
 import { readGenreProfile } from "../agents/rules-reader.js";
 import { analyzeAITells } from "../agents/ai-tells.js";
 import { analyzeSensitiveWords } from "../agents/sensitive-words.js";
+import type { PostWriteViolation } from "../agents/post-write-validator.js";
 import { StateManager } from "../state/manager.js";
 import { MemoryDB, type Fact } from "../state/memory-db.js";
 import { dispatchNotification, dispatchWebhookEvent } from "../notify/dispatcher.js";
@@ -51,6 +52,7 @@ import { persistChapterArtifacts } from "./chapter-persistence.js";
 import { runChapterReviewCycle } from "./chapter-review-cycle.js";
 import { validateChapterTruthPersistence } from "./chapter-truth-validation.js";
 import { loadPersistedPlan, relativeToBookDir, savePersistedPlan } from "./persisted-governed-plan.js";
+import { FileCache } from "../utils/file-cache.js";
 
 const SEQUENCE_LEVEL_CATEGORIES = new Set([
   "Pacing Monotony", "节奏单调",
@@ -225,6 +227,9 @@ export interface PipelineConfig {
   readonly defaultLLMConfig?: LLMConfig;
   readonly foundationReviewRetries?: number;
   readonly writingReviewRetries?: number;
+  readonly draftMode?: boolean;
+  readonly skipAudit?: boolean;
+  readonly skipStateValidation?: boolean;
   readonly notifyChannels?: ReadonlyArray<NotifyChannel>;
   readonly radarSources?: ReadonlyArray<RadarSource>;
   readonly externalContext?: string;
@@ -934,6 +939,7 @@ export class PipelineRunner {
         book,
         bookDir,
         chapterNumber,
+        fileCache: new FileCache(),
         ...writeInput,
         lengthSpec,
         ...(wordCount ? { wordCountOverride: wordCount } : {}),
@@ -1545,6 +1551,10 @@ export class PipelineRunner {
     const { readBookRules } = await import("../agents/rules-reader.js");
     const parsedBookRules = (await readBookRules(bookDir))?.rules ?? null;
 
+    // Per-chapter file cache to eliminate redundant truth file reads
+    // across composer, writer, and validator.
+    const fileCache = new FileCache();
+
     // 1. Write chapter
     const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
     this.logStage(stageLanguage, { zh: "撰写章节草稿", en: "writing chapter draft" });
@@ -1552,12 +1562,41 @@ export class PipelineRunner {
       book,
       bookDir,
       chapterNumber,
+      fileCache,
       ...writeInput,
       lengthSpec,
       ...(wordCount ? { wordCountOverride: wordCount } : {}),
       ...(temperatureOverride ? { temperatureOverride } : {}),
     });
     const writerCount = countChapterLength(output.content, lengthSpec.countingMode);
+
+    // 1b. Front-loaded length check: normalize BEFORE review cycle to avoid
+    // wasting settle + validation work on out-of-range content.
+    let preReviewContent = output.content;
+    let preReviewWordCount = writerCount;
+    let preReviewNormalized = false;
+    const postNormalizeSurface = normalizePostWriteSurface;
+    {
+      const rawCount = countChapterLength(preReviewContent, lengthSpec.countingMode);
+      if (isOutsideHardRange(rawCount, lengthSpec)) {
+        this.logStage(stageLanguage, {
+          zh: `审计前字数归一化：第${chapterNumber}章 ${rawCount} 字`,
+          en: `Length normalization before audit for chapter ${chapterNumber}: ${rawCount} words`,
+        });
+        const normalized = await this.normalizeDraftLengthIfNeeded({
+          bookId,
+          chapterNumber,
+          chapterContent: preReviewContent,
+          lengthSpec,
+          chapterIntent: writeInput.chapterIntent,
+        });
+        if (normalized.applied) {
+          preReviewContent = postNormalizeSurface(normalized.content, pipelineLang);
+          preReviewWordCount = countChapterLength(preReviewContent, lengthSpec.countingMode);
+          preReviewNormalized = true;
+        }
+      }
+    }
 
     // Token usage accumulator
     let totalUsage: TokenUsageSummary = output.tokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
@@ -1566,10 +1605,13 @@ export class PipelineRunner {
       book: { genre: book.genre },
       bookDir,
       chapterNumber,
-      initialOutput: output,
+      initialOutput: preReviewNormalized
+        ? { ...output, content: preReviewContent, wordCount: preReviewWordCount }
+        : output,
       reducedControlInput,
       lengthSpec,
       initialUsage: totalUsage,
+      skipAudit: this.config.skipAudit ?? false,
       createReviser: () => new ReviserAgent(this.agentCtxFor("reviser", bookId)),
       auditor,
       normalizeDraftLengthIfNeeded: (chapterContent) => this.normalizeDraftLengthIfNeeded({
@@ -1612,13 +1654,13 @@ export class PipelineRunner {
     let revised = reviewResult.revised;
     let auditResult = reviewResult.auditResult;
     const postReviseCount = reviewResult.postReviseCount;
-    const normalizeApplied = reviewResult.normalizeApplied;
+    const normalizeApplied = reviewResult.normalizeApplied || preReviewNormalized;
 
     // 3b. Lightweight per-chapter promotion pass — check if any hooks should
     // be promoted based on advanced_count derived from chapter_summaries.
     // Runs BEFORE persistence so the reviewer of the NEXT chapter sees the
     // updated ledger. No LLM calls — pure ledger parse + threshold check.
-    {
+    const hookPromotionPromise = (async () => {
       const { rerunPromotionPass } = await import("../utils/hook-promotion.js");
       const { parsePendingHooksMarkdown, renderHookSnapshot } = await import("../utils/story-markdown.js");
       const promotionStoryDir = join(bookDir, "story");
@@ -1636,7 +1678,7 @@ export class PipelineRunner {
           }
         }
       }
-    }
+    })();
 
     // 4. Save the final chapter and truth files from a single persistence source
     this.logStage(stageLanguage, { zh: "落盘最终章节", en: "persisting final chapter" });
@@ -1722,83 +1764,86 @@ export class PipelineRunner {
     });
     this.logLengthWarnings(lengthWarnings);
 
-    // 4.1 Validate settler output before writing
-    this.logStage(stageLanguage, { zh: "校验真相文件变更", en: "validating truth file updates" });
-    const storyDir = join(bookDir, "story");
-    const [oldState, oldHooks, oldLedger, authorityStoryFrame, authorityBookRules, authorityChapterSummaries] = await Promise.all([
-      readFile(join(storyDir, "current_state.md"), "utf-8").catch(() => ""),
-      readFile(join(storyDir, "pending_hooks.md"), "utf-8").catch(() => ""),
-      readFile(join(storyDir, "particle_ledger.md"), "utf-8").catch(() => ""),
-      readStoryFrame(bookDir).catch(() => ""),
-      readFile(join(storyDir, "book_rules.md"), "utf-8").catch(() => ""),
-      readFile(join(storyDir, "chapter_summaries.md"), "utf-8").catch(() => ""),
-    ]);
-    const validator = new StateValidatorAgent(this.agentCtxFor("state-validator", bookId));
-    const truthValidation = await validateChapterTruthPersistence({
-      writer,
-      validator,
-      book,
-      bookDir,
-      chapterNumber,
-      title: persistenceOutput.title,
-      content: finalContent,
-      persistenceOutput,
-      auditResult,
-      previousTruth: {
-        oldState,
-        oldHooks,
-        oldLedger,
-      },
-      authorityContext: {
-        storyFrame: authorityStoryFrame,
-        bookRules: authorityBookRules,
-        chapterSummaries: authorityChapterSummaries,
-      },
-      reducedControlInput,
-      language: pipelineLang,
-      logWarn: (message) => this.logWarn(pipelineLang, message),
-      logger: this.config.logger,
-    });
+    // 4.1 Validate settler output before writing (parallel with paragraph shape check)
+    const skipStateValidation = this.config.skipStateValidation ?? false;
+    const paragraphShapePromise = this.runParagraphShapeCheck(bookDir, finalContent, pipelineLang)
+      .then((paragraphIssues) => ({ paragraphIssues }));
+
+    let truthValidation: Awaited<ReturnType<typeof validateChapterTruthPersistence>>;
+    if (skipStateValidation) {
+      this.logStage(stageLanguage, { zh: "跳过真相文件校验（草稿模式）", en: "skipping truth file validation (draft mode)" });
+      truthValidation = {
+        validation: { passed: true, warnings: [] },
+        chapterStatus: null,
+        degradedIssues: [],
+        persistenceOutput,
+        auditResult,
+      };
+    } else {
+      this.logStage(stageLanguage, { zh: "校验真相文件变更", en: "validating truth file updates" });
+      const storyDir = join(bookDir, "story");
+      const [oldState, oldHooks, oldLedger, authorityStoryFrame, authorityBookRules, authorityChapterSummaries] = await Promise.all([
+        readFile(join(storyDir, "current_state.md"), "utf-8").catch(() => ""),
+        readFile(join(storyDir, "pending_hooks.md"), "utf-8").catch(() => ""),
+        readFile(join(storyDir, "particle_ledger.md"), "utf-8").catch(() => ""),
+        readStoryFrame(bookDir).catch(() => ""),
+        readFile(join(storyDir, "book_rules.md"), "utf-8").catch(() => ""),
+        readFile(join(storyDir, "chapter_summaries.md"), "utf-8").catch(() => ""),
+      ]);
+      const validator = new StateValidatorAgent(this.agentCtxFor("state-validator", bookId));
+      truthValidation = await validateChapterTruthPersistence({
+        writer,
+        validator,
+        book,
+        bookDir,
+        chapterNumber,
+        title: persistenceOutput.title,
+        content: finalContent,
+        persistenceOutput,
+        auditResult,
+        previousTruth: {
+          oldState,
+          oldHooks,
+          oldLedger,
+        },
+        authorityContext: {
+          storyFrame: authorityStoryFrame,
+          bookRules: authorityBookRules,
+          chapterSummaries: authorityChapterSummaries,
+        },
+        reducedControlInput,
+        language: pipelineLang,
+        logWarn: (message) => this.logWarn(pipelineLang, message),
+        logger: this.config.logger,
+      });
+    }
     let chapterStatus: ChapterPipelineResult["status"] | null = truthValidation.chapterStatus;
     let degradedIssues: ReadonlyArray<AuditIssue> = truthValidation.degradedIssues;
     persistenceOutput = truthValidation.persistenceOutput;
     auditResult = truthValidation.auditResult;
 
-    // 4.2 Final paragraph shape check on persisted content (post-normalize, post-revise)
-    {
-      const {
-        detectParagraphLengthDrift,
-        detectParagraphShapeWarnings,
-      } = await import("../agents/post-write-validator.js");
-      const chapDir = join(bookDir, "chapters");
-      const recentFiles = (await readdir(chapDir).catch(() => [] as string[]))
-        .filter((f) => f.endsWith(".md") && /^\d{4}/.test(f))
-        .sort()
-        .slice(-5);
-      const recentContent = (await Promise.all(
-        recentFiles.map((f) => readFile(join(chapDir, f), "utf-8").catch(() => "")),
-      )).join("\n\n");
-      const paragraphIssues = [
-        ...detectParagraphShapeWarnings(finalContent, pipelineLang),
-        ...detectParagraphLengthDrift(finalContent, recentContent, pipelineLang),
-      ];
-      if (paragraphIssues.length > 0) {
-        for (const issue of paragraphIssues) {
-          this.config.logger?.warn(`[paragraph] ${issue.description}`);
-        }
-        auditResult = {
-          ...auditResult,
-          issues: [...auditResult.issues, ...paragraphIssues.map((v) => ({
-            severity: v.severity as "warning",
-            category: "paragraph-shape",
-            description: v.description,
-            suggestion: v.suggestion,
-          }))],
-        };
+    // Collect paragraph shape results (already running in parallel with validation)
+    const { paragraphIssues } = await paragraphShapePromise;
+    if (paragraphIssues.length > 0) {
+      for (const issue of paragraphIssues) {
+        this.config.logger?.warn(`[paragraph] ${issue.description}`);
       }
+      auditResult = {
+        ...auditResult,
+        issues: [...auditResult.issues, ...paragraphIssues.map((v) => ({
+          severity: v.severity as "warning",
+          category: "paragraph-shape",
+          description: v.description,
+          suggestion: v.suggestion,
+        }))],
+      };
     }
 
     const resolvedStatus = chapterStatus ?? (auditResult.passed ? "ready-for-review" : "audit-failed");
+
+    // Ensure hook promotion completes before persisting
+    await hookPromotionPromise;
+
     await persistChapterArtifacts({
       chapterNumber,
       chapterTitle: persistenceOutput.title,
@@ -3422,6 +3467,30 @@ ${matrix}`,
       timestamp: new Date().toISOString(),
       data,
     });
+  }
+
+  /** Run deterministic paragraph shape checks. Launched in parallel with state validation. */
+  private async runParagraphShapeCheck(
+    bookDir: string,
+    content: string,
+    language: LengthLanguage,
+  ): Promise<ReadonlyArray<PostWriteViolation>> {
+    const {
+      detectParagraphLengthDrift,
+      detectParagraphShapeWarnings,
+    } = await import("../agents/post-write-validator.js");
+    const chapDir = join(bookDir, "chapters");
+    const recentFiles = (await readdir(chapDir).catch(() => [] as string[]))
+      .filter((f) => f.endsWith(".md") && /^\d{4}/.test(f))
+      .sort()
+      .slice(-5);
+    const recentContent = (await Promise.all(
+      recentFiles.map((f) => readFile(join(chapDir, f), "utf-8").catch(() => "")),
+    )).join("\n\n");
+    return [
+      ...detectParagraphShapeWarnings(content, language),
+      ...detectParagraphLengthDrift(content, recentContent, language),
+    ];
   }
 
   private async readChapterContent(bookDir: string, chapterNumber: number): Promise<string> {

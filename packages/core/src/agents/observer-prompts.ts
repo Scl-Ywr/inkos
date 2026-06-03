@@ -5,6 +5,10 @@ import type { GenreProfile } from "../models/genre-profile.js";
  * Observer phase: extract ALL facts from the chapter.
  * Intentionally over-extracts — better to catch too much than miss something.
  * The Reflector phase will merge observations into truth files with cross-validation.
+ *
+ * @deprecated Observer role has been merged into the Settler prompt (settler-prompts.ts).
+ * The Settler's enhanced "分析维度" section now covers all extraction categories that
+ * the Observer previously handled. Kept for backward compatibility only.
  */
 export function buildObserverSystemPrompt(
   book: BookConfig,

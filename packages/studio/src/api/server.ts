@@ -579,6 +579,36 @@ interface ServiceProbeResult {
   error?: string;
 }
 
+interface AgentResultEnvelope extends Record<string, unknown> {
+  status?: number;
+}
+
+function parseSseResultEnvelope(text: string): AgentResultEnvelope | null {
+  const blocks = text.split(/\r?\n\r?\n/u);
+  for (const block of blocks) {
+    let eventName = "";
+    const dataLines: string[] = [];
+
+    for (const rawLine of block.split(/\r?\n/u)) {
+      const line = rawLine.trimEnd();
+      if (line.startsWith("event:")) {
+        eventName = line.slice("event:".length).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice("data:".length).trimStart());
+      }
+    }
+
+    if (eventName !== "result" || dataLines.length === 0) continue;
+    try {
+      const parsed = JSON.parse(dataLines.join("\n")) as unknown;
+      return parsed && typeof parsed === "object" ? parsed as AgentResultEnvelope : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 function broadcast(event: string, data: unknown): void {
   for (const handler of subscribers) {
     handler(event, data);
@@ -2417,12 +2447,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
 
   app.post("/api/v1/agent", async (c) => {
     // Parse request body first (before entering SSE stream)
-    const { instruction, activeBookId, sessionId: reqSessionId, model: reqModel, service: reqService } = await c.req.json<{
+    const { instruction, activeBookId, sessionId: reqSessionId, model: reqModel, service: reqService, stream: reqStream } = await c.req.json<{
       instruction: string;
       activeBookId?: string;
       sessionId?: string;
       model?: string;
       service?: string;
+      stream?: boolean;
     }>();
     const sessionId = reqSessionId;
 
@@ -2436,6 +2467,44 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     if (reqModel && !isTextChatModelId(reqModel)) {
       const message = nonTextModelMessage(reqModel);
       return c.json({ error: message, response: message }, 400);
+    }
+
+    const wantsSse = reqStream === true || (c.req.header("accept") ?? "").includes("text/event-stream");
+    if (!wantsSse) {
+      const streamedResponse = await app.request(c.req.url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify({
+          instruction,
+          activeBookId,
+          sessionId,
+          model: reqModel,
+          service: reqService,
+          stream: true,
+        }),
+      });
+      const envelope = parseSseResultEnvelope(await streamedResponse.text());
+      if (!envelope) {
+        return c.json({
+          error: {
+            code: "AGENT_STREAM_RESULT_MISSING",
+            message: "Agent stream finished without a result event",
+          },
+        }, 500);
+      }
+
+      const { status, ...payload } = envelope;
+      const envelopeStatus = typeof status === "number" ? status : undefined;
+      const responseStatus = envelopeStatus !== undefined
+        && Number.isInteger(envelopeStatus)
+        && envelopeStatus >= 100
+        && envelopeStatus <= 599
+        ? envelopeStatus
+        : streamedResponse.status;
+      return c.json(payload, responseStatus as 200);
     }
 
     // Use SSE stream for long-running operations (prevents Cloudflare 524 timeout)
@@ -3839,6 +3908,14 @@ export async function startStudioServer(
     }
   }
 
-  console.log(`InkOS Studio running on http://localhost:${port}`);
-  serve({ fetch: app.fetch, port });
+  const server = serve({ fetch: app.fetch, port });
+  server.on("listening", () => {
+    console.log(`\nInkOS Studio running on http://localhost:${port}\n`);
+  });
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      console.error(`\nPort ${port} is already in use. Stop the other process or use --port <number>.\n`);
+      process.exit(1);
+    }
+  });
 }

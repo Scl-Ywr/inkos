@@ -147,9 +147,7 @@ export function App() {
       <div className="hidden md:block h-full">
         <Sidebar nav={nav} activePage={activePage} sse={sse} t={t} />
       </div>
-      {sidebarOpen && (
-        <Sidebar nav={nav} activePage={activePage} sse={sse} t={t} onClose={closeSidebar} />
-      )}
+      <Sidebar nav={nav} activePage={activePage} sse={sse} t={t} onClose={closeSidebar} mobileOpen={sidebarOpen} />
 
       {/* Center Content */}
       <div className="flex-1 flex flex-col min-w-0 bg-background/20">
@@ -285,32 +283,32 @@ export function App() {
             </div>
           )}
           {route.page === "logs" && (
-            <div className="max-w-4xl mx-auto px-4 py-8 md:px-12 md:py-12 lg:py-16 fade-in">
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
               <LogViewer nav={nav} theme={theme} t={t} />
             </div>
           )}
           {route.page === "genres" && (
-            <div className="max-w-4xl mx-auto px-4 py-8 md:px-12 md:py-12 lg:py-16 fade-in">
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
               <GenreManager nav={nav} theme={theme} t={t} />
             </div>
           )}
           {route.page === "style" && (
-            <div className="max-w-4xl mx-auto px-4 py-8 md:px-12 md:py-12 lg:py-16 fade-in">
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
               <StyleManager nav={nav} theme={theme} t={t} />
             </div>
           )}
           {route.page === "import" && (
-            <div className="max-w-4xl mx-auto px-4 py-8 md:px-12 md:py-12 lg:py-16 fade-in">
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
               <ImportManager nav={nav} theme={theme} t={t} />
             </div>
           )}
           {route.page === "radar" && (
-            <div className="max-w-4xl mx-auto px-4 py-8 md:px-12 md:py-12 lg:py-16 fade-in">
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
               <RadarView nav={nav} theme={theme} t={t} />
             </div>
           )}
           {route.page === "doctor" && (
-            <div className="max-w-4xl mx-auto px-4 py-8 md:px-12 md:py-12 lg:py-16 fade-in">
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
               <DoctorView nav={nav} theme={theme} t={t} />
             </div>
           )}
