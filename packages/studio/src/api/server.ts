@@ -56,6 +56,9 @@ import {
   LogRingBuffer,
   formatFileAuditMessage,
   formatUnknownError,
+  mergeLogEntries,
+  normalizeLogLimit,
+  parseJsonLineLogEntries,
   writeConsoleLogEntry,
 } from "./server-logs.js";
 import {
@@ -63,8 +66,15 @@ import {
   agentSessionIdFromOperationKey,
   operationCancelledError,
   type ActiveOperationInput,
+  type OperationFinishInput,
+  type OperationHistoryItem,
 } from "./active-operations.js";
 import { AgentRequestResultCache } from "./agent-request-results.js";
+import {
+  OPERATION_HISTORY_LIMIT,
+  loadOperationHistory,
+  saveOperationHistory,
+} from "./operation-history-store.js";
 import { registerRuntimeRoutes } from "./runtime-routes.js";
 import { registerServiceModelRoutes } from "./service-routes.js";
 import { registerBookChapterRoutes } from "./book-chapter-routes.js";
@@ -503,6 +513,9 @@ const subscribers = new Set<EventHandler>();
 const bookCreateStatus = new Map<string, { status: "creating" | "error"; error?: string }>();
 
 const operationRegistry = new ActiveOperationRegistry();
+let operationHistoryRoot: string | null = null;
+let operationHistoryReady: Promise<void> = Promise.resolve();
+let operationHistoryPersist: Promise<void> = Promise.resolve();
 
 const agentRequestResults = new AgentRequestResultCache();
 let lastRuntimeNotice: {
@@ -619,9 +632,13 @@ function shouldRejectCancelledAgentRequest(sessionId: string, clientStartedAt: n
 }
 
 function markOperationCancelled(key: string): void {
-  operationRegistry.markCancelled(key);
+  const result = operationRegistry.markCancelled(key);
   persistRuntimeProgress();
   broadcastOperationsUpdate();
+  if (result.history.length > 0) {
+    broadcastOperationHistoryUpdate(result.history.at(-1));
+    scheduleOperationHistoryPersist();
+  }
   serverLog("warn", "operation-cancel", `已停止运行任务：${key}`);
 }
 
@@ -635,10 +652,17 @@ function setOperation(key: string, op: ActiveOperationInput): void {
   broadcastOperationsUpdate();
 }
 
-function clearOperation(key: string): void {
-  operationRegistry.clear(key);
+function clearOperation(key: string, outcome?: OperationFinishInput): void {
+  const historyItem = outcome ? operationRegistry.finish(key, outcome) : null;
+  if (!outcome || !historyItem) {
+    operationRegistry.clear(key);
+  }
   persistRuntimeProgress();
   broadcastOperationsUpdate();
+  if (historyItem) {
+    broadcastOperationHistoryUpdate(historyItem);
+    scheduleOperationHistoryPersist();
+  }
 }
 
 function persistRuntimeProgress(extra?: { readonly message?: string }): void {
@@ -682,6 +706,44 @@ function touchOperation(key: string, message: string): void {
 
 function broadcastOperationsUpdate(): void {
   broadcast("operations:update", { operations: operationRegistry.list() });
+}
+
+function broadcastOperationHistoryUpdate(latest?: OperationHistoryItem): void {
+  broadcast("operations:history", {
+    operations: operationRegistry.history(20),
+    ...(latest ? { latest } : {}),
+  });
+}
+
+function configureOperationHistoryPersistence(root: string): void {
+  if (operationHistoryRoot === root) return;
+  operationHistoryRoot = root;
+  operationRegistry.replaceHistory([]);
+  operationHistoryReady = loadOperationHistory(root)
+    .then((items) => {
+      operationRegistry.mergeHistory(items);
+      if (items.length > 0) {
+        broadcastOperationHistoryUpdate(items.at(-1));
+      }
+    })
+    .catch(() => undefined);
+  operationHistoryPersist = operationHistoryReady;
+}
+
+function scheduleOperationHistoryPersist(): void {
+  const root = operationHistoryRoot;
+  const ready = operationHistoryReady;
+  if (!root) return;
+  operationHistoryPersist = operationHistoryPersist
+    .catch(() => undefined)
+    .then(() => ready)
+    .then(() => saveOperationHistory(root, operationRegistry.history(OPERATION_HISTORY_LIMIT)))
+    .catch(() => undefined);
+}
+
+async function waitForOperationHistoryStorage(): Promise<void> {
+  await operationHistoryReady.catch(() => undefined);
+  await operationHistoryPersist.catch(() => undefined);
 }
 
 const logBuffer = new LogRingBuffer(DEFAULT_LOG_BUFFER_SIZE);
@@ -1338,6 +1400,7 @@ async function probeServiceCapabilities(args: {
 
 export function createStudioServer(initialConfig: ProjectConfig, root: string) {
   process.env.INKOS_PROJECT_ROOT ??= root;
+  configureOperationHistoryPersistence(root);
   const app = new Hono();
   const state = new StateManager(root);
   let cachedConfig = initialConfig;
@@ -1447,6 +1510,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       onStreamProgress: (progress) => {
         broadcast("llm:progress", {
           ...(overrides?.sessionIdForSSE ? { sessionId: overrides.sessionIdForSSE } : {}),
+          ...(overrides?.bookId ? { bookId: overrides.bookId } : {}),
           status: progress.status,
           elapsedMs: progress.elapsedMs,
           totalChars: progress.totalChars,
@@ -1520,6 +1584,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     return c.json({ operations: operationRegistry.list() });
   });
 
+  app.get("/api/v1/operations/history", async (c) => {
+    await waitForOperationHistoryStorage();
+    const limit = Number.parseInt(c.req.query("limit") ?? "", 10);
+    return c.json({ operations: operationRegistry.history(limit) });
+  });
+
   app.post("/api/v1/active-operations/:operationId/cancel", (c) => {
     const operationId = decodeURIComponent(c.req.param("operationId"));
     markOperationCancelled(operationId);
@@ -1547,19 +1617,22 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
 
   // --- Logs ---
 
-  app.get("/api/v1/logs", (c) => {
-    const limit = parseInt(c.req.query("limit") ?? "200", 10) || 200;
-    const entries = logBuffer.latest(limit).map((e) => ({
-      level: e.level,
-      tag: e.tag,
-      message: e.message,
-      timestamp: e.timestamp,
-    }));
+  app.get("/api/v1/logs", async (c) => {
+    const limit = normalizeLogLimit(c.req.query("limit"));
+    const memoryEntries = logBuffer.latest(limit);
+    let fileEntries: LogEntry[] = [];
+    try {
+      fileEntries = parseJsonLineLogEntries(await readFile(join(root, "inkos.log"), "utf-8"), limit);
+    } catch {
+      fileEntries = [];
+    }
+    const entries = mergeLogEntries(fileEntries, memoryEntries, limit);
     return c.json({ entries });
   });
 
-  app.delete("/api/v1/logs", (c) => {
+  app.delete("/api/v1/logs", async (c) => {
     logBuffer.clear();
+    await writeFile(join(root, "inkos.log"), "", "utf-8").catch(() => undefined);
     broadcast("logs:clear", { timestamp: new Date().toISOString() });
     return c.json({ status: "cleared" });
   });
@@ -1726,22 +1799,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     schedulerInstance = null;
     broadcast("daemon:stopped", {});
     return c.json({ ok: true, running: false });
-  });
-
-  // --- Logs ---
-
-  app.get("/api/v1/logs", async (c) => {
-    const logPath = join(root, "inkos.log");
-    try {
-      const content = await readFile(logPath, "utf-8");
-      const lines = content.trim().split("\n").slice(-100);
-      const entries = lines.map((line) => {
-        try { return JSON.parse(line); } catch { return { message: line }; }
-      });
-      return c.json({ entries });
-    } catch {
-      return c.json({ entries: [] });
-    }
   });
 
   // --- Agent chat ---
@@ -1917,6 +1974,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     return streamSSE(c, async (stream) => {
       const operationKey = requestId ? `agent:${sessionId}:${requestId}` : `agent:${sessionId}`;
       const savingsBeforeRun = getHeadroomSavingsTelemetry();
+      let operationOutcome: OperationFinishInput | undefined;
       // Helper to send JSON response via SSE event and close stream
       const sendResult = async (data: Record<string, unknown>, status?: number) => {
         const resultStatus = status ?? 200;
@@ -1942,6 +2000,27 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
             ...(runtimeSavings ? { tokenSavings: runtimeSavings } : {}),
           });
         }
+        const errorMessage = data.error && typeof data.error === "object"
+          && "message" in data.error
+          && typeof (data.error as { message?: unknown }).message === "string"
+          ? (data.error as { message: string }).message
+          : typeof data.error === "string"
+            ? data.error
+            : "";
+        const responseMessage = typeof data.response === "string" && data.response.trim()
+          ? data.response.trim()
+          : "";
+        const outcomeMessage = (errorMessage || responseMessage || activeOperation?.message || "任务已结束").slice(0, 180);
+        const outcomeStatus = isCancellationResult(data, resultStatus)
+          ? "cancelled"
+          : resultStatus >= 400 || Boolean(data.error)
+            ? "error"
+            : "completed";
+        operationOutcome = {
+          status: outcomeStatus,
+          message: outcomeMessage,
+          ...(outcomeStatus === "error" ? { error: errorMessage || outcomeMessage } : {}),
+        };
         try {
           await stream.writeSSE({
             event: "result",
@@ -2654,7 +2733,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       await sendResult({ error: { code: "AGENT_ERROR", message: msg } }, 500);
     } finally {
       clearInterval(keepAlive);
-      clearOperation(operationKey);
+      clearOperation(operationKey, operationOutcome);
     }
     });
   });

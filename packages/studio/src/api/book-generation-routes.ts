@@ -48,10 +48,11 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
       (result) => {
         if (isOperationCancelled(operationKey) || operationController.signal.aborted) {
           serverLog("warn", "write", `书籍 ${id} 写作结果已丢弃：任务已停止`);
-          clearOperation(operationKey);
+          clearOperation(operationKey, { status: "cancelled", message: "用户已停止当前生成。" });
           return;
         }
-        serverLog("info", "write", `书籍 ${id} 第 ${result.chapterNumber} 章写作完成: ${result.title} (${result.wordCount} 字)`);
+        const completionMessage = `书籍 ${id} 第 ${result.chapterNumber} 章写作完成: ${result.title} (${result.wordCount} 字)`;
+        serverLog("info", "write", completionMessage);
         void syncBookDerivedFoundationFiles(id).catch((error) => {
           serverLog("warn", "foundation", `同步 ${id} 核心文件失败: ${error instanceof Error ? error.message : String(error)}`);
         });
@@ -65,18 +66,20 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
           ),
           ...(runtimeTokenUsage ? { tokenUsage: runtimeTokenUsage } : {}),
         });
-        clearOperation(operationKey);
+        clearOperation(operationKey, { status: "completed", message: completionMessage });
         broadcast("write:complete", { bookId: id, chapterNumber: result.chapterNumber, status: result.status, title: result.title, wordCount: result.wordCount });
       },
       (e) => {
         const msg = e instanceof Error ? e.message : String(e);
-        clearOperation(operationKey);
         if (isOperationAbortError(e)) {
+          clearOperation(operationKey, { status: "cancelled", message: "用户已停止当前生成。" });
           serverLog("warn", "write", `书籍 ${id} 写作已停止`);
           broadcast("write:error", { bookId: id, error: "用户已停止当前生成。" });
           return;
         }
-        serverLog("error", "write", `书籍 ${id} 写作失败: ${msg}`);
+        const errorMessage = `书籍 ${id} 写作失败: ${msg}`;
+        clearOperation(operationKey, { status: "error", message: errorMessage, error: msg });
+        serverLog("error", "write", errorMessage);
         rememberRuntimeNotice({
           kind: "error",
           title: "章节生成失败",
@@ -99,7 +102,7 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
     // Track active operation for session recovery
     const operationKey = `draft:${id}`;
     setOperation(operationKey, {
-      type: "write",
+      type: "draft",
       bookId: id,
       label: "章节草稿",
       message: `正在为《${id}》生成草稿，会先铺剧情骨架再扩写正文。`,
@@ -111,10 +114,11 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
       (result) => {
         if (isOperationCancelled(operationKey) || operationController.signal.aborted) {
           serverLog("warn", "draft", `书籍 ${id} 草稿结果已丢弃：任务已停止`);
-          clearOperation(operationKey);
+          clearOperation(operationKey, { status: "cancelled", message: "用户已停止当前生成。" });
           return;
         }
-        serverLog("info", "draft", `书籍 ${id} 草稿完成: ${result.title} (${result.wordCount} 字)`);
+        const completionMessage = `书籍 ${id} 草稿完成: ${result.title} (${result.wordCount} 字)`;
+        serverLog("info", "draft", completionMessage);
         void syncBookDerivedFoundationFiles(id).catch((error) => {
           serverLog("warn", "foundation", `同步 ${id} 核心文件失败: ${error instanceof Error ? error.message : String(error)}`);
         });
@@ -128,18 +132,20 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
           ),
           ...(runtimeTokenUsage ? { tokenUsage: runtimeTokenUsage } : {}),
         });
-        clearOperation(operationKey);
+        clearOperation(operationKey, { status: "completed", message: completionMessage });
         broadcast("draft:complete", { bookId: id, chapterNumber: result.chapterNumber, title: result.title, wordCount: result.wordCount });
       },
       (e) => {
         const msg = e instanceof Error ? e.message : String(e);
-        clearOperation(operationKey);
         if (isOperationAbortError(e)) {
+          clearOperation(operationKey, { status: "cancelled", message: "用户已停止当前生成。" });
           serverLog("warn", "draft", `书籍 ${id} 草稿已停止`);
           broadcast("draft:error", { bookId: id, error: "用户已停止当前生成。" });
           return;
         }
-        serverLog("error", "draft", `书籍 ${id} 草稿失败: ${msg}`);
+        const errorMessage = `书籍 ${id} 草稿失败: ${msg}`;
+        clearOperation(operationKey, { status: "error", message: errorMessage, error: msg });
+        serverLog("error", "draft", errorMessage);
         rememberRuntimeNotice({
           kind: "error",
           title: "章节草稿失败",
@@ -162,12 +168,23 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
     }
     const bookDir = state.bookDir(id);
 
+    const operationKey = `audit:${id}:${chapterNum}`;
     broadcast("audit:start", { bookId: id, chapter: chapterNum });
+    setOperation(operationKey, {
+      type: "audit",
+      bookId: id,
+      chapter: chapterNum,
+      label: "章节审计",
+      message: `正在审计《${id}》第 ${chapterNum} 章的连续性和设定一致性。`,
+    });
     try {
       const book = await state.loadBookConfig(id);
       const chaptersDir = join(bookDir, "chapters");
       const match = await findChapterMarkdownFile(chaptersDir, chapterNum);
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
+      if (!match) {
+        clearOperation(operationKey, { status: "error", message: "Chapter not found", error: "Chapter not found" });
+        return c.json({ error: "Chapter not found" }, 404);
+      }
 
       const content = await readFile(join(chaptersDir, match), "utf-8");
       const currentConfig = await loadCurrentProjectConfig();
@@ -179,11 +196,17 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
         bookId: id,
       });
       const result = await auditor.auditChapter(bookDir, content, chapterNum, book.genre);
+      clearOperation(operationKey, {
+        status: "completed",
+        message: `《${id}》第 ${chapterNum} 章审计完成：${result.passed ? "通过" : "未通过"}`,
+      });
       broadcast("audit:complete", { bookId: id, chapter: chapterNum, passed: result.passed });
       return c.json(result);
     } catch (e) {
-      broadcast("audit:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
+      const msg = e instanceof Error ? e.message : String(e);
+      clearOperation(operationKey, { status: "error", message: `《${id}》第 ${chapterNum} 章审计失败：${msg}`, error: msg });
+      broadcast("audit:error", { bookId: id, error: msg });
+      return c.json({ error: msg }, 500);
     }
   });
 
@@ -216,7 +239,7 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
       const chaptersDir = join(bookDir, "chapters");
       const match = await findChapterMarkdownFile(chaptersDir, chapterNum);
       if (!match) {
-        clearOperation(operationKey);
+        clearOperation(operationKey, { status: "error", message: "Chapter not found", error: "Chapter not found" });
         return c.json({ error: "Chapter not found" }, 404);
       }
 
@@ -231,23 +254,27 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
         chapterNum,
         normalizedMode as "polish" | "rewrite" | "rework" | "spot-fix" | "anti-detect",
       );
-      serverLog("info", "revise", `书籍 ${id} 第 ${chapterNum} 章修订完成`);
+      const completionMessage = `书籍 ${id} 第 ${chapterNum} 章修订完成`;
+      serverLog("info", "revise", completionMessage);
       void syncBookDerivedFoundationFiles(id).catch((error) => {
         serverLog("warn", "foundation", `同步 ${id} 的核心文件聚合失败: ${String(error)}`);
       });
-      clearOperation(operationKey);
+      clearOperation(operationKey, { status: "completed", message: completionMessage });
       broadcast("revise:complete", { bookId: id, chapter: chapterNum });
       return c.json(result);
     } catch (e) {
-      clearOperation(operationKey);
       if (isOperationAbortError(e)) {
+        clearOperation(operationKey, { status: "cancelled", message: "用户已停止当前生成。" });
         serverLog("warn", "revise", `书籍 ${id} 第 ${chapterNum} 章修订已停止`);
         broadcast("revise:error", { bookId: id, error: "用户已停止当前生成。" });
         return c.json({ error: "用户已停止当前生成。" }, 400);
       }
-      serverLog("error", "revise", `书籍 ${id} 第 ${chapterNum} 章修订失败: ${String(e)}`);
-      broadcast("revise:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
+      const msg = e instanceof Error ? e.message : String(e);
+      const errorMessage = `书籍 ${id} 第 ${chapterNum} 章修订失败: ${msg}`;
+      clearOperation(operationKey, { status: "error", message: errorMessage, error: msg });
+      serverLog("error", "revise", errorMessage);
+      broadcast("revise:error", { bookId: id, error: msg });
+      return c.json({ error: msg }, 500);
     }
   });
 
@@ -311,35 +338,41 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
       }));
       pipeline.writeNextChapter(id).then(
         (result) => {
-          if (isOperationCancelled(operationKey) || operationController.signal.aborted) {
-            serverLog("warn", "rewrite", `书籍 ${id} 重写结果已丢弃：任务已停止`);
-            clearOperation(operationKey);
-            return;
-          }
-          serverLog("info", "rewrite", `书籍 ${id} 第 ${result.chapterNumber} 章重写完成: ${result.title} (${result.wordCount} 字)`);
+        if (isOperationCancelled(operationKey) || operationController.signal.aborted) {
+          serverLog("warn", "rewrite", `书籍 ${id} 重写结果已丢弃：任务已停止`);
+          clearOperation(operationKey, { status: "cancelled", message: "用户已停止当前生成。" });
+          return;
+        }
+          const completionMessage = `书籍 ${id} 第 ${result.chapterNumber} 章重写完成: ${result.title} (${result.wordCount} 字)`;
+          serverLog("info", "rewrite", completionMessage);
           void syncBookDerivedFoundationFiles(id).catch((error) => {
             serverLog("warn", "foundation", `同步 ${id} 的核心文件聚合失败: ${String(error)}`);
           });
-          clearOperation(operationKey);
+          clearOperation(operationKey, { status: "completed", message: completionMessage });
           broadcast("rewrite:complete", { bookId: id, chapterNumber: result.chapterNumber, title: result.title, wordCount: result.wordCount });
         },
         (e) => {
-          clearOperation(operationKey);
           if (isOperationAbortError(e)) {
+            clearOperation(operationKey, { status: "cancelled", message: "用户已停止当前生成。" });
             serverLog("warn", "rewrite", `书籍 ${id} 重写已停止`);
             broadcast("rewrite:error", { bookId: id, error: "用户已停止当前生成。" });
             return;
           }
-          serverLog("error", "rewrite", `书籍 ${id} 重写失败: ${e instanceof Error ? e.message : String(e)}`);
-          broadcast("rewrite:error", { bookId: id, error: e instanceof Error ? e.message : String(e) });
+          const msg = e instanceof Error ? e.message : String(e);
+          const errorMessage = `书籍 ${id} 重写失败: ${msg}`;
+          clearOperation(operationKey, { status: "error", message: errorMessage, error: msg });
+          serverLog("error", "rewrite", errorMessage);
+          broadcast("rewrite:error", { bookId: id, error: msg });
         },
       );
       return c.json({ status: "rewriting", bookId: id, chapter: chapterNum, rolledBackTo: rollbackTarget, discarded });
     } catch (e) {
-      serverLog("error", "rewrite", `书籍 ${id} 重写失败: ${String(e)}`);
-      clearOperation(operationKey);
-      broadcast("rewrite:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
+      const msg = e instanceof Error ? e.message : String(e);
+      const errorMessage = `书籍 ${id} 重写失败: ${msg}`;
+      clearOperation(operationKey, { status: "error", message: errorMessage, error: msg });
+      serverLog("error", "rewrite", errorMessage);
+      broadcast("rewrite:error", { bookId: id, error: msg });
+      return c.json({ error: msg }, 500);
     }
   });
 

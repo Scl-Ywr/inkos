@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { operationHistoryPath } from "./operation-history-store";
 
 const schedulerStartMock = vi.fn<() => Promise<void>>();
 const initBookMock = vi.fn();
@@ -113,6 +114,7 @@ const endpointMocks = [
   { id: "custom", label: "自定义端点", models: [] },
 ];
 const getAllEndpointsMock = vi.fn(() => endpointMocks);
+const getEndpointMock = vi.fn((id: string) => endpointMocks.find((endpoint) => endpoint.id === id));
 const probeModelsFromUpstreamMock = vi.fn(async () => [
   { id: "custom-model", name: "custom-model", contextWindow: 0 },
 ]);
@@ -253,6 +255,7 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     getServiceApiKey: getServiceApiKeyMock,
     listModelsForService: listModelsForServiceMock,
     getAllEndpoints: getAllEndpointsMock,
+    getEndpoint: getEndpointMock,
     probeModelsFromUpstream: probeModelsFromUpstreamMock,
     fetchWithProxy: vi.fn((input: Parameters<typeof fetch>[0], init?: RequestInit) => fetch(input, init)),
     listBookSessions: vi.fn(async () => []),
@@ -1823,6 +1826,59 @@ describe("createStudioServer daemon lifecycle", () => {
     });
   });
 
+  it("returns model compatibility diagnostics when service probe asks for them", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [
+          { id: "model-one" },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as typeof fetch);
+    createLLMClientMock.mockImplementation(((cfg: unknown) => cfg) as any);
+    chatCompletionMock.mockResolvedValue({
+      content: "OK",
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    });
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/services/volcengine/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        apiKey: "volc-key",
+        baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+        apiFormat: "chat",
+        stream: false,
+        diagnose: true,
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      selectedModel: "model-one",
+      compatibility: {
+        ok: true,
+        checks: expect.arrayContaining([
+          expect.objectContaining({ id: "chat", status: "pass" }),
+        ]),
+      },
+    });
+    expect(chatCompletionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "model-one",
+      expect.arrayContaining([
+        expect.objectContaining({ role: "system" }),
+        expect.objectContaining({ role: "user" }),
+      ]),
+      expect.objectContaining({ maxTokens: 16 }),
+    );
+  });
+
   it("uses static aggregator models instead of chat probing when kkaiapi /models is unavailable", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,
@@ -2759,6 +2815,80 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(pipelineConfigs.at(-1)).toEqual(expect.objectContaining({
       writingReviewRetries: 3,
     }));
+  });
+
+  it("records completed backend tasks in operation history", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/books/demo-book/write-next", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    expect(response.status).toBe(200);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const history = await app.request("http://localhost/api/v1/operations/history?limit=1");
+    expect(history.status).toBe(200);
+    await expect(history.json()).resolves.toMatchObject({
+      operations: [
+        {
+          key: "write:demo-book",
+          type: "write",
+          bookId: "demo-book",
+          status: "completed",
+          label: "章节写作",
+          message: expect.stringContaining("写作完成"),
+        },
+      ],
+    });
+    await expect(readFile(operationHistoryPath(root), "utf-8")).resolves.toContain("write:demo-book");
+  });
+
+  it("restores persisted operation history on startup", async () => {
+    const persisted = {
+      version: 1,
+      operations: [
+        {
+          key: "audit:demo-book:3",
+          type: "audit",
+          bookId: "demo-book",
+          status: "error",
+          label: "章节审计",
+          message: "审计失败",
+          startedAt: 10,
+          updatedAt: 20,
+          completedAt: 20,
+          durationMs: 10,
+          chapter: 3,
+          error: "API 400",
+        },
+      ],
+    };
+    await mkdir(join(root, "runtime"), { recursive: true });
+    await writeFile(operationHistoryPath(root), JSON.stringify(persisted, null, 2), "utf-8");
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const history = await app.request("http://localhost/api/v1/operations/history?limit=1");
+    expect(history.status).toBe(200);
+    await expect(history.json()).resolves.toMatchObject({
+      operations: [
+        {
+          key: "audit:demo-book:3",
+          type: "audit",
+          bookId: "demo-book",
+          status: "error",
+          label: "章节审计",
+          chapter: 3,
+          error: "API 400",
+        },
+      ],
+    });
   });
 
   it("handles explicit chat chapter edits outside the InkOS writing agent", async () => {

@@ -625,6 +625,58 @@ describe("chatCompletion via pi-ai", () => {
     vi.unstubAllGlobals();
   });
 
+  it("retries custom openai-compatible chat with conservative payload after generic 400 parameter errors", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        statusText: "Bad Request",
+        text: async () => JSON.stringify({ error: { message: "请求参数错误" } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: "ok" } }],
+          usage: { prompt_tokens: 9, completion_tokens: 1, total_tokens: 10 },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = makeClient(0.7, {
+      service: "custom",
+      stream: false,
+      _piModel: {
+        ...MOCK_PI_MODEL,
+        provider: "openai",
+        baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+      },
+      defaults: {
+        temperature: 1,
+        maxTokens: 16_384,
+        thinkingBudget: 0,
+        extra: {},
+      },
+    });
+    const result = await chatCompletion(client, "agnes-2.0-flash", [
+      { role: "system", content: "只输出中文。" },
+      { role: "user", content: "ping" },
+    ]);
+
+    expect(result.content).toBe("ok");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const firstBody = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string);
+    const secondBody = JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string);
+    expect(firstBody.max_tokens).toBe(16_384);
+    expect(firstBody.messages[0]).toMatchObject({ role: "system" });
+    expect(secondBody.max_tokens).toBe(4096);
+    expect(secondBody.messages).toHaveLength(1);
+    expect(secondBody.messages[0]).toMatchObject({ role: "user" });
+    expect(secondBody.messages[0].content).toContain("只输出中文。");
+    expect(secondBody.messages[0].content).toContain("ping");
+
+    vi.unstubAllGlobals();
+  });
+
   it("keeps legacy env custom openai-compatible chat on pi-ai path", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

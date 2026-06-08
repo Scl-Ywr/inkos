@@ -1,8 +1,11 @@
 import {
   applyOfficialOptimizationConfig,
   COVER_PROVIDER_PRESETS,
+  chatCompletion,
+  createLLMClient,
   coverSecretKey,
   getAllEndpoints,
+  getEndpoint,
   isApiKeyOptionalForEndpoint,
   listModelsForService,
   loadSecrets,
@@ -10,6 +13,7 @@ import {
   resolveCoverProviderPreset,
   resolveServiceProviderFamily,
   saveSecrets,
+  type LLMConfig,
 } from "@actalk/inkos-core";
 import type { Hono } from "hono";
 import {
@@ -39,6 +43,28 @@ interface ServiceProbeResult {
   readonly baseUrl?: string;
   readonly modelsSource?: "api" | "fallback";
   readonly error?: string;
+}
+
+type ServiceCompatibilityStatus = "pass" | "warn" | "fail";
+
+interface ServiceCompatibilityCheck {
+  readonly id: string;
+  readonly label: string;
+  readonly status: ServiceCompatibilityStatus;
+  readonly message: string;
+  readonly action?: string;
+}
+
+interface ServiceCompatibilityReport {
+  readonly ok: boolean;
+  readonly level: ServiceCompatibilityStatus;
+  readonly summary: string;
+  readonly checks: ServiceCompatibilityCheck[];
+  readonly recommended?: {
+    readonly apiFormat?: "chat" | "responses";
+    readonly stream?: boolean;
+    readonly maxTokens?: number;
+  };
 }
 
 interface ProbeServiceCapabilitiesInput {
@@ -82,6 +108,233 @@ function isHeaderSafeApiKey(value: string): boolean {
 
 // 内存缓存：service -> 模型列表 + 更新时间戳；避免每次 sidebar 挂载时都打真实 LLM /models
 const modelListCache = new Map<string, { models: Array<{ id: string; name: string }>; at: number }>();
+
+function isRequestParameterError(error: string): boolean {
+  const normalized = error.toLowerCase();
+  return normalized.includes("400")
+    && (
+      normalized.includes("parameter")
+      || normalized.includes("param")
+      || normalized.includes("max_tokens")
+      || normalized.includes("temperature")
+      || normalized.includes("messages")
+      || normalized.includes("role")
+      || normalized.includes("请求参数")
+      || normalized.includes("参数")
+    );
+}
+
+function compatibilityLevel(checks: ReadonlyArray<ServiceCompatibilityCheck>): ServiceCompatibilityStatus {
+  if (checks.some((check) => check.status === "fail")) return "fail";
+  if (checks.some((check) => check.status === "warn")) return "warn";
+  return "pass";
+}
+
+function compatibilitySummary(level: ServiceCompatibilityStatus): string {
+  switch (level) {
+    case "pass": return "当前模型通过基础聊天兼容检查。";
+    case "warn": return "当前配置可连接，但建议按提示优化后再用于长篇写作。";
+    case "fail": return "当前配置存在兼容风险，草稿/审计/写作任务可能失败。";
+  }
+}
+
+function findServiceModelCard(service: string, model: string) {
+  const endpoint = getEndpoint(service);
+  return endpoint?.models.find((entry) => entry.id === model || entry.deploymentName === model);
+}
+
+function withCompatibilityTimeout<T>(task: Promise<T>, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`${label} 超时`)), 12_000);
+    task.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function runCompatibilityChatProbe(args: {
+  readonly service: string;
+  readonly apiKey: string;
+  readonly baseUrl: string;
+  readonly apiFormat: "chat" | "responses";
+  readonly stream: boolean;
+  readonly model: string;
+  readonly proxyUrl?: string;
+}): Promise<void> {
+  const client = createLLMClient({
+    provider: resolveServiceProviderFamily(args.service) ?? "openai",
+    service: args.service,
+    configSource: "studio",
+    baseUrl: args.baseUrl,
+    apiKey: args.apiKey.trim(),
+    model: args.model,
+    temperature: findServiceModelCard(args.service, args.model)?.temperature ?? 0.7,
+    maxTokens: 16,
+    thinkingBudget: 0,
+    proxyUrl: args.proxyUrl,
+    apiFormat: args.apiFormat,
+    stream: args.stream,
+  } as LLMConfig);
+
+  await withCompatibilityTimeout(
+    chatCompletion(client, args.model, [
+      { role: "system", content: "You are a compatibility probe. Reply exactly OK." },
+      { role: "user", content: "Reply OK." },
+    ], { maxTokens: 16 }),
+    "模型兼容检查",
+  );
+}
+
+async function diagnoseServiceCompatibility(args: {
+  readonly service: string;
+  readonly apiKey: string;
+  readonly baseUrl: string;
+  readonly apiFormat: "chat" | "responses";
+  readonly stream: boolean;
+  readonly model?: string;
+  readonly proxyUrl?: string;
+}): Promise<ServiceCompatibilityReport> {
+  const baseService = isCustomServiceId(args.service) ? "custom" : args.service;
+  const checks: ServiceCompatibilityCheck[] = [];
+  const recommended: { apiFormat?: "chat" | "responses"; stream?: boolean; maxTokens?: number } = {};
+  const model = args.model?.trim();
+
+  if (!model) {
+    checks.push({
+      id: "model",
+      label: "模型 ID",
+      status: "fail",
+      message: "没有可用于聊天诊断的模型。",
+      action: "先填写模型 ID，或让 /models 返回可用文本模型。",
+    });
+    const level = compatibilityLevel(checks);
+    return { ok: false, level, summary: compatibilitySummary(level), checks };
+  }
+
+  const modelCard = findServiceModelCard(baseService, model);
+  if (modelCard) {
+    checks.push({
+      id: "max-tokens",
+      label: "max_tokens",
+      status: "pass",
+      message: `模型卡输出上限 ${modelCard.maxOutput.toLocaleString()} tokens。`,
+    });
+    if (modelCard.temperature !== undefined) {
+      checks.push({
+        id: "temperature",
+        label: "temperature",
+        status: "pass",
+        message: `该模型要求 temperature=${modelCard.temperature}，运行时会自动夹制。`,
+      });
+    }
+  } else {
+    recommended.maxTokens = 4096;
+    checks.push({
+      id: "max-tokens",
+      label: "max_tokens",
+      status: "warn",
+      message: "未在内置模型卡中找到该模型，长篇任务可能使用保守兜底预算。",
+      action: "如果遇到 400 请求参数错误，优先把输出预算降到 4096 或换成已知模型卡。",
+    });
+  }
+
+  if (args.apiFormat === "responses" && baseService === "custom") {
+    recommended.apiFormat = "chat";
+    checks.push({
+      id: "api-format",
+      label: "协议",
+      status: "warn",
+      message: "部分 OpenAI 兼容中转不完整支持 Responses API。",
+      action: "草稿/审计失败时优先改为 Chat / Completions。",
+    });
+  }
+
+  if (args.stream) {
+    checks.push({
+      id: "stream",
+      label: "流式响应",
+      status: "pass",
+      message: "将按当前流式配置进行一次小请求检查。",
+    });
+  }
+
+  try {
+    await runCompatibilityChatProbe({
+      service: baseService,
+      apiKey: args.apiKey,
+      baseUrl: args.baseUrl,
+      apiFormat: args.apiFormat,
+      stream: args.stream,
+      model,
+      proxyUrl: args.proxyUrl,
+    });
+    checks.push({
+      id: "chat",
+      label: "聊天请求",
+      status: "pass",
+      message: "system role + user message + 小 max_tokens 请求成功。",
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (args.stream) {
+      try {
+        await runCompatibilityChatProbe({
+          service: baseService,
+          apiKey: args.apiKey,
+          baseUrl: args.baseUrl,
+          apiFormat: args.apiFormat,
+          stream: false,
+          model,
+          proxyUrl: args.proxyUrl,
+        });
+        recommended.stream = false;
+        checks.push({
+          id: "chat",
+          label: "聊天请求",
+          status: "warn",
+          message: "流式请求失败，但非流式小请求成功。",
+          action: "建议关闭流式响应后再保存。",
+        });
+      } catch {
+        checks.push({
+          id: "chat",
+          label: "聊天请求",
+          status: "fail",
+          message,
+          action: isRequestParameterError(message)
+            ? "优先检查 system role、temperature、max_tokens 和模型 ID 是否被该网关支持。"
+            : "检查 API Key、Base URL、模型 ID 和网络代理配置。",
+        });
+      }
+    } else {
+      checks.push({
+        id: "chat",
+        label: "聊天请求",
+        status: "fail",
+        message,
+        action: isRequestParameterError(message)
+          ? "优先检查 system role、temperature、max_tokens 和模型 ID 是否被该网关支持。"
+          : "检查 API Key、Base URL、模型 ID 和网络代理配置。",
+      });
+    }
+  }
+
+  const level = compatibilityLevel(checks);
+  return {
+    ok: level !== "fail",
+    level,
+    summary: compatibilitySummary(level),
+    checks,
+    ...(Object.keys(recommended).length > 0 ? { recommended } : {}),
+  };
+}
 
 export function registerServiceModelRoutes(app: Hono, deps: ServiceModelRoutesDeps): void {
   const {
@@ -429,12 +682,13 @@ export function registerServiceModelRoutes(app: Hono, deps: ServiceModelRoutesDe
 
   app.post("/api/v1/services/:service/test", async (c) => {
     const service = c.req.param("service");
-    const { apiKey, baseUrl, apiFormat, stream, model } = await c.req.json<{
+    const { apiKey, baseUrl, apiFormat, stream, model, diagnose } = await c.req.json<{
       apiKey: string;
       baseUrl?: string;
       apiFormat?: "chat" | "responses";
       stream?: boolean;
       model?: string;
+      diagnose?: boolean;
     }>();
 
     const resolvedBaseUrl = await resolveConfiguredServiceBaseUrl(root, service, baseUrl);
@@ -483,6 +737,18 @@ export function registerServiceModelRoutes(app: Hono, deps: ServiceModelRoutesDe
       }, 400);
     }
 
+    const compatibility = diagnose
+      ? await diagnoseServiceCompatibility({
+          service,
+          apiKey: apiKey?.trim() ?? "",
+          baseUrl: probe.baseUrl ?? resolvedBaseUrl,
+          apiFormat: probe.apiFormat ?? apiFormat ?? "chat",
+          stream: typeof probe.stream === "boolean" ? probe.stream : stream ?? false,
+          model: probe.selectedModel ?? model,
+          proxyUrl: typeof llm.proxyUrl === "string" ? llm.proxyUrl : undefined,
+        })
+      : undefined;
+
     return c.json({
       ok: true,
       modelCount: probe.models.length,
@@ -497,6 +763,7 @@ export function registerServiceModelRoutes(app: Hono, deps: ServiceModelRoutesDe
       // B12 新字段：两步验证状态
       probe: probeStatus,
       chat: null,  // probeServiceCapabilities 本身只做 probe，chat hello 在 Studio 的 follow-up 调用里单独触发
+      ...(compatibility ? { compatibility } : {}),
     });
   });
 

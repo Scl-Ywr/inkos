@@ -50,10 +50,23 @@ function logKey(entry: LogEntry): string {
   return `${entry.timestamp ?? ""}\u0000${entry.level ?? ""}\u0000${entry.tag ?? ""}\u0000${entry.message}`;
 }
 
-function formatOperationElapsed(operation: ActiveOperation): string {
+function useLiveNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [active]);
+
+  return now;
+}
+
+function formatOperationElapsed(operation: ActiveOperation, now = Date.now()): string {
   const startedAt = operation.startedAt ?? operation.updatedAt;
   if (!startedAt) return "刚刚";
-  const seconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+  const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
   const rest = seconds % 60;
@@ -67,6 +80,7 @@ export function LogViewer({ nav, theme, t, sse }: { nav: Nav; theme: Theme; t: T
   const [liveEntries, setLiveEntries] = useState<ReadonlyArray<LogEntry>>([]);
   const [clearing, setClearing] = useState(false);
   const [clearError, setClearError] = useState<string | null>(null);
+  const liveNow = useLiveNow(activeOperations.length > 0);
 
   useEffect(() => {
     setLiveEntries(data?.entries ?? []);
@@ -154,7 +168,7 @@ export function LogViewer({ nav, theme, t, sse }: { nav: Nav; theme: Theme; t: T
               </div>
             </div>
             <span className="shrink-0 rounded-full bg-primary/12 px-3 py-1.5 text-xs font-bold text-primary">
-              {formatOperationElapsed(activeOperations[0])}
+              {formatOperationElapsed(activeOperations[0], liveNow)}
             </span>
           </div>
           <p className="mt-3 text-sm leading-6 text-muted-foreground">

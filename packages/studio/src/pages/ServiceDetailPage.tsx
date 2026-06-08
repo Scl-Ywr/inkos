@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { fetchJson } from "../hooks/use-api";
 import { useServiceStore } from "../store/service";
-import { Eye, EyeOff, Loader2, ArrowLeft, Trash2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Eye, EyeOff, Info, Loader2, ArrowLeft, Trash2 } from "lucide-react";
 import { ServiceQuickLinks } from "../components/ServiceQuickLinks";
 import { StudioSelect } from "../components/StudioSelect";
 import { mobileTextInputHandlers } from "../lib/mobile-input";
@@ -16,6 +16,8 @@ import {
   type ServiceDetailDetectedConfig as DetectedConfig,
   type ServiceDetailModelInfo as ModelInfo,
   type ServiceDetailVerifiedProbe as VerifiedProbe,
+  type ServiceCompatibilityReport,
+  type ServiceCompatibilityStatus,
 } from "./service-detail-state";
 
 type ServiceDetailDirtyField =
@@ -297,6 +299,58 @@ function DetailSkeleton() {
   );
 }
 
+function compatibilityTone(status: ServiceCompatibilityStatus): {
+  readonly text: string;
+  readonly icon: React.ReactNode;
+} {
+  switch (status) {
+    case "pass":
+      return { text: "text-emerald-500", icon: <CheckCircle2 size={14} /> };
+    case "warn":
+      return { text: "text-amber-500", icon: <AlertTriangle size={14} /> };
+    case "fail":
+      return { text: "text-destructive", icon: <AlertTriangle size={14} /> };
+  }
+}
+
+function CompatibilityDiagnostics({ report }: { readonly report: ServiceCompatibilityReport }) {
+  const tone = compatibilityTone(report.level);
+  return (
+    <section className="space-y-3 border-t border-border/20 pt-4">
+      <div className={`flex items-start gap-2 text-xs font-semibold ${tone.text}`}>
+        <span className="mt-0.5 shrink-0">{tone.icon}</span>
+        <span className="leading-5">{report.summary}</span>
+      </div>
+      <div className="space-y-2">
+        {report.checks.map((check) => {
+          const checkTone = compatibilityTone(check.status);
+          return (
+            <div key={check.id} className="grid grid-cols-[1rem_minmax(0,1fr)] gap-2 text-xs leading-5">
+              <span className={`mt-0.5 ${checkTone.text}`}>{checkTone.icon}</span>
+              <div className="min-w-0">
+                <div className="font-medium text-foreground">{check.label}</div>
+                <div className="break-words text-muted-foreground">{check.message}</div>
+                {check.action && <div className="mt-0.5 break-words text-primary/80">{check.action}</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {report.recommended && (
+        <div className="flex items-start gap-2 rounded-lg bg-primary/[0.05] px-3 py-2 text-xs leading-5 text-muted-foreground">
+          <Info size={14} className="mt-0.5 shrink-0 text-primary" />
+          <span>
+            建议：
+            {report.recommended.apiFormat ? ` 协议改为 ${report.recommended.apiFormat};` : ""}
+            {typeof report.recommended.stream === "boolean" ? ` 流式响应改为 ${report.recommended.stream ? "开启" : "关闭"};` : ""}
+            {report.recommended.maxTokens ? ` 输出预算不超过 ${report.recommended.maxTokens};` : ""}
+          </span>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: Nav }) {
   // -- Service store --
   const services = useServiceStore((s) => s.services);
@@ -323,6 +377,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
   const [detectedModel, setDetectedModel] = useState<string>("");
   const [detectedConfig, setDetectedConfig] = useState<DetectedConfig | null>(null);
   const [verifiedProbe, setVerifiedProbe] = useState<VerifiedProbe | null>(null);
+  const [compatibility, setCompatibility] = useState<ServiceCompatibilityReport | null>(null);
   const customNameRef = useRef<HTMLInputElement>(null);
   const baseUrlRef = useRef<HTMLInputElement>(null);
   const modelRef = useRef<HTMLInputElement>(null);
@@ -391,6 +446,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
     resetTextField("detectedModel", setDetectedModel, "");
     setDetectedConfig(null);
     setVerifiedProbe(null);
+    setCompatibility(null);
     setStatus({ state: "idle" });
   }, [persistedCustomName, serviceId]);
 
@@ -497,14 +553,17 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
     }
     resetTextField("apiKey", setApiKey, trimmedKey);
     setStatus({ state: "testing" });
+    setCompatibility(null);
     try {
       const result = await probeServiceForDetail(currentEffectiveServiceId, {
         apiKey: trimmedKey,
         apiFormat,
         stream,
         model: form.detectedModel,
+        diagnose: true,
         ...(isCustom ? { baseUrl: form.baseUrl.trim() } : {}),
       });
+      setCompatibility(result.compatibility ?? null);
       if (result.ok) {
         const models = result.models ?? [];
         const verifiedApiFormat = result.detected?.apiFormat ?? apiFormat;
@@ -538,11 +597,13 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
         setStoreModels(currentEffectiveServiceId, models); // Write to global store
       } else {
         setVerifiedProbe(null);
+        setCompatibility(result.compatibility ?? null);
         setStatus({ state: "error", message: result.error ?? "连接失败" });
         clearStoreModels(currentEffectiveServiceId);
       }
     } catch (e) {
       setVerifiedProbe(null);
+      setCompatibility(null);
       setStatus({ state: "error", message: e instanceof Error ? e.message : "连接失败" });
     }
   };
@@ -555,6 +616,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
       confirmLabel: "删除",
     })) return;
     setStatus({ state: "saving" });
+    setCompatibility(null);
     try {
       await deleteServiceConfig(effectiveServiceId);
       clearStoreModels(effectiveServiceId);
@@ -745,6 +807,8 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
             <span className="text-xs text-emerald-500">已保存</span>
           )}
         </div>
+
+        {compatibility && <CompatibilityDiagnostics report={compatibility} />}
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="协议类型">

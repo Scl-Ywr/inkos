@@ -1,5 +1,5 @@
 export interface ActiveOperation {
-  readonly type: "write" | "rewrite" | "agent" | "revise";
+  readonly type: "write" | "draft" | "rewrite" | "agent" | "revise" | "audit";
   readonly bookId: string;
   readonly startedAt: number;
   readonly updatedAt: number;
@@ -9,6 +9,22 @@ export interface ActiveOperation {
   readonly sessionId?: string;
   readonly chapter?: number;
   readonly instruction?: string;
+}
+
+export type OperationHistoryStatus = "completed" | "error" | "cancelled";
+
+export interface OperationHistoryItem extends Omit<ActiveOperation, "status"> {
+  readonly key: string;
+  readonly status: OperationHistoryStatus;
+  readonly completedAt: number;
+  readonly durationMs: number;
+  readonly error?: string;
+}
+
+export interface OperationFinishInput {
+  readonly status: OperationHistoryStatus;
+  readonly message?: string;
+  readonly error?: string;
 }
 
 export type ActiveOperationInput =
@@ -25,6 +41,7 @@ export interface ActiveOperationEntry {
 export interface CancelOperationResult {
   readonly targets: ReadonlyArray<string>;
   readonly agentSessionId?: string;
+  readonly history: ReadonlyArray<OperationHistoryItem>;
 }
 
 export const AGENT_CANCEL_SUPPRESSION_MS = 2_500;
@@ -39,9 +56,11 @@ export function operationCancelledError(): Error {
 export function operationLabel(type: ActiveOperation["type"]): string {
   switch (type) {
     case "write": return "章节写作";
+    case "draft": return "章节草稿";
     case "rewrite": return "章节重写";
     case "agent": return "AI 对话";
     case "revise": return "章节修订";
+    case "audit": return "章节审计";
   }
 }
 
@@ -61,6 +80,9 @@ export class ActiveOperationRegistry {
   private readonly cancelledOperations = new Set<string>();
   private readonly cancelledAgentSessions = new Map<string, number>();
   private readonly operationControllers = new Map<string, AbortController>();
+  private readonly operationHistory: OperationHistoryItem[] = [];
+
+  constructor(private readonly historyLimit = 50) {}
 
   get activeCount(): number {
     return this.activeOperations.size;
@@ -72,6 +94,27 @@ export class ActiveOperationRegistry {
 
   list(): ActiveOperation[] {
     return [...this.activeOperations.values()];
+  }
+
+  history(limit = this.historyLimit): OperationHistoryItem[] {
+    const normalizedLimit = Number.isFinite(limit) && limit > 0
+      ? Math.min(Math.floor(limit), this.historyLimit)
+      : this.historyLimit;
+    return this.operationHistory.slice(-normalizedLimit).reverse();
+  }
+
+  replaceHistory(items: ReadonlyArray<OperationHistoryItem>): void {
+    this.operationHistory.splice(0, this.operationHistory.length, ...items.slice(-this.historyLimit));
+  }
+
+  mergeHistory(items: ReadonlyArray<OperationHistoryItem>): void {
+    const merged = new Map<string, OperationHistoryItem>();
+    for (const item of [...this.operationHistory, ...items]) {
+      merged.set(`${item.key}\u0000${item.completedAt}\u0000${item.status}`, item);
+    }
+    this.replaceHistory(
+      [...merged.values()].sort((left, right) => left.completedAt - right.completedAt),
+    );
   }
 
   latest(): ActiveOperation | null {
@@ -104,6 +147,17 @@ export class ActiveOperationRegistry {
   clear(key: string): void {
     this.activeOperations.delete(key);
     this.operationControllers.delete(key);
+  }
+
+  finish(key: string, input: OperationFinishInput): OperationHistoryItem | null {
+    const operation = this.activeOperations.get(key);
+    if (!operation) {
+      this.operationControllers.delete(key);
+      return null;
+    }
+    const historyItem = this.recordHistory(key, operation, input);
+    this.clear(key);
+    return historyItem;
   }
 
   touch(key: string, message: string): ActiveOperation | null {
@@ -139,14 +193,23 @@ export class ActiveOperationRegistry {
       this.cancelledAgentSessions.set(agentSessionId, Date.now());
     }
 
+    const history: OperationHistoryItem[] = [];
     for (const target of targets) {
       this.cancelledOperations.add(target);
       this.operationControllers.get(target)?.abort(operationCancelledError());
+      const operation = this.activeOperations.get(target);
+      if (operation) {
+        history.push(this.recordHistory(target, operation, {
+          status: "cancelled",
+          message: "用户已停止当前生成。",
+        }));
+      }
       this.clear(target);
     }
 
     return {
       targets: [...targets],
+      history,
       ...(agentSessionId ? { agentSessionId } : {}),
     };
   }
@@ -159,5 +222,28 @@ export class ActiveOperationRegistry {
       return false;
     }
     return clientStartedAt <= cancelledAt || clientStartedAt - cancelledAt < AGENT_CANCEL_SUPPRESSION_MS;
+  }
+
+  private recordHistory(
+    key: string,
+    operation: ActiveOperation,
+    input: OperationFinishInput,
+  ): OperationHistoryItem {
+    const completedAt = Date.now();
+    const historyItem: OperationHistoryItem = {
+      ...operation,
+      key,
+      status: input.status,
+      message: input.message ?? operation.message,
+      updatedAt: completedAt,
+      completedAt,
+      durationMs: Math.max(0, completedAt - operation.startedAt),
+      ...(input.error ? { error: input.error } : {}),
+    };
+    this.operationHistory.push(historyItem);
+    if (this.operationHistory.length > this.historyLimit) {
+      this.operationHistory.splice(0, this.operationHistory.length - this.historyLimit);
+    }
+    return historyItem;
   }
 }

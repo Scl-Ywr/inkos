@@ -12,6 +12,28 @@ export interface ServiceDetailDetectedConfig {
   readonly modelsSource?: "api" | "fallback";
 }
 
+export type ServiceCompatibilityStatus = "pass" | "warn" | "fail";
+
+export interface ServiceCompatibilityCheck {
+  readonly id: string;
+  readonly label: string;
+  readonly status: ServiceCompatibilityStatus;
+  readonly message: string;
+  readonly action?: string;
+}
+
+export interface ServiceCompatibilityReport {
+  readonly ok: boolean;
+  readonly level: ServiceCompatibilityStatus;
+  readonly summary: string;
+  readonly checks: ReadonlyArray<ServiceCompatibilityCheck>;
+  readonly recommended?: {
+    readonly apiFormat?: "chat" | "responses";
+    readonly stream?: boolean;
+    readonly maxTokens?: number;
+  };
+}
+
 export type ServiceDetailConnectionStatus =
   | { state: "idle" }
   | { state: "testing" }
@@ -27,6 +49,7 @@ export interface ServiceProbeResponse {
   readonly models?: ServiceDetailModelInfo[];
   readonly selectedModel?: string;
   readonly detected?: ServiceDetailDetectedConfig;
+  readonly compatibility?: ServiceCompatibilityReport;
   readonly error?: string;
 }
 
@@ -48,6 +71,7 @@ export async function probeServiceForDetail(
     readonly stream: boolean;
     readonly baseUrl?: string;
     readonly model?: string;
+    readonly diagnose?: boolean;
   },
   deps?: { readonly fetchJsonImpl?: JsonFetcher },
 ): Promise<ServiceProbeResponse> {

@@ -26,6 +26,76 @@ export class LogRingBuffer {
   }
 }
 
+export function normalizeLogLimit(value: unknown, fallback = 200): number {
+  const parsed = typeof value === "number"
+    ? value
+    : typeof value === "string"
+      ? Number.parseInt(value, 10)
+      : NaN;
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(Math.round(parsed), DEFAULT_LOG_BUFFER_SIZE);
+}
+
+function normalizeParsedLogEntry(value: unknown): LogEntry | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const message = typeof record.message === "string" ? record.message : "";
+  if (!message.trim()) return null;
+  return {
+    level: typeof record.level === "string" ? record.level as LogEntry["level"] : "info",
+    tag: typeof record.tag === "string" ? record.tag : "app",
+    message,
+    timestamp: typeof record.timestamp === "string" ? record.timestamp : new Date().toISOString(),
+  };
+}
+
+export function parseJsonLineLogEntries(content: string, limit: number): LogEntry[] {
+  return content
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+    .slice(-normalizeLogLimit(limit))
+    .map((line) => {
+      try {
+        return normalizeParsedLogEntry(JSON.parse(line));
+      } catch {
+        return {
+          level: "info" as const,
+          tag: "log",
+          message: line,
+          timestamp: new Date().toISOString(),
+        };
+      }
+    })
+    .filter((entry): entry is LogEntry => Boolean(entry));
+}
+
+function logEntryKey(entry: LogEntry): string {
+  return `${entry.timestamp}\u0000${entry.level}\u0000${entry.tag}\u0000${entry.message}`;
+}
+
+export function mergeLogEntries(
+  fileEntries: ReadonlyArray<LogEntry>,
+  memoryEntries: ReadonlyArray<LogEntry>,
+  limit: number,
+): LogEntry[] {
+  const merged = new Map<string, { entry: LogEntry; index: number }>();
+  [...fileEntries, ...memoryEntries].forEach((entry, index) => {
+    merged.set(logEntryKey(entry), { entry, index });
+  });
+
+  return [...merged.values()]
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.entry.timestamp);
+      const rightTime = Date.parse(right.entry.timestamp);
+      if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+        return leftTime - rightTime;
+      }
+      return left.index - right.index;
+    })
+    .map((item) => item.entry)
+    .slice(-normalizeLogLimit(limit));
+}
+
 export function formatUnknownError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

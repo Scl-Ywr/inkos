@@ -719,6 +719,37 @@ function isSystemRoleUnsupportedErrorText(text: string): boolean {
     || normalized.includes("不允许");
 }
 
+function isOpenAICompatibleRequestParameterErrorText(text: string): boolean {
+  const normalized = text.toLowerCase();
+  if (!normalized.includes("400")) return false;
+  return normalized.includes("parameter")
+    || normalized.includes("param")
+    || normalized.includes("max_tokens")
+    || normalized.includes("temperature")
+    || normalized.includes("messages")
+    || normalized.includes("role")
+    || normalized.includes("请求参数")
+    || normalized.includes("参数");
+}
+
+function shouldRetryWithConservativeChatPayload(
+  detail: string,
+  messages: ReadonlyArray<LLMMessage>,
+  resolved: { readonly maxTokens: number },
+): boolean {
+  if (!isOpenAICompatibleRequestParameterErrorText(detail)) return false;
+  return hasSystemMessages(messages) || resolved.maxTokens > 4096;
+}
+
+function conservativeChatResolved(
+  resolved: { readonly temperature: number; readonly maxTokens: number; readonly extra: Record<string, unknown> },
+): { readonly temperature: number; readonly maxTokens: number; readonly extra: Record<string, unknown> } {
+  return {
+    ...resolved,
+    maxTokens: Math.min(resolved.maxTokens, 4096),
+  };
+}
+
 async function readErrorResponse(res: Response): Promise<string> {
   const text = await res.text().catch(() => "");
   try {
@@ -1100,6 +1131,18 @@ async function chatCompletionViaCustomOpenAICompatible(
         model,
         foldSystemMessagesIntoFirstUser(messages),
         resolved,
+        onStreamProgress,
+        onTextDelta,
+        signal,
+        false,
+      );
+    }
+    if (allowSystemRoleFallback && shouldRetryWithConservativeChatPayload(detail, messages, resolved)) {
+      return chatCompletionViaCustomOpenAICompatible(
+        client,
+        model,
+        foldSystemMessagesIntoFirstUser(messages),
+        conservativeChatResolved(resolved),
         onStreamProgress,
         onTextDelta,
         signal,

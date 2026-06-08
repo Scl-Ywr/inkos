@@ -69,6 +69,7 @@ export const STUDIO_SSE_EVENTS = [
   "llm:progress",
   "operations:restore",
   "operations:update",
+  "operations:history",
   "ping",
 ] as const;
 

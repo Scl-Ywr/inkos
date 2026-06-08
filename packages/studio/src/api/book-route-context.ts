@@ -5,7 +5,7 @@ import type {
   ProjectConfig,
   StateManager,
 } from "@actalk/inkos-core";
-import type { ActiveOperationInput } from "./active-operations.js";
+import type { ActiveOperationInput, OperationFinishInput } from "./active-operations.js";
 
 export interface StudioBookListSummary {
   readonly chaptersWritten: number;
@@ -53,7 +53,7 @@ export interface BookChapterRoutesDeps {
   readonly setOperation: (key: string, op: ActiveOperationInput) => void;
   readonly createOperationController: (key: string) => AbortController;
   readonly isOperationCancelled: (key: string) => boolean;
-  readonly clearOperation: (key: string) => void;
+  readonly clearOperation: (key: string, outcome?: OperationFinishInput) => void;
   readonly isOperationAbortError: (error: unknown) => boolean;
   readonly rememberRuntimeNotice: (input: RuntimeNoticeInput) => void;
   readonly readRuntimeTokenUsage: (value: unknown) => RuntimeTokenUsage | undefined;

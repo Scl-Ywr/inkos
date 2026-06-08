@@ -58,6 +58,76 @@ describe("active operation registry", () => {
     expect(registry.activeCount).toBe(1);
   });
 
+  it("records completed operation history in newest-first order", () => {
+    const registry = new ActiveOperationRegistry();
+    registry.set("write:demo", {
+      type: "write",
+      bookId: "demo",
+      message: "starting",
+    });
+
+    vi.setSystemTime(new Date("2026-01-01T00:00:05.000Z"));
+    const finished = registry.finish("write:demo", {
+      status: "completed",
+      message: "done",
+    });
+
+    expect(finished).toMatchObject({
+      key: "write:demo",
+      type: "write",
+      bookId: "demo",
+      status: "completed",
+      message: "done",
+      completedAt: Date.now(),
+      durationMs: 5000,
+    });
+    expect(registry.activeCount).toBe(0);
+    expect(registry.history()).toEqual([finished]);
+    expect(registry.finish("missing", { status: "completed" })).toBeNull();
+  });
+
+  it("keeps operation history bounded", () => {
+    const registry = new ActiveOperationRegistry(2);
+
+    for (const bookId of ["a", "b", "c"]) {
+      registry.set(`write:${bookId}`, { type: "write", bookId });
+      registry.finish(`write:${bookId}`, { status: "completed" });
+    }
+
+    expect(registry.history().map((item) => item.key)).toEqual(["write:c", "write:b"]);
+  });
+
+  it("restores and merges persisted history without duplicating entries", () => {
+    const registry = new ActiveOperationRegistry(3);
+    const historyItem = {
+      key: "write:old",
+      type: "write" as const,
+      bookId: "old",
+      status: "completed" as const,
+      label: "章节写作",
+      message: "old done",
+      startedAt: 1,
+      updatedAt: 2,
+      completedAt: 2,
+      durationMs: 1,
+    };
+
+    registry.replaceHistory([historyItem]);
+    registry.mergeHistory([
+      historyItem,
+      {
+        ...historyItem,
+        key: "write:new",
+        bookId: "new",
+        message: "new done",
+        completedAt: 3,
+        updatedAt: 3,
+      },
+    ]);
+
+    expect(registry.history().map((item) => item.key)).toEqual(["write:new", "write:old"]);
+  });
+
   it("cancels matching agent operations and aborts their controllers", () => {
     const registry = new ActiveOperationRegistry();
     registry.set("agent:session-a", {
@@ -85,6 +155,8 @@ describe("active operation registry", () => {
     expect(childController.signal.aborted).toBe(true);
     expect(registry.get("agent:session-a")).toBeUndefined();
     expect(registry.get("agent:session-a:req-a")).toBeUndefined();
+    expect(result.history.map((item) => item.status)).toEqual(["cancelled", "cancelled"]);
+    expect(registry.history().map((item) => item.key)).toEqual(["agent:session-a:req-a", "agent:session-a"]);
     expect(registry.get("write:demo")).toBeDefined();
     expect(registry.isCancelled("agent:session-a")).toBe(true);
     expect(registry.isCancelled("agent:session-a:req-a")).toBe(true);
