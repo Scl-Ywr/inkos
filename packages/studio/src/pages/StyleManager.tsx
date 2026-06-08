@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { StudioSelect } from "../components/StudioSelect";
+import { mobileTextInputHandlers } from "../lib/mobile-input";
 import { Wand2, Upload, BarChart3 } from "lucide-react";
 
 interface StyleProfile {
@@ -49,11 +50,26 @@ export function StyleManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
   const [analyzeStatus, setAnalyzeStatus] = useState("");
   const [importBookId, setImportBookId] = useState("");
   const [importStatus, setImportStatus] = useState("");
+  const sourceNameRef = useRef<HTMLInputElement>(null);
+  const textRef = useRef<HTMLTextAreaElement>(null);
   const { data: booksData } = useApi<{ books: ReadonlyArray<BookSummary> }>("/books");
   const statusNotice = buildStyleStatusNotice(analyzeStatus, importStatus);
+  const sourceNameHandlers = mobileTextInputHandlers(setSourceName);
+  const textHandlers = mobileTextInputHandlers(setText);
+  const readInput = () => {
+    const nextText = textRef.current?.value ?? text;
+    const nextSourceName = sourceNameRef.current?.value ?? sourceName;
+    setText(nextText);
+    setSourceName(nextSourceName);
+    return {
+      text: nextText,
+      sourceName: nextSourceName,
+    };
+  };
 
   const handleAnalyze = async () => {
-    if (!text.trim()) return;
+    const input = readInput();
+    if (!input.text.trim()) return;
     setLoading(true);
     setProfile(null);
     setAnalyzeStatus("");
@@ -61,7 +77,7 @@ export function StyleManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
       const data = await fetchJson<StyleProfile>("/style/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, sourceName: sourceName || "sample" }),
+        body: JSON.stringify({ text: input.text, sourceName: input.sourceName || "sample" }),
       });
       setProfile(data);
     } catch (e) {
@@ -71,10 +87,11 @@ export function StyleManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
   };
 
   const handleImport = async () => {
-    if (!importBookId || !text.trim()) return;
+    const input = readInput();
+    if (!importBookId || !input.text.trim()) return;
     setImportStatus("Importing...");
     try {
-      await postApi(`/books/${importBookId}/style/import`, { text, sourceName: sourceName || "sample" });
+      await postApi(`/books/${importBookId}/style/import`, { text: input.text, sourceName: input.sourceName || "sample" });
       setImportStatus("Style guide imported successfully!");
     } catch (e) {
       setImportStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
@@ -100,9 +117,10 @@ export function StyleManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
           <div>
             <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground block mb-2">{t("style.sourceName")}</label>
             <input
+              ref={sourceNameRef}
               type="text"
-              value={sourceName}
-              onChange={(e) => setSourceName(e.target.value)}
+              defaultValue={sourceName}
+              {...sourceNameHandlers}
               placeholder={t("style.sourceExample")}
               className="w-full px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm focus:outline-none focus:border-primary"
             />
@@ -110,8 +128,9 @@ export function StyleManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
           <div>
             <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground block mb-2">{t("style.textSample")}</label>
             <textarea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
+              ref={textRef}
+              defaultValue={text}
+              {...textHandlers}
               rows={12}
               placeholder={t("style.pasteHint")}
               className="w-full px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm focus:outline-none focus:border-primary resize-none font-mono"
@@ -120,7 +139,7 @@ export function StyleManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
           <div className="flex gap-3">
             <button
               onClick={handleAnalyze}
-              disabled={!text.trim() || loading}
+              disabled={loading}
               className={`px-4 py-2 text-sm rounded-lg ${c.btnPrimary} disabled:opacity-30 flex items-center gap-2`}
             >
               <BarChart3 size={14} />

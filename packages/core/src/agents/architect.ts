@@ -722,7 +722,7 @@ You MUST emit all **5 SECTION blocks in order**: story_frame → volume_map → 
     if (language === "en") {
       return `# Story Bible (compat pointer — deprecated)\n\n> This file is kept for external readers only. The authoritative source is now:\n> - outline/story_frame.md (theme / tonal ground / core conflict / world rules / endgame)\n> - outline/volume_map.md (chapter-granular plot map)\n> - roles/ directory (one-file-per-character sheets)\n\n## Excerpt from story_frame\n\n${storyFrame.slice(0, 2000)}\n`;
     }
-    return `# 故事圣经（兼容指针——已废弃）\n\n> 本文件仅为外部读取保留。权威来源已迁移至：\n> - outline/story_frame.md（主题 / 基调 / 核心冲突 / 世界铁律 / 终局）\n> - outline/volume_map.md（章级别的分卷地图）\n> - roles/ 文件夹（一人一卡角色档案）\n\n## story_frame 摘录\n\n${storyFrame.slice(0, 2000)}\n`;
+  return `# 故事圣经（兼容指针 / 只读入口）\n\n> 本文件用于兼容旧入口和外部读取；真正用于写作的权威来源是：\n> - outline/story_frame.md（主题 / 基调 / 核心冲突 / 世界铁律 / 终局）\n> - outline/volume_map.md（分卷地图）\n> - roles/ 文件夹（一人一卡角色档案）\n\n## story_frame 摘录\n\n${storyFrame.slice(0, 2000)}\n`;
   }
 
   private buildCharacterMatrixShim(roles: ReadonlyArray<ArchitectRole>, language: "zh" | "en"): string {
@@ -734,7 +734,7 @@ You MUST emit all **5 SECTION blocks in order**: story_frame → volume_map → 
     if (language === "en") {
       return `# Character Matrix (compat pointer — deprecated)\n\n> This file is kept for external readers only. Authoritative source is now the roles/ directory (one-file-per-character).\n\n## Major characters\n\n${majorLines.join("\n") || "(none)"}\n\n## Minor characters\n\n${minorLines.join("\n") || "(none)"}\n`;
     }
-    return `# 角色矩阵（兼容指针——已废弃）\n\n> 本文件仅为外部读取保留。权威来源已迁移至 roles/ 文件夹（一人一卡）。\n\n## 主要角色\n\n${majorLines.join("\n") || "（无）"}\n\n## 次要角色\n\n${minorLines.join("\n") || "（无）"}\n`;
+  return `# 角色矩阵（兼容指针 / 只读入口）\n\n> 本文件用于兼容旧入口和外部读取；真正用于写作的权威来源是 roles/ 文件夹（一人一卡）。\n\n## 主要角色\n\n${majorLines.join("\n") || "（无）"}\n\n## 次要角色\n\n${minorLines.join("\n") || "（无）"}\n`;
   }
 
   private buildBookRulesShim(bookRulesBody: string, language: "zh" | "en"): string {
@@ -748,8 +748,8 @@ You MUST emit all **5 SECTION blocks in order**: story_frame → volume_map → 
     const excerpt = trimmedBody
       ? `\n\n## 叙事指引摘录\n\n${trimmedBody}\n`
       : "";
-    return `# 本书规则（兼容指针——已废弃）\n\n> 本文件仅为外部读取保留。权威 YAML frontmatter（protagonist / prohibitions / genreLock / ...）已迁移至 outline/story_frame.md 顶部。readBookRules() 优先读那里，只有 Phase 5 cleanup #3 之前的老书才会回退到本文件。${excerpt}`;
-  }
+  return `# 本书规则（兼容入口 / 只读指针）\n\n> 本文件是兼容指针，用于兼容旧入口和外部读取；权威 YAML frontmatter（protagonist / prohibitions / genreLock / ...）已迁移至 outline/story_frame.md 顶部。readBookRules() 优先读那里，只有更早版本创建的老书才会回退到本文件。${excerpt}`;
+}
 
   // -------------------------------------------------------------------------
   // File writing
@@ -795,6 +795,11 @@ You MUST emit all **5 SECTION blocks in order**: story_frame → volume_map → 
       await mkdir(rolesMajorDir, { recursive: true });
       await mkdir(rolesMinorDir, { recursive: true });
     }
+
+    const keepText = language === "zh"
+      ? "InkOS 本地数据目录占位文件，用于确保 Android 文件管理器可见，请保留。\n"
+      : "InkOS local data directory placeholder, kept so Android file managers can show this folder.\n";
+    writes.push(writeFile(join(outlineDir, "_keep.txt"), keepText, "utf-8"));
 
     if (!isPhase5Output) {
       writes.push(writeFile(join(storyDir, "story_bible.md"), output.storyBible, "utf-8"));

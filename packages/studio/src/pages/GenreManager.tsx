@@ -1,11 +1,13 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useI18n } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { StudioSelect } from "../components/StudioSelect";
+import { mobileTextInputHandlers } from "../lib/mobile-input";
+import { appAlert } from "../lib/app-dialog";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 
 interface GenreInfo {
@@ -72,24 +74,42 @@ function GenreForm({
 }: {
   readonly form: GenreFormData;
   readonly onChange: (next: GenreFormData) => void;
-  readonly onSubmit: () => void;
+  readonly onSubmit: (next: GenreFormData) => void;
   readonly onCancel: () => void;
   readonly isEdit: boolean;
   readonly c: ReturnType<typeof useColors>;
   readonly t: TFunction;
 }) {
+  const idRef = useRef<HTMLInputElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
+  const chapterTypesRef = useRef<HTMLInputElement>(null);
+  const fatigueWordsRef = useRef<HTMLInputElement>(null);
+  const pacingRuleRef = useRef<HTMLInputElement>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
   const set = <K extends keyof GenreFormData>(key: K, value: GenreFormData[K]) =>
     onChange({ ...form, [key]: value });
+  const textHandlers = <K extends keyof GenreFormData>(key: K) =>
+    mobileTextInputHandlers((value) => set(key, value as GenreFormData[K]));
+  const readForm = (): GenreFormData => ({
+    ...form,
+    id: idRef.current?.value ?? form.id,
+    name: nameRef.current?.value ?? form.name,
+    chapterTypes: chapterTypesRef.current?.value ?? form.chapterTypes,
+    fatigueWords: fatigueWordsRef.current?.value ?? form.fatigueWords,
+    pacingRule: pacingRuleRef.current?.value ?? form.pacingRule,
+    body: bodyRef.current?.value ?? form.body,
+  });
 
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-4">
+    <div className="min-w-0 space-y-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <label className="text-xs text-muted-foreground uppercase tracking-wide">ID</label>
           <input
+            ref={idRef}
             type="text"
-            value={form.id}
-            onChange={(e) => set("id", e.target.value)}
+            defaultValue={form.id}
+            {...textHandlers("id")}
             disabled={isEdit}
             className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm disabled:opacity-50"
           />
@@ -97,9 +117,10 @@ function GenreForm({
         <div>
           <label className="text-xs text-muted-foreground uppercase tracking-wide">{t("genre.name")}</label>
           <input
+            ref={nameRef}
             type="text"
-            value={form.name}
-            onChange={(e) => set("name", e.target.value)}
+            defaultValue={form.name}
+            {...textHandlers("name")}
             className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
           />
         </div>
@@ -123,9 +144,10 @@ function GenreForm({
           {t("genre.chapterTypes")} ({t("genre.commaSeparated")})
         </label>
         <input
+          ref={chapterTypesRef}
           type="text"
-          value={form.chapterTypes}
-          onChange={(e) => set("chapterTypes", e.target.value)}
+          defaultValue={form.chapterTypes}
+          {...textHandlers("chapterTypes")}
           className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
         />
       </div>
@@ -135,15 +157,16 @@ function GenreForm({
           {t("genre.fatigueWords")} ({t("genre.commaSeparated")})
         </label>
         <input
+          ref={fatigueWordsRef}
           type="text"
-          value={form.fatigueWords}
-          onChange={(e) => set("fatigueWords", e.target.value)}
+          defaultValue={form.fatigueWords}
+          {...textHandlers("fatigueWords")}
           className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
         />
       </div>
 
-      <div className="flex gap-6">
-        <label className="flex items-center gap-2 text-sm">
+      <div className="flex flex-wrap gap-3 sm:gap-6">
+        <label className="flex min-h-10 items-center gap-2 text-sm">
           <input
             type="checkbox"
             checked={form.numericalSystem}
@@ -151,7 +174,7 @@ function GenreForm({
           />
           {t("genre.numericalSystem")}
         </label>
-        <label className="flex items-center gap-2 text-sm">
+        <label className="flex min-h-10 items-center gap-2 text-sm">
           <input
             type="checkbox"
             checked={form.powerScaling}
@@ -159,7 +182,7 @@ function GenreForm({
           />
           {t("genre.powerScaling")}
         </label>
-        <label className="flex items-center gap-2 text-sm">
+        <label className="flex min-h-10 items-center gap-2 text-sm">
           <input
             type="checkbox"
             checked={form.eraResearch}
@@ -172,9 +195,10 @@ function GenreForm({
       <div>
         <label className="text-xs text-muted-foreground uppercase tracking-wide">{t("genre.pacingRule")}</label>
         <input
+          ref={pacingRuleRef}
           type="text"
-          value={form.pacingRule}
-          onChange={(e) => set("pacingRule", e.target.value)}
+          defaultValue={form.pacingRule}
+          {...textHandlers("pacingRule")}
           className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
         />
       </div>
@@ -182,18 +206,19 @@ function GenreForm({
       <div>
         <label className="text-xs text-muted-foreground uppercase tracking-wide">{t("genre.rulesMd")}</label>
         <textarea
-          value={form.body}
-          onChange={(e) => set("body", e.target.value)}
+          ref={bodyRef}
+          defaultValue={form.body}
+          {...textHandlers("body")}
           rows={6}
           className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono"
         />
       </div>
 
-      <div className="flex gap-2">
-        <button onClick={onSubmit} className={`px-4 py-2 text-sm rounded-md ${c.btnPrimary}`}>
+      <div className="flex flex-wrap gap-2">
+        <button onClick={() => onSubmit(readForm())} className={`min-h-10 rounded-md px-4 py-2 text-sm ${c.btnPrimary}`}>
           {isEdit ? t("genre.saveChanges") : t("genre.createNew")}
         </button>
-        <button onClick={onCancel} className={`px-4 py-2 text-sm rounded-md ${c.btnSecondary}`}>
+        <button onClick={onCancel} className={`min-h-10 rounded-md px-4 py-2 text-sm ${c.btnSecondary}`}>
           {t("genre.cancel")}
         </button>
       </div>
@@ -214,8 +239,11 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
   const [form, setForm] = useState<GenreFormData>(EMPTY_FORM);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
-  // Only show genres matching current language, plus custom project genres
-  const filteredGenres = data?.genres.filter((g) => g.language === lang || g.source === "project") ?? [];
+  // Keep the built-in list visible on mobile even if a runtime config uses a
+  // different language code or the language switch has not finished syncing.
+  const allGenres = data?.genres ?? [];
+  const languageGenres = allGenres.filter((g) => g.language === lang || g.source === "project");
+  const filteredGenres = languageGenres.length > 0 ? languageGenres : allGenres;
   const validSelected = selected && filteredGenres.some((g) => g.id === selected) ? selected : null;
   const selectedGenre = filteredGenres.find((g) => g.id === validSelected) ?? null;
 
@@ -223,7 +251,7 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
 
   const handleCopy = async (id: string) => {
     await postApi(`/genres/${id}/copy`);
-    alert(`Copied ${id} to project genres/`);
+    await appAlert({ title: "已复制", message: `Copied ${id} to project genres/`, tone: "success" });
     refetch();
   };
 
@@ -253,53 +281,55 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
     setFormMode("hidden");
   };
 
-  const handleCreate = async () => {
+  const handleCreate = async (nextForm = form) => {
+    setForm(nextForm);
     try {
       await postApi("/genres/create", {
-        id: form.id,
-        name: form.name,
-        language: form.language,
-        chapterTypes: parseCommaSeparated(form.chapterTypes),
-        fatigueWords: parseCommaSeparated(form.fatigueWords),
-        numericalSystem: form.numericalSystem,
-        powerScaling: form.powerScaling,
-        eraResearch: form.eraResearch,
-        pacingRule: form.pacingRule,
-        body: form.body,
+        id: nextForm.id,
+        name: nextForm.name,
+        language: nextForm.language,
+        chapterTypes: parseCommaSeparated(nextForm.chapterTypes),
+        fatigueWords: parseCommaSeparated(nextForm.fatigueWords),
+        numericalSystem: nextForm.numericalSystem,
+        powerScaling: nextForm.powerScaling,
+        eraResearch: nextForm.eraResearch,
+        pacingRule: nextForm.pacingRule,
+        body: nextForm.body,
       });
       setFormMode("hidden");
-      setSelected(form.id);
+      setSelected(nextForm.id);
       await refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to create genre");
+      await appAlert({ title: "创建失败", message: e instanceof Error ? e.message : "Failed to create genre", tone: "danger" });
     }
   };
 
-  const handleEdit = async () => {
+  const handleEdit = async (nextForm = form) => {
     if (!validSelected) return;
+    setForm(nextForm);
     try {
       await fetchJson(`/genres/${validSelected}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           profile: {
-            id: form.id,
-            name: form.name,
-            language: form.language,
-            chapterTypes: parseCommaSeparated(form.chapterTypes),
-            fatigueWords: parseCommaSeparated(form.fatigueWords),
-            numericalSystem: form.numericalSystem,
-            powerScaling: form.powerScaling,
-            eraResearch: form.eraResearch,
-            pacingRule: form.pacingRule,
+            id: nextForm.id,
+            name: nextForm.name,
+            language: nextForm.language,
+            chapterTypes: parseCommaSeparated(nextForm.chapterTypes),
+            fatigueWords: parseCommaSeparated(nextForm.fatigueWords),
+            numericalSystem: nextForm.numericalSystem,
+            powerScaling: nextForm.powerScaling,
+            eraResearch: nextForm.eraResearch,
+            pacingRule: nextForm.pacingRule,
           },
-          body: form.body,
+          body: nextForm.body,
         }),
       });
       setFormMode("hidden");
       await refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to update genre");
+      await appAlert({ title: "更新失败", message: e instanceof Error ? e.message : "Failed to update genre", tone: "danger" });
     }
   };
 
@@ -311,23 +341,23 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
       setSelected(null);
       await refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to delete genre");
+      await appAlert({ title: "删除失败", message: e instanceof Error ? e.message : "Failed to delete genre", tone: "danger" });
     }
   };
 
   return (
-    <div className="space-y-8">
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+    <div className="min-w-0 space-y-6 sm:space-y-8">
+      <div className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
         <button onClick={nav.toDashboard} className={c.link}>{t("bread.home")}</button>
         <span className="text-border">/</span>
-        <span>{t("create.genre")}</span>
+        <span className="truncate">{t("create.genre")}</span>
       </div>
 
-      <div className="flex items-center justify-between">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
         <h1 className="font-serif text-3xl">{t("create.genre")}</h1>
         <button
           onClick={openCreateForm}
-          className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md ${c.btnPrimary}`}
+          className={`inline-flex min-h-11 shrink-0 touch-manipulation items-center gap-1.5 rounded-full px-4 py-2 text-sm ${c.btnPrimary}`}
         >
           <Plus size={16} />
           {t("genre.createNew")}
@@ -335,7 +365,7 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
       </div>
 
       {formMode !== "hidden" && (
-        <div className={`border ${c.cardStatic} rounded-lg p-6`}>
+        <div className={`min-w-0 rounded-lg border p-4 sm:p-6 ${c.cardStatic}`}>
           <h2 className="text-lg font-medium mb-4">
             {formMode === "create" ? t("genre.createNew") : `${t("common.edit")}: ${form.id}`}
           </h2>
@@ -351,9 +381,9 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
         </div>
       )}
 
-      <div className="grid grid-cols-[250px_1fr] gap-6">
+      <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[250px_minmax(0,1fr)] lg:gap-6">
         {/* Genre list */}
-        <div className={`border ${c.cardStatic} rounded-lg overflow-hidden`}>
+        <div className={`min-w-0 overflow-hidden rounded-lg border ${c.cardStatic}`}>
           {filteredGenres.map((g) => (
             <button
               key={g.id}
@@ -363,7 +393,7 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
               }`}
             >
               <div className="text-sm font-medium">{g.name}</div>
-              <div className="text-xs text-muted-foreground mt-0.5">
+              <div className="mt-0.5 break-words text-xs text-muted-foreground">
                 {g.id} · {g.language} · {g.source}
               </div>
             </button>
@@ -371,23 +401,23 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
         </div>
 
         {/* Detail panel */}
-        <div className={`border ${c.cardStatic} rounded-lg p-6 min-h-[400px]`}>
+        <div className={`min-w-0 rounded-lg border p-4 sm:p-6 ${c.cardStatic}`}>
           {validSelected && detail ? (
-            <div className="space-y-6">
-              <div className="flex items-start justify-between">
-                <div>
-                  <h2 className="text-xl font-medium">{detail.profile.name}</h2>
-                  <div className="text-sm text-muted-foreground mt-1">
+            <div className="min-w-0 space-y-6">
+              <div className="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <h2 className="break-words text-xl font-medium">{detail.profile.name}</h2>
+                  <div className="mt-1 break-words text-sm text-muted-foreground">
                     {detail.profile.id} · {detail.profile.language} ·
                     {detail.profile.numericalSystem ? " Numerical" : ""}
                     {detail.profile.powerScaling ? " Power" : ""}
                     {detail.profile.eraResearch ? " Era" : ""}
                   </div>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex min-w-0 flex-wrap gap-2">
                   <button
                     onClick={openEditForm}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-sm ${c.btnSecondary} rounded-md`}
+                    className={`inline-flex min-h-10 touch-manipulation items-center gap-1.5 rounded-md px-3 py-2 text-sm ${c.btnSecondary}`}
                   >
                     <Pencil size={14} />
                     {t("common.edit")}
@@ -395,7 +425,7 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
                   {selectedGenre?.source === "project" && (
                     <button
                       onClick={() => setConfirmDeleteOpen(true)}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 text-sm ${c.btnDanger} rounded-md`}
+                      className={`inline-flex min-h-10 touch-manipulation items-center gap-1.5 rounded-md px-3 py-2 text-sm ${c.btnDanger}`}
                     >
                       <Trash2 size={14} />
                       {t("common.delete")}
@@ -403,7 +433,7 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
                   )}
                   <button
                     onClick={() => validSelected && handleCopy(validSelected)}
-                    className={`px-3 py-1.5 text-sm ${c.btnSecondary} rounded-md`}
+                    className={`min-h-10 touch-manipulation rounded-md px-3 py-2 text-sm ${c.btnSecondary}`}
                   >
                     {t("genre.copyToProject")}
                   </button>
@@ -414,7 +444,7 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
                 <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2">{t("genre.chapterTypes")}</div>
                 <div className="flex gap-2 flex-wrap">
                   {detail.profile.chapterTypes.map((ct) => (
-                    <span key={ct} className="px-2 py-1 text-xs bg-secondary rounded">{ct}</span>
+                    <span key={ct} className="max-w-full break-words rounded bg-secondary px-2 py-1 text-xs">{ct}</span>
                   ))}
                 </div>
               </div>
@@ -423,7 +453,7 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
                 <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2">{t("genre.fatigueWords")}</div>
                 <div className="flex gap-2 flex-wrap">
                   {detail.profile.fatigueWords.slice(0, 15).map((w) => (
-                    <span key={w} className="px-2 py-1 text-xs bg-secondary rounded">{w}</span>
+                    <span key={w} className="max-w-full break-words rounded bg-secondary px-2 py-1 text-xs">{w}</span>
                   ))}
                   {detail.profile.fatigueWords.length > 15 && (
                     <span className="text-xs text-muted-foreground">+{detail.profile.fatigueWords.length - 15}</span>
@@ -433,12 +463,12 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
 
               <div>
                 <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2">{t("genre.pacingRule")}</div>
-                <div className="text-sm">{detail.profile.pacingRule || "—"}</div>
+                <div className="break-words text-sm">{detail.profile.pacingRule || "—"}</div>
               </div>
 
               <div>
                 <div className="text-xs text-muted-foreground uppercase tracking-wide mb-2">{t("genre.rules")}</div>
-                <pre className="text-sm leading-relaxed whitespace-pre-wrap font-mono text-foreground/80 bg-muted/30 p-4 rounded-md max-h-[300px] overflow-y-auto">
+                <pre className="max-h-[300px] max-w-full overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-muted/30 p-4 font-mono text-sm leading-relaxed text-foreground/80">
                   {detail.body || "—"}
                 </pre>
               </div>

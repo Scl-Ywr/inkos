@@ -6,11 +6,13 @@ import { SidebarCard } from "./SidebarCard";
 import { loadArtifactContent, prefetchArtifactContents } from "./artifact-content-cache";
 
 const FOUNDATION_FILES: ReadonlyArray<{ file: string; label: string }> = [
-  { file: "story_bible.md", label: "世界观设定" },
-  { file: "volume_outline.md", label: "卷纲规划" },
+  { file: "outline/story_frame.md", label: "世界观设定" },
+  { file: "outline/volume_map.md", label: "卷纲规划" },
   { file: "book_rules.md", label: "叙事规则" },
   { file: "current_state.md", label: "状态卡" },
   { file: "pending_hooks.md", label: "伏笔池" },
+  { file: "particle_ledger.md", label: "资源账本" },
+  { file: "chapter_summaries.md", label: "章节摘要" },
   { file: "subplot_board.md", label: "支线进度" },
   { file: "emotional_arcs.md", label: "感情线" },
   { file: "character_matrix.md", label: "角色矩阵" },
@@ -72,7 +74,7 @@ export function FoundationSection({ bookId }: FoundationSectionProps) {
   if (available.length === 0) return null;
 
   return (
-    <SidebarCard title="核心文件">
+    <SidebarCard title="核心文件" stateKey={`${bookId}:foundation`}>
       <ul className="space-y-1">
         {available.map((item) => (
           <li key={item.file}>

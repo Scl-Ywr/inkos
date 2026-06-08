@@ -19,7 +19,21 @@ export interface ChatPageSessionSummary {
   readonly messageCount: number;
 }
 
+export interface ComposerTextSyncInput {
+  readonly storeInput: string;
+  readonly composerText: string;
+  readonly elementValue: string | null;
+  readonly elementFocused: boolean;
+}
+
+export interface ComposerTextSyncResult {
+  readonly text: string;
+  readonly syncStoreText: string | null;
+  readonly syncElementText: string | null;
+}
+
 const BOOK_CREATE_SESSION_KEY = "inkos.book-create.session-id";
+const BOOK_CREATE_ASSISTANT_INPUT_KEY = "inkos.book-create.assistant-input";
 const PROJECT_CHAT_SESSION_KEY = "inkos.project-chat.session-id";
 
 export function getBookCreateSessionId(): string | null {
@@ -32,6 +46,22 @@ export function setBookCreateSessionId(sessionId: string): void {
 
 export function clearBookCreateSessionId(): void {
   globalThis.localStorage?.removeItem(BOOK_CREATE_SESSION_KEY);
+}
+
+export function getBookCreateAssistantInput(): string {
+  return globalThis.localStorage?.getItem(BOOK_CREATE_ASSISTANT_INPUT_KEY) ?? "";
+}
+
+export function setBookCreateAssistantInput(input: string): void {
+  if (input.length > 0) {
+    globalThis.localStorage?.setItem(BOOK_CREATE_ASSISTANT_INPUT_KEY, input);
+  } else {
+    globalThis.localStorage?.removeItem(BOOK_CREATE_ASSISTANT_INPUT_KEY);
+  }
+}
+
+export function clearBookCreateAssistantInput(): void {
+  globalThis.localStorage?.removeItem(BOOK_CREATE_ASSISTANT_INPUT_KEY);
 }
 
 export function getProjectChatSessionId(): string | null {
@@ -109,4 +139,26 @@ export function pickProjectChatSessionId(
   return sessions.find((session) => session.messageCount > 0)?.sessionId
     ?? sessions[0]?.sessionId
     ?? null;
+}
+
+export function resolveComposerTextSync(input: ComposerTextSyncInput): ComposerTextSyncResult {
+  const liveElementText = input.elementValue ?? input.composerText;
+
+  if (input.elementFocused && liveElementText !== input.storeInput) {
+    return {
+      text: liveElementText,
+      syncStoreText: liveElementText,
+      syncElementText: null,
+    };
+  }
+
+  const nextText = input.storeInput.length === 0 && input.composerText.length > 0
+    ? input.composerText
+    : input.storeInput;
+
+  return {
+    text: nextText,
+    syncStoreText: nextText !== input.storeInput ? nextText : null,
+    syncElementText: input.elementValue !== null && input.elementValue !== nextText ? nextText : null,
+  };
 }

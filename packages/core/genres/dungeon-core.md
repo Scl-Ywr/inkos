@@ -1,40 +1,25 @@
 ---
-name: Dungeon Core
+name: 地城经营
 id: dungeon-core
-language: en
-chapterTypes: ["Strategy", "Adventurer POV", "Setup", "Transition", "Payoff"]
-fatigueWords: ["delve", "tapestry", "testament", "intricate", "pivotal", "vibrant", "comprehensive", "nuanced", "embark", "foster", "underscore", "bolstered", "crucial"]
+language: zh
+chapterTypes: ["建设章", "防守章", "招募章", "资源章", "入侵章", "扩张章"]
+fatigueWords: ["地城", "核心", "怪物", "陷阱", "资源", "冒险者", "升级"]
 numericalSystem: true
-powerScaling: false
+powerScaling: true
 eraResearch: false
-pacingRule: "Alternate dungeon POV (planning/building) with adventurer POV (exploration/combat) every 1-2 chapters. Expansion milestone every 5-8 chapters."
-satisfactionTypes: ["Trap Success", "Floor Expansion", "Minion Evolution", "Adventurer Defeated", "Resource Milestone", "Core Upgrade"]
-auditDimensions: [1,2,3,4,5,6,7,8,9,10,11,13,14,15,16,17,18,19,24,25,26]
+pacingRule: "每2-4章完成一次建设或防守收益，并立刻引入更高阶入侵者或资源压力。"
+satisfactionTypes: ["基地扩建", "陷阱反杀", "眷属成长", "资源循环", "势力扩张"]
+auditDimensions: [1, 2, 3, 4, 5, 8, 9, 10, 12, 14, 15, 17, 18, 20, 24, 25, 26]
 ---
 
-## Genre Prohibitions
+## 经营规则
 
-- Dungeon leaving its location — immobility is the core constraint, not a bug
-- No consequence for poor trap design or weak minions — adventurers must punish strategic failure
-- Overemphasis on adventurer POV (>70%) — this is dungeon core, not dungeon crawl
-- Lone-wolf dungeon with zero NPC dialogue or relationships
-- Resource management without scarcity — dungeon must make meaningful choices between defense, expansion, and treasure
-- Dungeon core invulnerable or never at risk — core vulnerability is the central tension
+地城不是静态地图，要有资源输入、建设消耗、防御收益、维护成本和生态平衡。
 
-## Non-Human POV Rules
+每个新房间、新怪物、新陷阱都要改变战术，而不是只增加数值。
 
-- Establish dungeon's sensory and cognitive limitations clearly — it "feels" through mana flows, vibrations, minion senses
-- Split POV works best: dungeon core chapters (strategic, omniscient within dungeon) alternating with adventurer/NPC chapters (ground-level human perspective)
-- Dungeon may think differently: slower consciousness, different time perception, alien emotional range
-- Dungeon learns about the outside world through adventurers, scouts, or other filtered means
-- Show the dungeon learning and adapting: "Adventurers bypassed arrow trap by..." leads to next iteration improvements
+## 题材禁忌
 
-## Pacing Guidance
+不要让入侵者只负责送经验；他们要有侦查、误判、撤退、联络外部势力等行为。
 
-- Early: Simple dungeon (3-4 rooms, basic traps, weak monsters). Dungeon learns the system
-- Mid: Expanding territory, specialized rooms, sophisticated trap combinations, creature breeding
-- Late: Sprawling complex, hundreds of minions, political relationships with other dungeons/factions, regional economic impact
-- Dungeon POV chapters (2-3k words): internal monologue, planning, resource management, strategy
-- Adventurer POV chapters (2-3k words): exploration, discovery, combat, adaptation
-- End dungeon chapters on suspense (adventurers approaching); end adventurer chapters revealing dungeon's plan
-- Each room/trap/creature must feel purposeful — readers enjoy creative dungeon design with clear strategic reasoning
+主角作为核心时要体现非人视角：领地感、资源感、眷属感，以及对人类伦理的偏差理解。

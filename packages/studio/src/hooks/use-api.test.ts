@@ -63,6 +63,25 @@ describe("fetchJson", () => {
       "最新第 1 章处于状态降级（state-degraded）。继续写下一章前，请先修复状态，或重写这一章。",
     );
   });
+
+  it("bypasses browser cache for GET requests", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await fetchJson("/books/demo/chapters/3", {}, { fetchImpl });
+
+    expect(fetchImpl).toHaveBeenCalledWith("/api/v1/books/demo/chapters/3", expect.objectContaining({
+      cache: "no-store",
+      headers: expect.objectContaining({
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache",
+      }),
+    }));
+  });
 });
 
 describe("deriveInvalidationPaths", () => {
@@ -74,6 +93,7 @@ describe("deriveInvalidationPaths", () => {
     expect(deriveInvalidationPaths("/books/demo/write-next")).toEqual([
       "/api/v1/books",
       "/api/v1/books/demo",
+      "/api/v1/books/demo/chapters/*",
     ]);
     expect(deriveInvalidationPaths("/books/demo/chapters/3/approve")).toEqual([
       "/api/v1/books",

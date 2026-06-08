@@ -1,12 +1,14 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
+import { buildApiUrl } from "../lib/api-url";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useServiceStore } from "../store/service";
-import type { SSEMessage } from "../hooks/use-sse";
+import type { ActiveOperation, SSEMessage } from "../hooks/use-sse";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { deriveActiveBookIds, shouldRefetchBookCollections } from "../hooks/use-book-activity";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { appAlert } from "../lib/app-dialog";
 import {
   Plus,
   BookOpen,
@@ -54,6 +56,11 @@ interface CurrentTask {
   readonly label: string;
   readonly status: "running" | "complete" | "error";
   readonly timestamp: number;
+}
+
+interface DashboardSseState {
+  readonly messages: ReadonlyArray<SSEMessage>;
+  readonly activeOperations?: ReadonlyArray<ActiveOperation>;
 }
 
 const TASK_LABELS: Record<string, string> = {
@@ -158,6 +165,33 @@ function getCurrentTask(messages: ReadonlyArray<SSEMessage>): CurrentTask | null
     label: operation.type === "agent" ? "Agent 正在执行" : "任务正在执行",
     status: "running",
     timestamp: restored?.timestamp ?? Date.now(),
+  };
+}
+
+function isWritingOperation(operation: ActiveOperation): boolean {
+  return operation.type === "write" || operation.type === "rewrite" || operation.type === "agent";
+}
+
+function deriveBackendActiveBookIds(operations: ReadonlyArray<ActiveOperation> | undefined): ReadonlySet<string> {
+  const active = new Set<string>();
+  for (const operation of operations ?? []) {
+    if (operation.bookId && operation.bookId !== "project" && isWritingOperation(operation)) {
+      active.add(operation.bookId);
+    }
+  }
+  return active;
+}
+
+function getCurrentTaskFromOperations(operations: ReadonlyArray<ActiveOperation> | undefined): CurrentTask | null {
+  const operation = [...(operations ?? [])]
+    .filter((item) => item.status !== "complete" && item.status !== "error")
+    .sort((a, b) => (b.updatedAt ?? b.startedAt ?? 0) - (a.updatedAt ?? a.startedAt ?? 0))[0];
+  if (!operation) return null;
+  return {
+    bookId: operation.bookId && operation.bookId !== "project" ? operation.bookId : null,
+    label: operation.label ?? (operation.type === "agent" ? "AI 对话正在执行" : "任务正在执行"),
+    status: "running",
+    timestamp: operation.updatedAt ?? operation.startedAt ?? Date.now(),
   };
 }
 
@@ -311,7 +345,7 @@ function BookMenu({ bookId, bookTitle, nav, t, onDelete, onOpenChange }: {
             {t("book.settings")}
           </button>
           <a
-            href={`/api/v1/books/${bookId}/export?format=txt`}
+            href={buildApiUrl(`/books/${bookId}/export?format=txt`) ?? "#"}
             download
             onClick={() => setOpen(false)}
             className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-foreground hover:bg-secondary/50 transition-colors cursor-pointer"
@@ -343,18 +377,27 @@ function BookMenu({ bookId, bookTitle, nav, t, onDelete, onOpenChange }: {
   );
 }
 
-export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: ReadonlyArray<SSEMessage> }; theme: Theme; t: TFunction }) {
+export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: DashboardSseState; theme: Theme; t: TFunction }) {
   const c = useColors(theme);
   const [menuOpenBookId, setMenuOpenBookId] = useState<string | null>(null);
   const { data, loading, error, refetch } = useApi<{ books: ReadonlyArray<BookSummary> }>("/books");
-  const writingBooks = useMemo(() => deriveActiveBookIds(sse.messages), [sse.messages]);
+  const writingBooks = useMemo(() => {
+    const active = new Set(deriveActiveBookIds(sse.messages));
+    for (const bookId of deriveBackendActiveBookIds(sse.activeOperations)) {
+      active.add(bookId);
+    }
+    return active;
+  }, [sse.activeOperations, sse.messages]);
   const serviceStoreServices = useServiceStore((s) => s.services);
   const fetchServices = useServiceStore((s) => s.fetchServices);
   useEffect(() => { void fetchServices(); }, [fetchServices]);
   const hasServices = serviceStoreServices.some((s) => s.connected);
 
   const progressEvent = sse.messages.filter((m) => m.event === "llm:progress").slice(-1)[0];
-  const currentTask = useMemo(() => getCurrentTask(sse.messages), [sse.messages]);
+  const currentTask = useMemo(
+    () => getCurrentTaskFromOperations(sse.activeOperations) ?? getCurrentTask(sse.messages),
+    [sse.activeOperations, sse.messages],
+  );
   const currentTaskLogs = useMemo(() => getRecentTaskLogs(sse.messages), [sse.messages]);
 
   useEffect(() => {
@@ -526,7 +569,7 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
                   <button
                     onClick={async () => {
                       try { await postApi(`/books/${book.id}/write-next`); }
-                      catch (e) { alert(e instanceof Error ? e.message : "Write failed"); }
+                      catch (e) { await appAlert({ title: "写作启动失败", message: e instanceof Error ? e.message : "Write failed", tone: "danger" }); }
                     }}
                     disabled={isWriting}
                     className={`flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-bold transition-all shadow-sm sm:flex-none sm:px-6 sm:py-3 ${

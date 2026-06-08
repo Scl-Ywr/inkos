@@ -7,11 +7,8 @@ import {
   PipelineRunner,
   createLLMClient,
   createLogger,
-  createInteractionToolsFromDeps,
-  computeAnalytics,
   loadProjectConfig,
   loadProjectSession,
-  processProjectInteractionRequest,
   resolveSessionActiveBook,
   listBookSessions,
   loadBookSession,
@@ -19,6 +16,7 @@ import {
   createAndPersistBookSession,
   renameBookSession,
   deleteBookSession,
+  deleteBookSessionMessage,
   migrateBookSession,
   SessionAlreadyMigratedError,
   runAgentSession,
@@ -28,30 +26,65 @@ import {
   resolveServiceModelsBaseUrl,
   resolveServiceModel,
   loadSecrets,
-  saveSecrets,
   listModelsForService,
-  isApiKeyOptionalForEndpoint,
   getAllEndpoints,
-  probeModelsFromUpstream,
   fetchWithProxy,
   chatCompletion,
-  buildExportArtifact,
+  getHeadroomSavingsTelemetry,
+  diffHeadroomSavingsTelemetry,
+  GLOBAL_CONFIG_DIR,
   GLOBAL_ENV_PATH,
-  COVER_PROVIDER_PRESETS,
   Scheduler,
-  coverSecretKey,
-  resolveCoverProviderPreset,
-  type ResolvedModel,
   type PipelineConfig,
   type ProjectConfig,
+  type LLMConfig,
+  type AgentSessionConfig,
   type LogSink,
   type LogEntry,
+  type FileAuditEvent,
 } from "@actalk/inkos-core";
 import { access, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { isSafeBookId } from "./safety.js";
 import { ApiError } from "./errors.js";
-import { buildStudioBookConfig } from "./book-create.js";
+import {
+  extractToolError as extractToolResultError,
+  summarizeToolResult,
+} from "../lib/tool-result.js";
+import {
+  DEFAULT_LOG_BUFFER_SIZE,
+  LogRingBuffer,
+  formatFileAuditMessage,
+  formatUnknownError,
+  writeConsoleLogEntry,
+} from "./server-logs.js";
+import {
+  ActiveOperationRegistry,
+  agentSessionIdFromOperationKey,
+  operationCancelledError,
+  type ActiveOperationInput,
+} from "./active-operations.js";
+import { AgentRequestResultCache } from "./agent-request-results.js";
+import { registerRuntimeRoutes } from "./runtime-routes.js";
+import { registerServiceModelRoutes } from "./service-routes.js";
+import { registerBookChapterRoutes } from "./book-chapter-routes.js";
+import {
+  buildDefaultStudioProjectConfig,
+  ensureProjectStorageSkeleton,
+  repairBookResourceLayout,
+  repairProjectResourceIndex,
+  repairStudioStartupCompatibility,
+  shouldRefreshDerivedFoundationFile,
+  type StorageRepairEntry,
+} from "./storage-repair.js";
+import {
+  isCustomServiceId,
+  normalizeServiceConfig,
+  serviceConfigKey,
+  type EnvConfigStatus,
+  type EnvConfigSummary,
+  type ServiceConfigEntry,
+} from "./service-config-utils.js";
 
 // -- Pipeline stage definitions per agent type --
 
@@ -88,31 +121,7 @@ function resolveToolLabel(tool: string, agent?: string): string {
 }
 
 function summarizeResult(result: unknown): string {
-  if (typeof result === "string") return result.slice(0, 200);
-  if (result && typeof result === "object") {
-    const r = result as Record<string, unknown>;
-    if (typeof r.content === "string") return r.content.slice(0, 200);
-    if (typeof r.text === "string") return r.text.slice(0, 200);
-  }
-  return String(result).slice(0, 200);
-}
-
-function compareServiceListItems(
-  left: { readonly service: string },
-  right: { readonly service: string },
-): number {
-  const priority = ["kkaiapi", "openrouter", "newapi", "siliconcloud"];
-  const leftPriority = priority.indexOf(left.service);
-  const rightPriority = priority.indexOf(right.service);
-  if (leftPriority !== -1 || rightPriority !== -1) {
-    return (leftPriority === -1 ? 999 : leftPriority) - (rightPriority === -1 ? 999 : rightPriority);
-  }
-  return 0;
-}
-
-function isHeaderSafeApiKey(value: string): boolean {
-  if (!value) return true;
-  return /^[\x21-\x7E]+$/.test(value);
+  return summarizeToolResult(result, { maxLength: 200 });
 }
 
 const NON_TEXT_MODEL_ID_PARTS = [
@@ -161,16 +170,7 @@ function nonTextModelMessage(modelId: string): string {
 }
 
 function extractToolError(result: unknown): string {
-  if (typeof result === "string") return result.slice(0, 500);
-  if (result && typeof result === "object") {
-    const r = result as Record<string, unknown>;
-    if (typeof r.content === "string") return r.content.slice(0, 500);
-    if (r.content && Array.isArray(r.content)) {
-      const textPart = r.content.find((c: any) => c.type === "text");
-      if (textPart) return (textPart as any).text?.slice(0, 500) ?? "";
-    }
-  }
-  return String(result).slice(0, 500);
+  return extractToolResultError(result, { maxLength: 500 });
 }
 
 function resolveProjectImageFile(root: string, rawPath: string): { readonly resolved: string; readonly contentType: string } {
@@ -502,70 +502,237 @@ type EventHandler = (event: string, data: unknown) => void;
 const subscribers = new Set<EventHandler>();
 const bookCreateStatus = new Map<string, { status: "creating" | "error"; error?: string }>();
 
-// Track active operations for session recovery after page refresh
-interface ActiveOperation {
-  readonly type: "write" | "rewrite" | "agent" | "revise";
-  readonly bookId: string;
-  readonly startedAt: number;
-  readonly sessionId?: string;
-  readonly chapter?: number;
-  readonly instruction?: string;
-}
-const activeOperations = new Map<string, ActiveOperation>();
-function setOperation(key: string, op: Omit<ActiveOperation, "startedAt">) {
-  activeOperations.set(key, { ...op, startedAt: Date.now() });
-}
-function clearOperation(key: string) {
-  activeOperations.delete(key);
+const operationRegistry = new ActiveOperationRegistry();
+
+const agentRequestResults = new AgentRequestResultCache();
+let lastRuntimeNotice: {
+  readonly id: string;
+  readonly kind: "completed" | "error";
+  readonly title: string;
+  readonly message: string;
+  readonly createdAt: number;
+  readonly tokenUsage?: RuntimeTokenUsage;
+  readonly tokenSavings?: RuntimeTokenSavings;
+} | null = null;
+
+interface RuntimeTokenUsage {
+  readonly promptTokens: number;
+  readonly completionTokens: number;
+  readonly totalTokens: number;
 }
 
-// --- Log buffer (ring buffer, keeps last N entries) ---
-const LOG_BUFFER_SIZE = 500;
-const logBuffer: LogEntry[] = [];
+interface RuntimeTokenSavings {
+  readonly estimatedTokensSaved: number;
+}
+
+function rememberAgentRequestResult(
+  sessionId: string,
+  requestId: string | undefined,
+  payload: Record<string, unknown>,
+  status: number,
+): void {
+  agentRequestResults.remember(sessionId, requestId, payload, status);
+}
+
+function rememberRuntimeNotice(input: {
+  readonly kind: "completed" | "error";
+  readonly title: string;
+  readonly message: string;
+  readonly tokenUsage?: RuntimeTokenUsage;
+  readonly tokenSavings?: RuntimeTokenSavings;
+}): void {
+  lastRuntimeNotice = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: Date.now(),
+    ...input,
+  };
+  persistRuntimeProgress();
+}
+
+function readRuntimeTokenUsage(value: unknown): RuntimeTokenUsage | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const promptTokens = typeof record.promptTokens === "number" && Number.isFinite(record.promptTokens)
+    ? Math.max(0, Math.floor(record.promptTokens))
+    : 0;
+  const completionTokens = typeof record.completionTokens === "number" && Number.isFinite(record.completionTokens)
+    ? Math.max(0, Math.floor(record.completionTokens))
+    : 0;
+  const totalTokens = typeof record.totalTokens === "number" && Number.isFinite(record.totalTokens)
+    ? Math.max(0, Math.floor(record.totalTokens))
+    : promptTokens + completionTokens;
+  if (totalTokens <= 0) return undefined;
+  return { promptTokens, completionTokens, totalTokens };
+}
+
+function readRuntimeTokenSavings(value: unknown): RuntimeTokenSavings | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const estimatedTokensSaved = typeof record.estimatedTokensSaved === "number" && Number.isFinite(record.estimatedTokensSaved)
+    ? Math.max(0, Math.floor(record.estimatedTokensSaved))
+    : 0;
+  return estimatedTokensSaved > 0 ? { estimatedTokensSaved } : undefined;
+}
+
+function appendRuntimeTokenSummary(
+  message: string,
+  tokenUsage?: RuntimeTokenUsage,
+  tokenSavings?: RuntimeTokenSavings,
+): string {
+  const parts = [message.trim()];
+  if (tokenUsage && tokenUsage.totalTokens > 0) {
+    parts.push(`消耗 ${tokenUsage.totalTokens.toLocaleString()} tokens（输入 ${tokenUsage.promptTokens.toLocaleString()} / 输出 ${tokenUsage.completionTokens.toLocaleString()}）`);
+  }
+  if (tokenSavings && tokenSavings.estimatedTokensSaved > 0) {
+    parts.push(`估算节省 ${tokenSavings.estimatedTokensSaved.toLocaleString()} tokens`);
+  }
+  return parts.filter(Boolean).join(" · ");
+}
+
+function isOperationCancelled(key: string): boolean {
+  return operationRegistry.isCancelled(key);
+}
+
+function isOperationAbortError(error: unknown): boolean {
+  if (error instanceof ApiError && error.code === "OPERATION_CANCELLED") return true;
+  if (error instanceof Error && error.name === "OperationCancelledError") return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /用户已停止当前生成|operation_cancelled|aborted|aborterror|cancelled/i.test(message);
+}
+
+function isCancellationResult(data: Record<string, unknown>, status: number): boolean {
+  if (status === 499) return true;
+  const error = data.error;
+  const response = data.response;
+  const text = typeof response === "string"
+    ? response
+    : error && typeof error === "object"
+      ? JSON.stringify(error)
+      : typeof error === "string"
+        ? error
+        : "";
+  return /用户已停止当前生成|operation_cancelled|cancelled/i.test(text);
+}
+
+function shouldRejectCancelledAgentRequest(sessionId: string, clientStartedAt: number): boolean {
+  return operationRegistry.shouldRejectCancelledAgentRequest(sessionId, clientStartedAt);
+}
+
+function markOperationCancelled(key: string): void {
+  operationRegistry.markCancelled(key);
+  persistRuntimeProgress();
+  broadcastOperationsUpdate();
+  serverLog("warn", "operation-cancel", `已停止运行任务：${key}`);
+}
+
+function createOperationController(key: string): AbortController {
+  return operationRegistry.createController(key);
+}
+
+function setOperation(key: string, op: ActiveOperationInput): void {
+  operationRegistry.set(key, op);
+  persistRuntimeProgress();
+  broadcastOperationsUpdate();
+}
+
+function clearOperation(key: string): void {
+  operationRegistry.clear(key);
+  persistRuntimeProgress();
+  broadcastOperationsUpdate();
+}
+
+function persistRuntimeProgress(extra?: { readonly message?: string }): void {
+  const progressPath = process.env.INKOS_NODE_PROGRESS;
+  if (!progressPath) return;
+  const active = operationRegistry.latest();
+  const payload = active
+    ? {
+        state: "busy",
+        label: active.label,
+        message: extra?.message ?? active.message,
+        type: active.type,
+        bookId: active.bookId,
+        chapter: active.chapter ?? null,
+        sessionId: active.sessionId ?? null,
+        startedAt: active.startedAt,
+        updatedAt: Date.now(),
+        activeCount: operationRegistry.activeCount,
+        notice: lastRuntimeNotice,
+      }
+    : {
+        state: "idle",
+        label: "待命",
+        message: "本地 Node 后端正在运行，暂无写作任务。",
+        updatedAt: Date.now(),
+        activeCount: 0,
+        notice: lastRuntimeNotice,
+      };
+  writeFile(progressPath, JSON.stringify(payload, null, 2), "utf-8").catch(() => undefined);
+}
+
+function touchOperation(key: string, message: string): void {
+  const current = operationRegistry.touch(key, message);
+  if (!current) {
+    persistRuntimeProgress({ message });
+    return;
+  }
+  persistRuntimeProgress({ message });
+  broadcastOperationsUpdate();
+}
+
+function broadcastOperationsUpdate(): void {
+  broadcast("operations:update", { operations: operationRegistry.list() });
+}
+
+const logBuffer = new LogRingBuffer(DEFAULT_LOG_BUFFER_SIZE);
 function pushLog(entry: LogEntry): void {
   logBuffer.push(entry);
-  if (logBuffer.length > LOG_BUFFER_SIZE) {
-    logBuffer.splice(0, logBuffer.length - LOG_BUFFER_SIZE);
-  }
 }
 
 /** Quick server-side log that goes to buffer + SSE broadcast + console */
 function serverLog(level: LogEntry["level"], tag: string, message: string): void {
   const entry: LogEntry = { level, tag, message, timestamp: new Date().toISOString() };
   pushLog(entry);
+  if (operationRegistry.activeCount > 0) {
+    const latest = operationRegistry.latestEntry();
+    if (latest) {
+      touchOperation(latest.key, message);
+    } else {
+      persistRuntimeProgress({ message });
+    }
+  }
   broadcast("log", { level: entry.level, tag: entry.tag, message: entry.message, timestamp: entry.timestamp });
-  if (level === "error") console.error(`[${tag}]`, message);
-  else if (level === "warn") console.warn(`[${tag}]`, message);
-  else console.log(`[${tag}]`, message);
+  writeConsoleLogEntry(entry);
 }
 
-// 内存缓存：service -> 模型列表 + 更新时间戳；避免每次 sidebar 挂载时都打真实 LLM /models
-const modelListCache = new Map<string, { models: Array<{ id: string; name: string }>; at: number }>();
-
-interface ServiceConfigEntry {
-  service: string;
-  name?: string;
-  baseUrl?: string;
-  temperature?: number;
-  apiFormat?: "chat" | "responses";
-  stream?: boolean;
-}
-
-type LLMConfigSource = "env" | "studio";
-
-interface EnvConfigSummary {
-  detected: boolean;
-  provider: string | null;
-  baseUrl: string | null;
-  model: string | null;
-  hasApiKey: boolean;
-}
-
-interface EnvConfigStatus {
-  project: EnvConfigSummary;
-  global: EnvConfigSummary;
-  effectiveSource: "project" | "global" | null;
-  runtimeUsesEnv: false;
+function emitStudioFileAudit(
+  event: FileAuditEvent,
+  context?: {
+    readonly sessionId?: string;
+    readonly bookId?: string;
+  },
+): void {
+  const message = formatFileAuditMessage(event);
+  const entry: LogEntry = {
+    level: "info",
+    tag: "file-audit",
+    message,
+    timestamp: new Date().toISOString(),
+  };
+  pushLog(entry);
+  if (operationRegistry.activeCount > 0) {
+    persistRuntimeProgress({ message });
+  }
+  broadcast("log", {
+    sessionId: context?.sessionId,
+    bookId: event.bookId ?? context?.bookId,
+    level: entry.level,
+    tag: entry.tag,
+    message: entry.message,
+    timestamp: entry.timestamp,
+    audit: event,
+  });
+  writeConsoleLogEntry(entry);
 }
 
 interface ServiceProbeResult {
@@ -657,113 +824,6 @@ async function loadStudioBookListSummary(
   const book = await state.loadBookConfig(bookId);
   const nextChapter = await state.getNextChapterNumber(bookId);
   return { ...book, chaptersWritten: nextChapter - 1 };
-}
-
-function isCustomServiceId(serviceId: string): boolean {
-  return serviceId === "custom" || serviceId.startsWith("custom:");
-}
-
-function serviceConfigKey(entry: ServiceConfigEntry): string {
-  return entry.service === "custom" ? `custom:${entry.name ?? "Custom"}` : entry.service;
-}
-
-function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>): ServiceConfigEntry {
-  if (serviceId.startsWith("custom:")) {
-    return {
-      service: "custom",
-      name: decodeURIComponent(serviceId.slice("custom:".length)),
-      ...(typeof value.baseUrl === "string" && value.baseUrl.length > 0 ? { baseUrl: value.baseUrl } : {}),
-      ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
-      ...(value.apiFormat === "chat" || value.apiFormat === "responses" ? { apiFormat: value.apiFormat } : {}),
-      ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
-    };
-  }
-
-  if (serviceId === "custom") {
-    return {
-      service: "custom",
-      ...(typeof value.name === "string" && value.name.length > 0 ? { name: value.name } : {}),
-      ...(typeof value.baseUrl === "string" && value.baseUrl.length > 0 ? { baseUrl: value.baseUrl } : {}),
-      ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
-      ...(value.apiFormat === "chat" || value.apiFormat === "responses" ? { apiFormat: value.apiFormat } : {}),
-      ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
-    };
-  }
-
-  return {
-    service: serviceId,
-    ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
-    ...(value.apiFormat === "chat" || value.apiFormat === "responses" ? { apiFormat: value.apiFormat } : {}),
-    ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
-  };
-}
-
-function normalizeConfigSource(value: unknown): LLMConfigSource {
-  return value === "studio" ? "studio" : "env";
-}
-
-function normalizeServiceConfig(raw: unknown): ServiceConfigEntry[] {
-  if (Array.isArray(raw)) {
-    return raw
-      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
-      .map((entry) => ({
-        service: typeof entry.service === "string" && entry.service.length > 0 ? entry.service : "custom",
-        ...(typeof entry.name === "string" && entry.name.length > 0 ? { name: entry.name } : {}),
-        ...(typeof entry.baseUrl === "string" && entry.baseUrl.length > 0 ? { baseUrl: entry.baseUrl } : {}),
-        ...(typeof entry.temperature === "number" ? { temperature: entry.temperature } : {}),
-        ...(entry.apiFormat === "chat" || entry.apiFormat === "responses" ? { apiFormat: entry.apiFormat } : {}),
-        ...(typeof entry.stream === "boolean" ? { stream: entry.stream } : {}),
-      }));
-  }
-
-  if (raw && typeof raw === "object") {
-    return Object.entries(raw as Record<string, unknown>)
-      .filter(([, value]) => value && typeof value === "object")
-      .map(([serviceId, value]) => normalizeServiceEntry(serviceId, value as Record<string, unknown>));
-  }
-
-  return [];
-}
-
-function mergeServiceConfig(existing: ServiceConfigEntry[], updates: ServiceConfigEntry[]): ServiceConfigEntry[] {
-  const merged = new Map(existing.map((entry) => [serviceConfigKey(entry), entry]));
-  for (const update of updates) {
-    merged.set(serviceConfigKey(update), update);
-  }
-  return [...merged.values()];
-}
-
-function normalizeCoverConfig(raw: unknown): { service: string; model: string } | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const record = raw as Record<string, unknown>;
-  const service = typeof record.service === "string" ? record.service : "";
-  const preset = resolveCoverProviderPreset(service);
-  if (!preset) return undefined;
-  const requestedModel = typeof record.model === "string" ? record.model.trim() : "";
-  const model = requestedModel && preset.models.includes(requestedModel)
-    ? requestedModel
-    : preset.defaultModel;
-  return { service: preset.service, model };
-}
-
-function syncTopLevelLlmMirror(llm: Record<string, unknown>): void {
-  const selectedService = typeof llm.service === "string" ? llm.service : undefined;
-  if (!selectedService) return;
-
-  const services = normalizeServiceConfig(llm.services);
-  const selectedEntry = services.find((entry) => serviceConfigKey(entry) === selectedService)
-    ?? (!isCustomServiceId(selectedService) ? { service: selectedService } : undefined);
-  if (!selectedEntry) return;
-
-  const preset = resolveServicePreset(selectedEntry.service);
-  llm.provider = resolveServiceProviderFamily(selectedEntry.service) ?? "openai";
-  llm.baseUrl = selectedEntry.baseUrl ?? preset?.baseUrl ?? "";
-
-  const defaultModel = typeof llm.defaultModel === "string" ? llm.defaultModel.trim() : "";
-  if (defaultModel) llm.model = defaultModel;
-  if (selectedEntry.temperature !== undefined) llm.temperature = selectedEntry.temperature;
-  if (selectedEntry.apiFormat !== undefined) llm.apiFormat = selectedEntry.apiFormat;
-  if (selectedEntry.stream !== undefined) llm.stream = selectedEntry.stream;
 }
 
 async function loadRawConfig(root: string): Promise<Record<string, unknown>> {
@@ -1277,6 +1337,7 @@ async function probeServiceCapabilities(args: {
 // --- Server factory ---
 
 export function createStudioServer(initialConfig: ProjectConfig, root: string) {
+  process.env.INKOS_PROJECT_ROOT ??= root;
   const app = new Hono();
   const state = new StateManager(root);
   let cachedConfig = initialConfig;
@@ -1292,7 +1353,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     if (message.includes("LLM API key not set") || message.includes("INKOS_LLM_API_KEY not set")) {
       return c.json({ error: { code: "LLM_CONFIG_ERROR", message } }, 400);
     }
-    console.error("[studio] Unexpected server error", error);
+    writeConsoleLogEntry({
+      level: "error",
+      tag: "studio",
+      message: `Unexpected server error: ${formatUnknownError(error)}`,
+    });
     return c.json(
       { error: { code: "INTERNAL_ERROR", message: "Unexpected server error." } },
       500,
@@ -1315,6 +1380,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     await next();
   });
 
+  registerRuntimeRoutes(app, {
+    root,
+    state,
+    ensureProjectStorageSkeleton,
+    repairProjectResourceIndex,
+    broadcast,
+  });
+
   // Logger sink that broadcasts to SSE and stores in buffer
   const sseSink: LogSink = {
     write(entry: LogEntry): void {
@@ -1326,10 +1399,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
   // Logger sink that prints to server terminal
   const consoleSink: LogSink = {
     write(entry: LogEntry): void {
-      const prefix = `[${entry.tag}]`;
-      if (entry.level === "warn") console.warn(prefix, entry.message);
-      else if (entry.level === "error") console.error(prefix, entry.message);
-      else console.log(prefix, entry.message);
+      writeConsoleLogEntry(entry);
     },
   };
 
@@ -1342,7 +1412,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
   }
 
   async function buildPipelineConfig(
-    overrides?: Partial<Pick<PipelineConfig, "externalContext" | "client" | "model">> & {
+    overrides?: Partial<Pick<PipelineConfig, "externalContext" | "client" | "model" | "signal">> & {
       readonly currentConfig?: ProjectConfig;
       readonly sessionIdForSSE?: string;
       readonly bookId?: string;
@@ -1393,29 +1463,39 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
         }
       },
       externalContext: overrides?.externalContext,
+      signal: overrides?.signal,
     };
   }
 
-  // --- Books ---
-
-  app.get("/api/v1/books", async (c) => {
-    const bookIds = await state.listBooks();
-    const books = await Promise.all(bookIds.map((id) => loadStudioBookListSummary(state, id)));
-    return c.json({ books });
-  });
-
-  app.get("/api/v1/books/:id", async (c) => {
-    const id = c.req.param("id");
-    try {
-      const book = await state.loadBookConfig(id);
-      const chapters = await state.loadChapterIndex(id);
-      const nextChapter = await state.getNextChapterNumber(id);
-      return c.json({ book, chapters, nextChapter });
-    } catch {
-      return c.json({ error: `Book "${id}" not found` }, 404);
+  async function syncBookDerivedFoundationFiles(bookId: string): Promise<void> {
+    const repaired: StorageRepairEntry[] = [];
+    await repairBookResourceLayout(root, state.bookDir(bookId), repaired);
+    if (repaired.length > 0) {
+      serverLog("info", "foundation", `已同步 ${bookId} 的核心文件聚合：${repaired.map((item) => item.path).join(", ")}`);
     }
-  });
+  }
 
+  registerBookChapterRoutes(app, {
+    root,
+    state,
+    bookCreateStatus,
+    buildPipelineConfig,
+    loadCurrentProjectConfig,
+    syncBookDerivedFoundationFiles,
+    shouldRefreshDerivedFoundationFile,
+    loadStudioBookListSummary,
+    broadcast,
+    serverLog,
+    emitStudioFileAudit,
+    setOperation,
+    createOperationController,
+    isOperationCancelled,
+    clearOperation,
+    isOperationAbortError,
+    rememberRuntimeNotice,
+    readRuntimeTokenUsage,
+    appendRuntimeTokenSummary,
+  });
   // --- Genres ---
 
   app.get("/api/v1/genres", async (c) => {
@@ -1434,350 +1514,42 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     return c.json({ genres });
   });
 
-  // --- Book Create ---
-
-  app.post("/api/v1/books/create", async (c) => {
-    const body = await c.req.json<{
-      title: string;
-      genre: string;
-      language?: string;
-      platform?: string;
-      chapterWordCount?: number;
-      targetChapters?: number;
-      blurb?: string;
-    }>();
-
-    const now = new Date().toISOString();
-    const bookConfig = buildStudioBookConfig(body, now);
-    const bookId = bookConfig.id;
-    const bookDir = state.bookDir(bookId);
-
-    try {
-      await access(join(bookDir, "book.json"));
-      await access(join(bookDir, "story", "story_bible.md"));
-      return c.json({ error: `Book "${bookId}" already exists` }, 409);
-    } catch {
-      // The target book is not fully initialized yet, so creation can continue.
-    }
-
-    broadcast("book:creating", { bookId, title: body.title });
-    bookCreateStatus.set(bookId, { status: "creating" });
-
-    const pipeline = new PipelineRunner(await buildPipelineConfig());
-    const tools = createInteractionToolsFromDeps(pipeline, state);
-    processProjectInteractionRequest({
-      projectRoot: root,
-      request: {
-        intent: "create_book",
-        title: body.title,
-        genre: body.genre,
-        language: body.language === "en" ? "en" : body.language === "zh" ? "zh" : undefined,
-        platform: body.platform,
-        chapterWordCount: body.chapterWordCount,
-        targetChapters: body.targetChapters,
-        blurb: body.blurb,
-      },
-      tools,
-    }).then(
-      async (result: {
-        readonly session: { readonly activeBookId?: string };
-        readonly details?: Readonly<Record<string, unknown>>;
-      }) => {
-        const createdBookId = (result.details?.bookId as string | undefined) ?? result.session.activeBookId ?? bookId;
-        const book = await loadStudioBookListSummary(state, createdBookId).catch(() => undefined);
-        bookCreateStatus.delete(createdBookId);
-        broadcast("book:created", { bookId: createdBookId, ...(book ? { book } : {}) });
-      },
-      (e: unknown) => {
-        const error = e instanceof Error ? e.message : String(e);
-        bookCreateStatus.set(bookId, { status: "error", error });
-        broadcast("book:error", { bookId, error });
-      },
-    );
-
-    return c.json({ status: "creating", bookId });
-  });
-
-  app.get("/api/v1/books/:id/create-status", async (c) => {
-    const id = c.req.param("id");
-    const status = bookCreateStatus.get(id);
-    if (!status) {
-      return c.json({ status: "missing" }, 404);
-    }
-    return c.json(status);
-  });
-
-  // --- Chapters ---
-
-  app.get("/api/v1/books/:id/chapters/:num", async (c) => {
-    const id = c.req.param("id");
-    const num = parseInt(c.req.param("num"), 10);
-    const bookDir = state.bookDir(id);
-    const chaptersDir = join(bookDir, "chapters");
-
-    try {
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(num).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
-      const content = await readFile(join(chaptersDir, match), "utf-8");
-      return c.json({ chapterNumber: num, filename: match, content });
-    } catch {
-      return c.json({ error: "Chapter not found" }, 404);
-    }
-  });
-
-  // --- Chapter Save ---
-
-  app.put("/api/v1/books/:id/chapters/:num", async (c) => {
-    const id = c.req.param("id");
-    const num = parseInt(c.req.param("num"), 10);
-    const bookDir = state.bookDir(id);
-    const chaptersDir = join(bookDir, "chapters");
-    const { content } = await c.req.json<{ content: string }>();
-
-    try {
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(num).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
-
-      const { writeFile: writeFileFs } = await import("node:fs/promises");
-      await writeFileFs(join(chaptersDir, match), content, "utf-8");
-      return c.json({ ok: true, chapterNumber: num });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // --- Truth files ---
-
-  // Flat-file whitelist — the pre-Phase-5 story root files plus dev's legacy
-  // editor targets (author_intent / current_focus / volume_outline).
-  //
-  // Phase 5 cleanup #3 moved the authoritative YAML frontmatter + outline prose
-  // into story/outline/ and character sheets into story/roles/. `story_bible.md`
-  // and `book_rules.md` now exist only as compat pointer shims — we still allow
-  // reading them so legacy books keep rendering, but the server-side writer
-  // (write_truth_file) no longer accepts them as edit targets.
-  const TRUTH_FLAT_FILES = [
-    "author_intent.md", "current_focus.md",
-    "story_bible.md", "book_rules.md", "volume_outline.md", "current_state.md",
-    "particle_ledger.md", "pending_hooks.md", "chapter_summaries.md",
-    "subplot_board.md", "emotional_arcs.md", "character_matrix.md",
-    "style_guide.md", "parent_canon.md", "fanfic_canon.md",
-  ];
-
-  // Authoritative Phase 5 paths — prose outline + role sheets live under
-  // dedicated subdirectories of story/. The full path (relative to story/) is
-  // matched literally here. `节奏原则.md` / `rhythm_principles.md` is optional
-  // after Phase 5 consolidation (rhythm lives in volume_map's closing paragraph);
-  // the entries stay whitelisted for legacy books and manual overrides.
-  const TRUTH_OUTLINE_FILES = [
-    "outline/story_frame.md",
-    "outline/volume_map.md",
-    "outline/节奏原则.md",
-    "outline/rhythm_principles.md",
-  ];
-
-  // Pointer shims that the runtime no longer treats as authoritative. The
-  // GET handler tags them with `legacy: true` so the UI can surface that the
-  // edits won't land where the user expects.
-  const LEGACY_SHIM_FILES = new Set(["story_bible.md", "book_rules.md"]);
-
-  /**
-   * Validate a requested truth-file path:
-   *   1. Must be one of the declared flat files, an outline/* allow-listed
-   *      entry, or a roles/**\/*.md file under 主要角色/ | 次要角色/.
-   *   2. Must resolve to a path inside bookDir/story/ (no `..`, no absolute
-   *      paths, no traversal via the tier-name segment).
-   */
-  function resolveTruthFilePath(bookDir: string, file: string): string | null {
-    // Reject absolute paths, traversal, null bytes outright.
-    if (!file || file.includes("\0") || isAbsolute(file) || file.includes("..")) {
-      return null;
-    }
-
-    // Phase hotfix 3: accept both Chinese and English locale role dirs so
-    // English-layout books (roles/major, roles/minor) are reachable through
-    // Studio. The runtime reader (utils/outline-paths.ts:75) already scans
-    // both — Studio used to drop English books to read-only.
-    const allowed =
-      TRUTH_FLAT_FILES.includes(file)
-      || TRUTH_OUTLINE_FILES.includes(file)
-      || /^roles\/(主要角色|次要角色|major|minor)\/[^/]+\.md$/.test(file);
-
-    if (!allowed) return null;
-
-    const storyDir = resolve(bookDir, "story");
-    const resolved = resolve(storyDir, file);
-    const relativePath = relative(storyDir, resolved);
-    if (relativePath === "" || relativePath.startsWith("..") || isAbsolute(relativePath)) {
-      return null;
-    }
-    return resolved;
-  }
-
-  async function fileExists(path: string): Promise<boolean> {
-    try {
-      await access(path);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  // Use `:file{.+}` wildcard so nested paths (outline/..., roles/.../...) match.
-  app.get("/api/v1/books/:id/truth/:file{.+}", async (c) => {
-    const file = c.req.param("file");
-    const id = c.req.param("id");
-
-    const bookDir = state.bookDir(id);
-    const resolved = resolveTruthFilePath(bookDir, file);
-    if (!resolved) {
-      return c.json({ error: "Invalid truth file" }, 400);
-    }
-
-    // Phase 5: new-layout books keep the authoritative prose under outline/.
-    // A legacy book may only have story_bible.md / book_rules.md on disk —
-    // we still serve those for read-only display, but flag them so the UI
-    // can warn users their edits won't reach the runtime.
-    // Hotfix: only tag as legacy when the book actually HAS the new layout.
-    // Pre-Phase-5 books use story_bible/book_rules as the authoritative source.
-    const { isNewLayoutBook } = await import("@actalk/inkos-core");
-    const legacy = LEGACY_SHIM_FILES.has(file) && await isNewLayoutBook(bookDir);
-
-    try {
-      const content = await readFile(resolved, "utf-8");
-      return c.json({ file, content, ...(legacy ? { legacy: true } : {}) });
-    } catch {
-      return c.json({ file, content: null, ...(legacy ? { legacy: true } : {}) });
-    }
-  });
-
-  // --- Analytics ---
-
-  app.get("/api/v1/books/:id/analytics", async (c) => {
-    const id = c.req.param("id");
-    try {
-      const chapters = await state.loadChapterIndex(id);
-      return c.json(computeAnalytics(id, chapters));
-    } catch {
-      return c.json({ error: `Book "${id}" not found` }, 404);
-    }
-  });
-
-  // --- Actions ---
-
-  app.post("/api/v1/books/:id/write-next", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{ wordCount?: number }>().catch(() => ({ wordCount: undefined }));
-
-    broadcast("write:start", { bookId: id });
-    serverLog("info", "write", `开始写作书籍 ${id}`);
-
-    // Track active operation for session recovery
-    setOperation(`write:${id}`, { type: "write", bookId: id });
-
-    // Fire and forget — progress/completion/errors pushed via SSE
-    const pipeline = new PipelineRunner(await buildPipelineConfig({ bookId: id }));
-    pipeline.writeNextChapter(id, body.wordCount).then(
-      (result) => {
-        clearOperation(`write:${id}`);
-        serverLog("info", "write", `书籍 ${id} 第 ${result.chapterNumber} 章写作完成: ${result.title} (${result.wordCount} 字)`);
-        broadcast("write:complete", { bookId: id, chapterNumber: result.chapterNumber, status: result.status, title: result.title, wordCount: result.wordCount });
-      },
-      (e) => {
-        clearOperation(`write:${id}`);
-        const msg = e instanceof Error ? e.message : String(e);
-        serverLog("error", "write", `书籍 ${id} 写作失败: ${msg}`);
-        broadcast("write:error", { bookId: id, error: msg });
-      },
-    );
-
-    return c.json({ status: "writing", bookId: id });
-  });
-
-  app.post("/api/v1/books/:id/draft", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{ wordCount?: number; context?: string }>().catch(() => ({ wordCount: undefined, context: undefined }));
-
-    broadcast("draft:start", { bookId: id });
-    serverLog("info", "draft", `开始草稿书籍 ${id}`);
-
-    // Track active operation for session recovery
-    setOperation(`draft:${id}`, { type: "write", bookId: id });
-
-    const pipeline = new PipelineRunner(await buildPipelineConfig({ bookId: id }));
-    pipeline.writeDraft(id, body.context, body.wordCount).then(
-      (result) => {
-        clearOperation(`draft:${id}`);
-        serverLog("info", "draft", `书籍 ${id} 草稿完成: ${result.title} (${result.wordCount} 字)`);
-        broadcast("draft:complete", { bookId: id, chapterNumber: result.chapterNumber, title: result.title, wordCount: result.wordCount });
-      },
-      (e) => {
-        clearOperation(`draft:${id}`);
-        const msg = e instanceof Error ? e.message : String(e);
-        serverLog("error", "draft", `书籍 ${id} 草稿失败: ${msg}`);
-        broadcast("draft:error", { bookId: id, error: msg });
-      },
-    );
-
-    return c.json({ status: "drafting", bookId: id });
-  });
-
-  app.post("/api/v1/books/:id/chapters/:num/approve", async (c) => {
-    const id = c.req.param("id");
-    const num = parseInt(c.req.param("num"), 10);
-
-    try {
-      const index = await state.loadChapterIndex(id);
-      const updated = index.map((ch) =>
-        ch.number === num ? { ...ch, status: "approved" as const } : ch,
-      );
-      await state.saveChapterIndex(id, updated);
-      return c.json({ ok: true, chapterNumber: num, status: "approved" });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/books/:id/chapters/:num/reject", async (c) => {
-    const id = c.req.param("id");
-    const num = parseInt(c.req.param("num"), 10);
-
-    try {
-      const index = await state.loadChapterIndex(id);
-      const target = index.find((ch) => ch.number === num);
-      if (!target) {
-        return c.json({ error: `Chapter ${num} not found` }, 404);
-      }
-
-      const rollbackTarget = num - 1;
-      const discarded = await state.rollbackToChapter(id, rollbackTarget);
-      return c.json({
-        ok: true,
-        chapterNumber: num,
-        status: "rejected",
-        rolledBackTo: rollbackTarget,
-        discarded,
-      });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
   // --- Active operations (for session recovery after page refresh) ---
 
   app.get("/api/v1/active-operations", (c) => {
-    return c.json({ operations: [...activeOperations.values()] });
+    return c.json({ operations: operationRegistry.list() });
+  });
+
+  app.post("/api/v1/active-operations/:operationId/cancel", (c) => {
+    const operationId = decodeURIComponent(c.req.param("operationId"));
+    markOperationCancelled(operationId);
+    broadcast("agent:error", {
+      sessionId: agentSessionIdFromOperationKey(operationId) ?? undefined,
+      error: "用户已停止当前生成。",
+    });
+    return c.json({ ok: true, operationId });
+  });
+
+  app.get("/api/v1/agent-results/:sessionId/:requestId", (c) => {
+    const sessionId = c.req.param("sessionId");
+    const requestId = c.req.param("requestId");
+    const result = agentRequestResults.get(sessionId, requestId);
+    if (!result) {
+      return c.json({ status: "pending" }, 202);
+    }
+    return c.json({
+      status: "completed",
+      completedAt: result.completedAt,
+      responseStatus: result.status,
+      payload: result.payload,
+    });
   });
 
   // --- Logs ---
 
   app.get("/api/v1/logs", (c) => {
-    const limit = Math.min(parseInt(c.req.query("limit") ?? "200", 10) || 200, LOG_BUFFER_SIZE);
-    const entries = logBuffer.slice(-limit).map((e) => ({
+    const limit = parseInt(c.req.query("limit") ?? "200", 10) || 200;
+    const entries = logBuffer.latest(limit).map((e) => ({
       level: e.level,
       tag: e.tag,
       message: e.message,
@@ -1787,7 +1559,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
   });
 
   app.delete("/api/v1/logs", (c) => {
-    logBuffer.length = 0;
+    logBuffer.clear();
     broadcast("logs:clear", { timestamp: new Date().toISOString() });
     return c.json({ status: "cleared" });
   });
@@ -1803,10 +1575,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       await stream.writeSSE({ event: "ping", data: "" });
 
       // Send active operations on connect so frontend can restore state
-      if (activeOperations.size > 0) {
+      if (operationRegistry.activeCount > 0) {
         await stream.writeSSE({
           event: "operations:restore",
-          data: JSON.stringify({ operations: [...activeOperations.values()] }),
+          data: JSON.stringify({ operations: operationRegistry.list() }),
         });
       }
 
@@ -1825,370 +1597,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     });
   });
 
-  // --- Model discovery ---
-
-  app.get("/api/v1/services", async (c) => {
-    const secrets = await loadSecrets(root);
-    const endpoints = getAllEndpoints().filter((ep) => ep.id !== "custom");
-
-    // Fast: only check connection status from secrets, no external API calls.
-    const services = endpoints.map((ep) => ({
-      service: ep.id,
-      label: ep.label,
-      group: ep.group,
-      connected: Boolean(secrets.services[ep.id]?.apiKey),
-    })).sort(compareServiceListItems);
-
-    // Add custom services from inkos.json
-    try {
-      const config = await loadRawConfig(root);
-      for (const svc of normalizeServiceConfig((config.llm as Record<string, unknown> | undefined)?.services)) {
-        if (svc.service === "custom") {
-          const secretKey = `custom:${svc.name}`;
-          services.push({
-            service: secretKey,
-            label: svc.name ?? "Custom",
-            group: undefined,
-            connected: Boolean(secrets.services[secretKey]?.apiKey),
-          });
-        }
-      }
-    } catch { /* no config file */ }
-
-    return c.json({ services });
+  registerServiceModelRoutes(app, {
+    root,
+    loadRawConfig,
+    saveRawConfig,
+    readEnvConfigStatus,
+    resolveConfiguredServiceBaseUrl,
+    probeServiceCapabilities,
+    filterTextChatModels,
+    isTextChatModelId,
   });
-
-  app.get("/api/v1/services/config", async (c) => {
-    const config = await loadRawConfig(root);
-    const llm = (config.llm as Record<string, unknown> | undefined) ?? {};
-    const services = normalizeServiceConfig(llm.services);
-    const envConfig = await readEnvConfigStatus(root);
-    return c.json({
-      services,
-      service: typeof llm.service === "string" ? llm.service : null,
-      defaultModel: llm.defaultModel ?? null,
-      configSource: "studio" satisfies LLMConfigSource,
-      storedConfigSource: normalizeConfigSource(llm.configSource),
-      envConfig,
-    });
-  });
-
-  app.put("/api/v1/services/config", async (c) => {
-    const body = await c.req.json<{ services?: unknown; defaultModel?: string; configSource?: LLMConfigSource; service?: string }>();
-    const config = await loadRawConfig(root);
-    config.llm = config.llm ?? {};
-    const llm = config.llm as Record<string, unknown>;
-    if (body.services !== undefined) {
-      const existingServices = normalizeServiceConfig(llm.services);
-      const incomingServices = normalizeServiceConfig(body.services);
-      llm.services = mergeServiceConfig(existingServices, incomingServices);
-    }
-    if (body.defaultModel !== undefined) {
-      llm.defaultModel = body.defaultModel;
-    }
-    if (body.configSource === "env") {
-      return c.json({
-        error: "Studio 运行时不支持切换到 env；env 只在 CLI/daemon/部署运行时作为覆盖层使用。",
-      }, 400);
-    }
-    if (body.configSource !== undefined) {
-      llm.configSource = normalizeConfigSource(body.configSource);
-    }
-    if (body.service !== undefined) {
-      llm.service = body.service;
-    }
-    syncTopLevelLlmMirror(llm);
-    await saveRawConfig(root, config);
-    return c.json({ ok: true });
-  });
-
-  app.get("/api/v1/cover/config", async (c) => {
-    const config = await loadRawConfig(root);
-    const llm = (config.llm as Record<string, unknown> | undefined) ?? {};
-    const cover = normalizeCoverConfig(llm.cover);
-    const secrets = await loadSecrets(root);
-    return c.json({
-      service: cover?.service ?? null,
-      model: cover?.model ?? null,
-      providers: COVER_PROVIDER_PRESETS.map((provider) => ({
-        service: provider.service,
-        label: provider.label,
-        baseUrl: provider.baseUrl,
-        defaultModel: provider.defaultModel,
-        models: provider.models,
-        connected: Boolean(secrets.services[coverSecretKey(provider.service)]?.apiKey || secrets.services[provider.service]?.apiKey),
-      })),
-    });
-  });
-
-  app.put("/api/v1/cover/config", async (c) => {
-    const body = await c.req.json<{ service?: string; model?: string }>();
-    const preset = resolveCoverProviderPreset(body.service);
-    if (!preset) {
-      return c.json({ error: "Unsupported cover service" }, 400);
-    }
-    const model = typeof body.model === "string" && preset.models.includes(body.model)
-      ? body.model
-      : preset.defaultModel;
-
-    const config = await loadRawConfig(root);
-    config.llm = config.llm ?? {};
-    const llm = config.llm as Record<string, unknown>;
-    llm.cover = {
-      service: preset.service,
-      model,
-    };
-    await saveRawConfig(root, config);
-    return c.json({ ok: true, service: preset.service, model });
-  });
-
-  app.get("/api/v1/cover/secret/:service", async (c) => {
-    const service = c.req.param("service");
-    if (!resolveCoverProviderPreset(service)) {
-      return c.json({ error: "Unsupported cover service" }, 400);
-    }
-    const secrets = await loadSecrets(root);
-    return c.json({ apiKey: secrets.services[coverSecretKey(service)]?.apiKey ?? "" });
-  });
-
-  app.put("/api/v1/cover/secret/:service", async (c) => {
-    const service = c.req.param("service");
-    if (!resolveCoverProviderPreset(service)) {
-      return c.json({ error: "Unsupported cover service" }, 400);
-    }
-    const body = await c.req.json<{ apiKey?: string }>();
-    const trimmedKey = body.apiKey?.trim() ?? "";
-    if (trimmedKey && !isHeaderSafeApiKey(trimmedKey)) {
-      return c.json({ error: "API Key 包含不能放入 HTTP Authorization header 的字符，请只粘贴原始密钥。" }, 400);
-    }
-
-    const secrets = await loadSecrets(root);
-    const key = coverSecretKey(service);
-    if (trimmedKey) {
-      secrets.services[key] = { apiKey: trimmedKey };
-    } else {
-      delete secrets.services[key];
-    }
-    await saveSecrets(root, secrets);
-    return c.json({ ok: true, service });
-  });
-
-  app.delete("/api/v1/services/:service", async (c) => {
-    const service = c.req.param("service");
-    const config = await loadRawConfig(root);
-    const llm = (config.llm as Record<string, unknown> | undefined) ?? {};
-    const existingServices = normalizeServiceConfig(llm.services);
-    const nextServices = existingServices.filter((entry) => serviceConfigKey(entry) !== service);
-
-    if (!config.llm) config.llm = {};
-    const nextLlm = config.llm as Record<string, unknown>;
-    nextLlm.services = nextServices;
-    if (nextLlm.service === service) {
-      delete nextLlm.service;
-      delete nextLlm.defaultModel;
-    }
-    await saveRawConfig(root, config);
-
-    const secrets = await loadSecrets(root);
-    delete secrets.services[service];
-    await saveSecrets(root, secrets);
-    modelListCache.clear();
-    return c.json({ ok: true, service });
-  });
-
-  app.post("/api/v1/services/:service/test", async (c) => {
-    const service = c.req.param("service");
-    const { apiKey, baseUrl, apiFormat, stream, model } = await c.req.json<{
-      apiKey: string;
-      baseUrl?: string;
-      apiFormat?: "chat" | "responses";
-      stream?: boolean;
-      model?: string;
-    }>();
-
-    const resolvedBaseUrl = await resolveConfiguredServiceBaseUrl(root, service, baseUrl);
-    if (!resolvedBaseUrl) {
-      return c.json({ ok: false, error: `未知服务商: ${service}` }, 400);
-    }
-
-    const baseService = isCustomServiceId(service) ? "custom" : service;
-    const apiKeyOptional = isApiKeyOptionalForEndpoint({
-      provider: resolveServiceProviderFamily(baseService) ?? "openai",
-      baseUrl: resolvedBaseUrl,
-    });
-    if (!apiKey?.trim() && !apiKeyOptional) {
-      return c.json({
-        ok: false,
-        error: "API Key 不能为空",
-      }, 400);
-    }
-
-    const rawConfig = await loadRawConfig(root).catch(() => ({} as Record<string, unknown>));
-    const llm = (rawConfig.llm as Record<string, unknown> | undefined) ?? {};
-    const probe = await probeServiceCapabilities({
-      root,
-      service,
-      apiKey: apiKey?.trim() ?? "",
-      baseUrl: resolvedBaseUrl,
-      preferredApiFormat: apiFormat,
-      preferredStream: stream,
-      preferredModel: model,
-      proxyUrl: typeof llm.proxyUrl === "string" ? llm.proxyUrl : undefined,
-    });
-
-    // B12: 升级响应 shape 为 { probe, chat, ... }，同时保留老字段供 UI 过渡期兼容
-    const probeStatus = {
-      ok: probe.ok,
-      models: probe.models?.length ?? 0,
-      ...(probe.ok ? {} : { error: probe.error ?? "连接失败" }),
-    };
-
-    if (!probe.ok) {
-      return c.json({
-        ok: false,
-        error: probe.error ?? "连接失败",
-        probe: probeStatus,
-        chat: null,
-      }, 400);
-    }
-
-    return c.json({
-      ok: true,
-      modelCount: probe.models.length,
-      models: probe.models,
-      selectedModel: probe.selectedModel,
-      detected: {
-        apiFormat: probe.apiFormat,
-        stream: probe.stream,
-        baseUrl: probe.baseUrl,
-        modelsSource: probe.modelsSource,
-      },
-      // B12 新字段：两步验证状态
-      probe: probeStatus,
-      chat: null,  // probeServiceCapabilities 本身只做 probe，chat hello 在 Studio 的 follow-up 调用里单独触发
-    });
-  });
-
-  app.put("/api/v1/services/:service/secret", async (c) => {
-    const service = c.req.param("service");
-    const { apiKey } = await c.req.json<{ apiKey: string }>();
-    const secrets = await loadSecrets(root);
-    const trimmedKey = apiKey?.trim() ?? "";
-    if (trimmedKey) {
-      if (!isHeaderSafeApiKey(trimmedKey)) {
-        return c.json({
-          ok: false,
-          error: "API Key 只能包含可放进 HTTP Authorization header 的非空白 ASCII 字符；请不要粘贴连接失败提示或诊断文本。",
-        }, 400);
-      }
-      secrets.services[service] = { apiKey: trimmedKey };
-    } else {
-      delete secrets.services[service];
-    }
-    await saveSecrets(root, secrets);
-    return c.json({ ok: true });
-  });
-
-  app.get("/api/v1/services/:service/secret", async (c) => {
-    const service = c.req.param("service");
-    const secrets = await loadSecrets(root);
-    return c.json({
-      apiKey: secrets.services[service]?.apiKey ?? "",
-    });
-  });
-
-  app.get("/api/v1/services/models", async (c) => {
-    const secrets = await loadSecrets(root);
-    const endpoints = getAllEndpoints()
-      .filter((ep) => ep.id !== "custom" && Boolean(secrets.services[ep.id]?.apiKey));
-
-    const groups = endpoints.map((ep) => ({
-      service: ep.id,
-      label: ep.label,
-      models: ep.models
-        .filter((m) => m.enabled !== false)
-        .filter((m) => isTextChatModelId(m.id))
-        .map((m) => ({
-          id: m.id,
-          name: m.id,
-          ...(typeof m.maxOutput === "number" ? { maxOutput: m.maxOutput } : {}),
-          ...(m.contextWindowTokens > 0 ? { contextWindow: m.contextWindowTokens } : {}),
-        })),
-    }));
-
-    return c.json({ groups });
-  });
-
-  app.get("/api/v1/services/models/custom", async (c) => {
-    const secrets = await loadSecrets(root);
-    let config: Record<string, unknown> = {};
-    try {
-      config = await loadRawConfig(root);
-    } catch {
-      // no config file
-    }
-
-    const customs = normalizeServiceConfig((config.llm as Record<string, unknown> | undefined)?.services)
-      .filter((s) => s.service === "custom")
-      .map((s) => ({
-        id: `custom:${s.name ?? "Custom"}`,
-        baseUrl: s.baseUrl ?? "",
-        label: s.name ?? "Custom",
-      }))
-      .filter((s) => s.baseUrl && Boolean(secrets.services[s.id]?.apiKey));
-
-    const groups = await Promise.all(customs.map(async (s) => ({
-      service: s.id,
-      label: s.label,
-      models: filterTextChatModels(
-        await probeModelsFromUpstream(s.baseUrl, secrets.services[s.id].apiKey, 10_000),
-      ),
-    })));
-
-    return c.json({ groups });
-  });
-
-  app.get("/api/v1/services/:service/models", async (c) => {
-    const service = c.req.param("service");
-    const refresh = c.req.query("refresh") === "1";
-    const secrets = await loadSecrets(root);
-    const apiKey = c.req.query("apiKey") || secrets.services[service]?.apiKey || "";
-
-    const resolvedBaseUrl = await resolveConfiguredServiceBaseUrl(root, service);
-    const baseService = isCustomServiceId(service) ? "custom" : service;
-    const apiKeyOptional = isApiKeyOptionalForEndpoint({
-      provider: resolveServiceProviderFamily(baseService) ?? "openai",
-      baseUrl: resolvedBaseUrl,
-    });
-
-    // No key = no models, except local/self-hosted endpoints such as Ollama.
-    if (!apiKey && !apiKeyOptional) return c.json({ models: [] });
-
-    // Cache by service + resolved baseUrl + apiKey fingerprint; valid for 10 min unless ?refresh=1
-    const cacheKey = `${service}::${resolvedBaseUrl ?? ""}::${apiKey.slice(-8)}`;
-    if (!refresh) {
-      const cached = modelListCache.get(cacheKey);
-      if (cached && Date.now() - cached.at < 10 * 60 * 1000) {
-        return c.json({ models: cached.models });
-      }
-    }
-
-    // B13: 走 listModelsForService 走 live probe + bank 交叉，返回带元数据的 models
-    const enriched = await listModelsForService(
-      isCustomServiceId(service) ? "custom" : service,
-      apiKey,
-      isCustomServiceId(service) ? resolvedBaseUrl ?? undefined : undefined,
-    );
-    const models = filterTextChatModels(enriched).map((m) => ({
-      id: m.id,
-      name: m.name,
-      ...(m.maxOutput !== undefined ? { maxOutput: m.maxOutput } : {}),
-      ...(m.contextWindow > 0 ? { contextWindow: m.contextWindow } : {}),
-    }));
-    modelListCache.set(cacheKey, { models, at: Date.now() });
-    return c.json({ models });
-  });
-
   // --- Project info ---
 
   app.get("/api/v1/project", async (c) => {
@@ -2248,68 +1666,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       return c.json({ ok: true });
     } catch (e) {
       return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // --- Truth files browser ---
-
-  app.get("/api/v1/books/:id/truth", async (c) => {
-    const id = c.req.param("id");
-    const bookDir = state.bookDir(id);
-    const storyDir = join(bookDir, "story");
-
-    async function listDir(subdir: string): Promise<string[]> {
-      try {
-        const entries = await readdir(join(storyDir, subdir));
-        return entries.filter((f) => f.endsWith(".md") || f.endsWith(".json"));
-      } catch {
-        return [];
-      }
-    }
-
-    // Hotfix: only tag shim files as legacy when the book has the new layout.
-    const { isNewLayoutBook } = await import("@actalk/inkos-core");
-    const newLayout = await isNewLayoutBook(bookDir);
-
-    async function describe(relPath: string): Promise<{ readonly name: string; readonly size: number; readonly preview: string; readonly legacy?: true } | null> {
-      try {
-        const content = await readFile(join(storyDir, relPath), "utf-8");
-        const isShim = LEGACY_SHIM_FILES.has(relPath) && newLayout;
-        const entry: { readonly name: string; readonly size: number; readonly preview: string; readonly legacy?: true } =
-          isShim
-            ? { name: relPath, size: content.length, preview: content.slice(0, 200), legacy: true }
-            : { name: relPath, size: content.length, preview: content.slice(0, 200) };
-        return entry;
-      } catch {
-        return null;
-      }
-    }
-
-    try {
-      // Flat story/ files (legacy + runtime logs)
-      const flatFiles = (await listDir(".")).filter((f) => !f.startsWith("outline") && !f.startsWith("roles"));
-      // Phase 5 outline/ files
-      const outlineFiles = (await listDir("outline")).map((f) => `outline/${f}`);
-      // Phase 5 roles/主要角色 + roles/次要角色, plus Phase hotfix 3
-      // English-locale equivalents so en-language books are visible.
-      const majorRolesZh = (await listDir("roles/主要角色")).map((f) => `roles/主要角色/${f}`);
-      const minorRolesZh = (await listDir("roles/次要角色")).map((f) => `roles/次要角色/${f}`);
-      const majorRolesEn = (await listDir("roles/major")).map((f) => `roles/major/${f}`);
-      const minorRolesEn = (await listDir("roles/minor")).map((f) => `roles/minor/${f}`);
-
-      const all = [
-        ...flatFiles,
-        ...outlineFiles,
-        ...majorRolesZh,
-        ...minorRolesZh,
-        ...majorRolesEn,
-        ...minorRolesEn,
-      ];
-      const described = await Promise.all(all.map(describe));
-      const result = described.filter((x): x is NonNullable<typeof x> => x !== null);
-      return c.json({ files: result });
-    } catch {
-      return c.json({ files: [] });
     }
   });
 
@@ -2445,17 +1801,65 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     return c.json({ ok: true });
   });
 
+  app.delete("/api/v1/sessions/:sessionId/messages", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const body = await c.req.json<{
+      role?: "user" | "assistant";
+      content?: string;
+      timestamp?: number;
+      messageIndex?: number;
+    }>().catch((): {
+      role?: "user" | "assistant";
+      content?: string;
+      timestamp?: number;
+      messageIndex?: number;
+    } => ({}));
+    if (
+      (body.role !== "user" && body.role !== "assistant") ||
+      typeof body.content !== "string" ||
+      typeof body.timestamp !== "number" ||
+      !Number.isFinite(body.timestamp)
+    ) {
+      throw new ApiError(400, "INVALID_MESSAGE_TARGET", "A valid message target is required");
+    }
+    const deleteTarget = {
+      role: body.role,
+      content: body.content,
+      timestamp: body.timestamp,
+    } as {
+      role: "user" | "assistant";
+      content: string;
+      timestamp: number;
+      messageIndex?: number;
+    };
+    if (typeof body.messageIndex === "number" && Number.isFinite(body.messageIndex)) {
+      deleteTarget.messageIndex = Math.trunc(body.messageIndex);
+    }
+    const session = await deleteBookSessionMessage(root, sessionId, deleteTarget);
+    if (!session) return c.json({ error: "Message or session not found" }, 404);
+    return c.json({ ok: true, session });
+  });
+
   app.post("/api/v1/agent", async (c) => {
     // Parse request body first (before entering SSE stream)
-    const { instruction, activeBookId, sessionId: reqSessionId, model: reqModel, service: reqService, stream: reqStream } = await c.req.json<{
+    const requestBody = await c.req.json<{
       instruction: string;
       activeBookId?: string;
       sessionId?: string;
       model?: string;
       service?: string;
       stream?: boolean;
+      requestId?: string;
+      clientStartedAt?: number;
     }>();
+    const { instruction, activeBookId, sessionId: reqSessionId, model: reqModel, service: reqService, stream: reqStream } = requestBody;
     const sessionId = reqSessionId;
+    const requestId = typeof requestBody.requestId === "string" && /^[a-z0-9-]{8,80}$/i.test(requestBody.requestId)
+      ? requestBody.requestId
+      : undefined;
+    const clientStartedAt = typeof requestBody.clientStartedAt === "number" && Number.isFinite(requestBody.clientStartedAt)
+      ? requestBody.clientStartedAt
+      : Date.now();
 
     // Validation - return JSON for simple errors (before SSE stream starts)
     if (!instruction?.trim()) {
@@ -2484,6 +1888,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
           model: reqModel,
           service: reqService,
           stream: true,
+          requestId,
+          clientStartedAt,
         }),
       });
       const envelope = parseSseResultEnvelope(await streamedResponse.text());
@@ -2509,12 +1915,47 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
 
     // Use SSE stream for long-running operations (prevents Cloudflare 524 timeout)
     return streamSSE(c, async (stream) => {
+      const operationKey = requestId ? `agent:${sessionId}:${requestId}` : `agent:${sessionId}`;
+      const savingsBeforeRun = getHeadroomSavingsTelemetry();
       // Helper to send JSON response via SSE event and close stream
       const sendResult = async (data: Record<string, unknown>, status?: number) => {
-        await stream.writeSSE({
-          event: "result",
-          data: JSON.stringify({ ...data, status: status ?? 200 }),
-        });
+        const resultStatus = status ?? 200;
+        if (isOperationCancelled(operationKey) && !isCancellationResult(data, resultStatus)) {
+          serverLog("warn", "agent", `丢弃已停止任务的迟到结果：${operationKey}`);
+          return;
+        }
+        rememberAgentRequestResult(sessionId, requestId, data, resultStatus);
+        const tokenSavings = diffHeadroomSavingsTelemetry(savingsBeforeRun);
+        const activeOperation = operationRegistry.get(operationKey);
+        if (activeOperation?.label === "章节写作") {
+          const responseText = typeof data.response === "string" ? data.response : "";
+          const tokenUsage = readRuntimeTokenUsage(data.tokenUsage);
+          const runtimeSavings = readRuntimeTokenSavings(tokenSavings);
+          const baseMessage = responseText
+            ? responseText.slice(0, 160)
+            : activeOperation.message;
+          rememberRuntimeNotice({
+            kind: resultStatus >= 400 || Boolean(data.error) ? "error" : "completed",
+            title: resultStatus >= 400 || Boolean(data.error) ? "章节生成遇到问题" : "章节生成完成",
+            message: appendRuntimeTokenSummary(baseMessage, tokenUsage, runtimeSavings),
+            ...(tokenUsage ? { tokenUsage } : {}),
+            ...(runtimeSavings ? { tokenSavings: runtimeSavings } : {}),
+          });
+        }
+        try {
+          await stream.writeSSE({
+            event: "result",
+            data: JSON.stringify({
+              ...data,
+              tokenSavings,
+              status: resultStatus,
+            }),
+          });
+        } catch {
+          // The Android WebView may be backgrounded or killed while Node keeps
+          // working. Do not turn a finished backend task into a failed task just
+          // because the foreground page disconnected before the final SSE event.
+        }
       };
 
       // Keep-alive ping every 60 seconds (Cloudflare timeout is 100s)
@@ -2522,17 +1963,54 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
         stream.writeSSE({ event: "ping", data: "" }).catch(() => {});
       }, 60_000);
 
+      const transcriptUsageFrom = (usage?: {
+        readonly promptTokens?: number;
+        readonly completionTokens?: number;
+        readonly totalTokens?: number;
+      }) => {
+        const input = Math.max(0, usage?.promptTokens ?? 0);
+        const output = Math.max(0, usage?.completionTokens ?? 0);
+        const totalTokens = Math.max(0, usage?.totalTokens ?? input + output);
+        return {
+          input,
+          output,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        };
+      };
+
       stream.onAbort(() => {
         clearInterval(keepAlive);
       });
 
       try {
+        if (shouldRejectCancelledAgentRequest(sessionId, clientStartedAt)) {
+          serverLog("warn", "agent", `忽略已停止的过期指令: ${instruction.slice(0, 60)}${instruction.length > 60 ? "..." : ""}`);
+          await sendResult({
+            error: { code: "OPERATION_CANCELLED", message: "用户已停止当前生成。" },
+            response: "已停止当前生成。需要的话可以调整提示后重新发送。",
+          }, 499);
+          return;
+        }
         broadcast("agent:start", { instruction, activeBookId, sessionId });
         serverLog("info", "agent", `开始处理指令: ${instruction.slice(0, 60)}${instruction.length > 60 ? "..." : ""}`);
 
-        // Track active operation for session recovery
-        if (activeBookId) {
-          setOperation(`agent:${sessionId}`, { type: "agent", bookId: activeBookId, sessionId, instruction });
+        // Track active operation for notification + session recovery.
+        setOperation(operationKey, {
+          type: "agent",
+          bookId: activeBookId ?? "project",
+          sessionId,
+          instruction,
+          label: activeBookId && isWriteNextInstruction(instruction) ? "章节写作" : "AI 对话",
+          message: activeBookId && isWriteNextInstruction(instruction)
+            ? `正在通过对话为《${activeBookId}》写下一章，页面退到后台也会继续执行。`
+            : `正在处理对话指令：${instruction.slice(0, 42)}${instruction.length > 42 ? "..." : ""}`,
+        });
+        const operationController = createOperationController(operationKey);
+        if (isOperationCancelled(operationKey)) {
+          throw new ApiError(499, "OPERATION_CANCELLED", "用户已停止当前生成。");
         }
 
         // Load config + create LLM client (pipeline created after model resolution)
@@ -2616,7 +2094,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       }
 
       // Resolve model — multi-service resolution
-      let resolvedModel: ResolvedModel["model"] | undefined;
+      let resolvedModel: AgentSessionConfig["model"] | undefined;
       let resolvedApiKey: string | undefined;
 
       if (reqService && reqModel) {
@@ -2632,8 +2110,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
           );
           resolvedModel = resolved.model;
           resolvedApiKey = resolved.apiKey;
-        } catch (e: any) {
-          const msg = e?.message ?? String(e);
+        } catch (e: unknown) {
+          const msg = formatUnknownError(e);
           if (/API key/i.test(msg)) {
             await sendResult({
               error: `请先为 ${reqService} 配置 API Key`,
@@ -2696,7 +2174,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
         // 4. Legacy fallback: use createLLMClient
         resolvedModel = client._piModel
           ? client._piModel
-          : { provider: config.llm.provider ?? "anthropic", modelId: config.llm.model } as any;
+          : { provider: config.llm.provider ?? "anthropic", modelId: config.llm.model };
         resolvedApiKey = client._apiKey;
       }
 
@@ -2716,19 +2194,21 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
             ...(configuredEntry?.apiFormat ? { apiFormat: configuredEntry.apiFormat } : {}),
             ...(configuredEntry?.stream !== undefined ? { stream: configuredEntry.stream } : {}),
             baseUrl: configuredEntry?.baseUrl ?? "",
-          } as any)
+          } satisfies LLMConfig)
         : client;
       const pipeline = new PipelineRunner(await buildPipelineConfig({
-        client: pipelineClient,
+      client: pipelineClient,
         model: reqModel ?? config.llm.model,
         currentConfig: config,
         sessionIdForSSE: bookSession.sessionId,
         bookId: agentBookId ?? undefined,
+        signal: operationController.signal,
       }));
 
       if (agentBookId && isWriteNextInstruction(instruction)) {
         const toolCallId = `direct-writer-${Date.now().toString(36)}`;
         const toolArgs = { agent: "writer", bookId: agentBookId };
+        touchOperation(operationKey, `正在调用写作工具，为《${agentBookId}》生成下一章正文。`);
         broadcast("tool:start", {
           sessionId: streamSessionId,
           id: toolCallId,
@@ -2738,12 +2218,43 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
         });
 
         try {
+          emitStudioFileAudit({
+            action: "read",
+            bookId: agentBookId,
+            tool: "sub_agent.writer",
+            path: `books/${agentBookId}/story/`,
+            detail: "读取世界观、角色、伏笔和章节上下文",
+          }, { sessionId: streamSessionId, bookId: agentBookId });
           const writeResult = await pipeline.writeNextChapter(agentBookId);
+          if (isOperationCancelled(operationKey) || operationController.signal.aborted) {
+            throw operationCancelledError();
+          }
+          touchOperation(
+            operationKey,
+            `《${agentBookId}》第 ${writeResult.chapterNumber} 章已完成，正在保存会话和章节记录。`,
+          );
+          emitStudioFileAudit({
+            action: "write",
+            bookId: agentBookId,
+            tool: "sub_agent.writer",
+            path: `books/${agentBookId}/chapters/${String(writeResult.chapterNumber).padStart(4, "0")}-*.md`,
+            detail: `写入第 ${writeResult.chapterNumber} 章正文`,
+          }, { sessionId: streamSessionId, bookId: agentBookId });
+          emitStudioFileAudit({
+            action: "modify",
+            bookId: agentBookId,
+            tool: "sub_agent.writer",
+            path: `books/${agentBookId}/story/`,
+            detail: "更新核心文件、章节摘要、伏笔和角色状态",
+          }, { sessionId: streamSessionId, bookId: agentBookId });
           const responseText = [
             `已为 ${agentBookId} 完成第 ${writeResult.chapterNumber} 章`,
             writeResult.title ? `《${writeResult.title}》` : "",
             `，字数 ${writeResult.wordCount}，状态 ${writeResult.status}。`,
           ].join("");
+          const writeTokenUsage = writeResult.tokenUsage && writeResult.tokenUsage.totalTokens > 0
+            ? writeResult.tokenUsage
+            : undefined;
           const toolResult = {
             content: [{ type: "text", text: responseText }],
             details: {
@@ -2769,14 +2280,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
             api: "anthropic-messages",
             provider: configuredEntry?.service ?? reqService ?? config.llm.provider,
             model: reqModel ?? config.llm.model,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: transcriptUsageFrom(writeTokenUsage),
             stopReason: "toolUse",
             timestamp: Date.now(),
           }], instruction);
@@ -2788,6 +2292,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
               sessionId: bookSession.sessionId,
               activeBookId: agentBookId,
             },
+            ...(writeTokenUsage ? { tokenUsage: writeTokenUsage } : {}),
           });
           return;
         } catch (error) {
@@ -2800,6 +2305,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
             result: toolResult,
             isError: true,
           });
+          if (isOperationAbortError(error)) {
+            broadcast("agent:error", { instruction, activeBookId: agentBookId, sessionId: bookSession.sessionId, error: "用户已停止当前生成。" });
+            await sendResult({
+              error: { code: "OPERATION_CANCELLED", message: "用户已停止当前生成。" },
+              response: "已停止当前生成。需要的话可以调整提示后重新发送。",
+            }, 499);
+            return;
+          }
           broadcast("agent:error", { instruction, activeBookId: agentBookId, sessionId: bookSession.sessionId, error: message });
           await sendResult({
             error: { code: "AGENT_ACTION_FAILED", message },
@@ -2820,13 +2333,24 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
           bookId: agentBookId,
           sessionId: bookSession.sessionId,
           language: config.language ?? "zh",
+          onFileAudit: (event) => emitStudioFileAudit(event, {
+            sessionId: streamSessionId,
+            bookId: agentBookId ?? undefined,
+          }),
+          signal: operationController.signal,
           onEvent: (event) => {
+            if (isOperationCancelled(operationKey)) {
+              throw new ApiError(499, "OPERATION_CANCELLED", "用户已停止当前生成。");
+            }
             if (event.type === "message_update") {
               const ame = event.assistantMessageEvent;
               if (ame.type === "text_delta") {
                 broadcast("draft:delta", { sessionId: streamSessionId, text: ame.delta });
               } else if (ame.type === "thinking_delta") {
-                broadcast("thinking:delta", { sessionId: streamSessionId, text: (ame as any).delta });
+                const thinkingDelta = (ame as { readonly delta?: unknown }).delta;
+                if (typeof thinkingDelta === "string") {
+                  broadcast("thinking:delta", { sessionId: streamSessionId, text: thinkingDelta });
+                }
               } else if (ame.type === "thinking_start") {
                 broadcast("thinking:start", { sessionId: streamSessionId });
               } else if (ame.type === "thinking_end") {
@@ -2850,6 +2374,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
                   : undefined,
                 startedAt: Date.now(),
               });
+              touchOperation(
+                operationKey,
+                agent
+                  ? `正在执行 ${resolveToolLabel(event.toolName, agent)} 工具：${stages[0] ?? "准备上下文"}`
+                  : `正在执行 ${resolveToolLabel(event.toolName)} 工具。`,
+              );
 
               if (!agentBookId && event.toolName === "sub_agent" && agent === "architect") {
                 const bookId = resolveArchitectBookIdFromArgs(args);
@@ -2908,11 +2438,20 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
                 details: exec?.details,
                 isError: event.isError,
               });
+              touchOperation(
+                operationKey,
+                event.isError
+                  ? `${resolveToolLabel(event.toolName, exec?.agent)} 执行失败，正在整理错误信息。`
+                  : `${resolveToolLabel(event.toolName, exec?.agent)} 已完成，正在合并结果。`,
+              );
             }
           },
         },
         instruction,
       );
+      if (isOperationCancelled(operationKey)) {
+        throw new ApiError(499, "OPERATION_CANCELLED", "用户已停止当前生成。");
+      }
 
       if (result.responseText) {
         const actionExecutionError = validateAgentActionExecution({
@@ -2988,7 +2527,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
               { role: "system", content: buildAgentSystemPrompt(agentBookId, config.language ?? "zh") },
               { role: "user", content: instruction },
             ],
-            { maxTokens: 256 },
+            { maxTokens: 256, signal: operationController.signal },
           );
           if (fallback.content?.trim()) {
             const actionExecutionError = validateAgentActionExecution({
@@ -3010,14 +2549,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
               api: "anthropic-messages",
               provider: configuredEntry?.service ?? reqService ?? config.llm.provider,
               model: reqModel ?? config.llm.model,
-              usage: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
+              usage: transcriptUsageFrom(fallback.usage),
               stopReason: "stop",
               timestamp: Date.now(),
             }], instruction);
@@ -3029,6 +2561,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
                 sessionId: bookSession.sessionId,
                 ...(createdBookId ? { activeBookId: createdBookId } : {}),
               },
+              tokenUsage: fallback.usage,
             });
             return;
           }
@@ -3050,7 +2583,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
             probeClient,
             reqModel ?? config.llm.model,
             [{ role: "user", content: "ping" }],
-            { maxTokens: 5 },
+            { maxTokens: 5, signal: operationController.signal },
           );
         } catch (probeError) {
           const probeMessage = probeError instanceof Error ? probeError.message : String(probeError);
@@ -3079,6 +2612,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
 
       broadcast("agent:complete", { instruction, activeBookId, sessionId: bookSession.sessionId });
       serverLog("info", "agent", `指令完成: ${instruction.slice(0, 40)}${instruction.length > 40 ? "..." : ""}`);
+      const resultUsage = (result as {
+        readonly tokenUsage?: { readonly promptTokens: number; readonly completionTokens: number; readonly totalTokens: number };
+      }).tokenUsage;
+      const resultTokenUsage = resultUsage && resultUsage.totalTokens > 0
+        ? resultUsage
+        : undefined;
 
       await sendResult({
         response: result.responseText,
@@ -3086,6 +2625,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
           sessionId: bookSession.sessionId,
           ...(bookSession.bookId ? { activeBookId: bookSession.bookId } : {}),
         },
+        ...(resultTokenUsage ? { tokenUsage: resultTokenUsage } : {}),
       });
     } catch (e) {
       if (e instanceof ApiError) {
@@ -3114,9 +2654,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       await sendResult({ error: { code: "AGENT_ERROR", message: msg } }, 500);
     } finally {
       clearInterval(keepAlive);
-      if (activeBookId) {
-        clearOperation(`agent:${sessionId}`);
-      }
+      clearOperation(operationKey);
     }
     });
   });
@@ -3133,147 +2671,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       const { writeFile: writeFileFs } = await import("node:fs/promises");
       await writeFileFs(configPath, JSON.stringify(existing, null, 2), "utf-8");
       return c.json({ ok: true, language });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // --- Audit ---
-
-  app.post("/api/v1/books/:id/audit/:chapter", async (c) => {
-    const id = c.req.param("id");
-    const chapterNum = parseInt(c.req.param("chapter"), 10);
-    const bookDir = state.bookDir(id);
-
-    broadcast("audit:start", { bookId: id, chapter: chapterNum });
-    try {
-      const book = await state.loadBookConfig(id);
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(chapterNum).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
-
-      const content = await readFile(join(chaptersDir, match), "utf-8");
-      const currentConfig = await loadCurrentProjectConfig();
-      const { ContinuityAuditor } = await import("@actalk/inkos-core");
-      const auditor = new ContinuityAuditor({
-        client: createLLMClient(currentConfig.llm),
-        model: currentConfig.llm.model,
-        projectRoot: root,
-        bookId: id,
-      });
-      const result = await auditor.auditChapter(bookDir, content, chapterNum, book.genre);
-      broadcast("audit:complete", { bookId: id, chapter: chapterNum, passed: result.passed });
-      return c.json(result);
-    } catch (e) {
-      broadcast("audit:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // --- Revise ---
-
-  app.post("/api/v1/books/:id/revise/:chapter", async (c) => {
-    const id = c.req.param("id");
-    const chapterNum = parseInt(c.req.param("chapter"), 10);
-    const bookDir = state.bookDir(id);
-    const body = await c.req
-      .json<{ mode?: string; brief?: string }>()
-      .catch(() => ({ mode: "spot-fix", brief: undefined }));
-
-    broadcast("revise:start", { bookId: id, chapter: chapterNum });
-    serverLog("info", "revise", `开始修订书籍 ${id} 第 ${chapterNum} 章`);
-    setOperation(`revise:${id}:${chapterNum}`, { type: "revise", bookId: id, chapter: chapterNum });
-    try {
-      const book = await state.loadBookConfig(id);
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(chapterNum).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) {
-        clearOperation(`revise:${id}:${chapterNum}`);
-        return c.json({ error: "Chapter not found" }, 404);
-      }
-
-      const pipeline = new PipelineRunner(await buildPipelineConfig({
-        externalContext: body.brief,
-        bookId: id,
-      }));
-      const normalizedMode = body.mode ?? "spot-fix";
-      const result = await pipeline.reviseDraft(
-        id,
-        chapterNum,
-        normalizedMode as "polish" | "rewrite" | "rework" | "spot-fix" | "anti-detect",
-      );
-      clearOperation(`revise:${id}:${chapterNum}`);
-      serverLog("info", "revise", `书籍 ${id} 第 ${chapterNum} 章修订完成`);
-      broadcast("revise:complete", { bookId: id, chapter: chapterNum });
-      return c.json(result);
-    } catch (e) {
-      clearOperation(`revise:${id}:${chapterNum}`);
-      serverLog("error", "revise", `书籍 ${id} 第 ${chapterNum} 章修订失败: ${String(e)}`);
-      broadcast("revise:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // --- Export ---
-
-  app.get("/api/v1/books/:id/export", async (c) => {
-    const id = c.req.param("id");
-    const format = (c.req.query("format") ?? "txt") as string;
-    const approvedOnly = c.req.query("approvedOnly") === "true";
-
-    try {
-      const artifact = await buildExportArtifact(state, id, {
-        format: format as "txt" | "md" | "epub",
-        approvedOnly,
-      });
-      const responseBody = typeof artifact.payload === "string"
-        ? artifact.payload
-        : new Uint8Array(artifact.payload);
-      return new Response(responseBody, {
-        headers: {
-          "Content-Type": artifact.contentType,
-          "Content-Disposition": `attachment; filename="${artifact.fileName}"`,
-        },
-      });
-    } catch {
-      return c.json({ error: "Export failed" }, 500);
-    }
-  });
-
-  // --- Export to file (save to project dir) ---
-
-  app.post("/api/v1/books/:id/export-save", async (c) => {
-    const id = c.req.param("id");
-    const { format, approvedOnly } = await c.req.json<{ format?: string; approvedOnly?: boolean }>().catch(() => ({ format: "txt", approvedOnly: false }));
-    const fmt = format ?? "txt";
-
-    try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      const tools = createInteractionToolsFromDeps(pipeline, state);
-      const bookDir = state.bookDir(id);
-      const outputPath = join(bookDir, `${id}.${fmt === "epub" ? "epub" : fmt}`);
-      const result = await processProjectInteractionRequest({
-        projectRoot: root,
-        request: {
-          intent: "export_book",
-          bookId: id,
-          format: fmt as "txt" | "md" | "epub",
-          approvedOnly,
-          outputPath,
-        },
-        tools,
-        activeBookId: id,
-      });
-      return c.json({
-        ok: true,
-        path: (result.details?.outputPath as string | undefined) ?? outputPath,
-        format: fmt,
-        chapters: (result.details?.chaptersExported as number | undefined) ?? 0,
-      });
     } catch (e) {
       return c.json({ error: String(e) }, 500);
     }
@@ -3342,206 +2739,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     const { writeFile: writeFileFs } = await import("node:fs/promises");
     await writeFileFs(configPath, JSON.stringify(raw, null, 2), "utf-8");
     return c.json({ ok: true });
-  });
-
-  // --- AIGC Detection ---
-
-  app.post("/api/v1/books/:id/detect/:chapter", async (c) => {
-    const id = c.req.param("id");
-    const chapterNum = parseInt(c.req.param("chapter"), 10);
-    const bookDir = state.bookDir(id);
-
-    try {
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(chapterNum).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
-
-      const content = await readFile(join(chaptersDir, match), "utf-8");
-      const { analyzeAITells } = await import("@actalk/inkos-core");
-      const result = analyzeAITells(content);
-      return c.json({ chapterNumber: chapterNum, ...result });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // --- Truth file edit ---
-
-  app.put("/api/v1/books/:id/truth/:file{.+}", async (c) => {
-    const id = c.req.param("id");
-    const file = c.req.param("file");
-    const bookDir = state.bookDir(id);
-    const resolved = resolveTruthFilePath(bookDir, file);
-    if (!resolved) {
-      return c.json({ error: "Invalid truth file" }, 400);
-    }
-    // Legacy pointer shims are read-only in new-layout books: writing
-    // story_bible.md or book_rules.md does nothing at runtime (the pipeline
-    // reads outline/ instead). For pre-Phase-5 books these ARE authoritative.
-    if (LEGACY_SHIM_FILES.has(file)) {
-      const { isNewLayoutBook } = await import("@actalk/inkos-core");
-      if (await isNewLayoutBook(bookDir)) {
-        return c.json(
-          { error: "Legacy compat shim; edit outline/story_frame.md instead" },
-          400,
-        );
-      }
-    }
-    const { content } = await c.req.json<{ content: string }>();
-    const { writeFile: writeFileFs, mkdir: mkdirFs } = await import("node:fs/promises");
-    const { dirname: dirnameFs } = await import("node:path");
-    await mkdirFs(dirnameFs(resolved), { recursive: true });
-    await writeFileFs(resolved, content, "utf-8");
-    return c.json({ ok: true });
-  });
-
-  // =============================================
-  // NEW ENDPOINTS — CLI parity
-  // =============================================
-
-  // --- Book Delete ---
-
-  app.delete("/api/v1/books/:id", async (c) => {
-    const id = c.req.param("id");
-    const bookDir = state.bookDir(id);
-    try {
-      const { rm } = await import("node:fs/promises");
-      await rm(bookDir, { recursive: true, force: true });
-      broadcast("book:deleted", { bookId: id });
-      return c.json({ ok: true, bookId: id });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // --- Book Update ---
-
-  app.put("/api/v1/books/:id", async (c) => {
-    const id = c.req.param("id");
-    const updates = await c.req.json<{
-      chapterWordCount?: number;
-      targetChapters?: number;
-      status?: string;
-      language?: string;
-    }>();
-    try {
-      const book = await state.loadBookConfig(id);
-      const updated = {
-        ...book,
-        ...(updates.chapterWordCount !== undefined ? { chapterWordCount: Number(updates.chapterWordCount) } : {}),
-        ...(updates.targetChapters !== undefined ? { targetChapters: Number(updates.targetChapters) } : {}),
-        ...(updates.status !== undefined ? { status: updates.status as typeof book.status } : {}),
-        ...(updates.language !== undefined ? { language: updates.language as "zh" | "en" } : {}),
-        updatedAt: new Date().toISOString(),
-      };
-      await state.saveBookConfig(id, updated);
-      return c.json({ ok: true, book: updated });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // --- Write Rewrite (specific chapter) ---
-
-  app.post("/api/v1/books/:id/rewrite/:chapter", async (c) => {
-    const id = c.req.param("id");
-    const chapterNum = parseInt(c.req.param("chapter"), 10);
-    const body: { brief?: string } = await c.req
-      .json<{ brief?: string }>()
-      .catch(() => ({}));
-
-    broadcast("rewrite:start", { bookId: id, chapter: chapterNum });
-    serverLog("info", "rewrite", `开始重写书籍 ${id} 第 ${chapterNum} 章`);
-
-    // Track active operation for session recovery
-    setOperation(`rewrite:${id}`, { type: "rewrite", bookId: id, chapter: chapterNum });
-
-    try {
-      const rollbackTarget = chapterNum - 1;
-      const discarded = await state.rollbackToChapter(id, rollbackTarget);
-      const pipeline = new PipelineRunner(await buildPipelineConfig({
-        externalContext: body.brief,
-        bookId: id,
-      }));
-      pipeline.writeNextChapter(id).then(
-        (result) => {
-          clearOperation(`rewrite:${id}`);
-          serverLog("info", "rewrite", `书籍 ${id} 第 ${result.chapterNumber} 章重写完成: ${result.title} (${result.wordCount} 字)`);
-          broadcast("rewrite:complete", { bookId: id, chapterNumber: result.chapterNumber, title: result.title, wordCount: result.wordCount });
-        },
-        (e) => {
-          clearOperation(`rewrite:${id}`);
-          serverLog("error", "rewrite", `书籍 ${id} 重写失败: ${e instanceof Error ? e.message : String(e)}`);
-          broadcast("rewrite:error", { bookId: id, error: e instanceof Error ? e.message : String(e) });
-        },
-      );
-      return c.json({ status: "rewriting", bookId: id, chapter: chapterNum, rolledBackTo: rollbackTarget, discarded });
-    } catch (e) {
-      serverLog("error", "rewrite", `书籍 ${id} 重写失败: ${String(e)}`);
-      broadcast("rewrite:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/books/:id/resync/:chapter", async (c) => {
-    const id = c.req.param("id");
-    const chapterNum = parseInt(c.req.param("chapter"), 10);
-    const body: { brief?: string } = await c.req
-      .json<{ brief?: string }>()
-      .catch(() => ({}));
-
-    try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig({
-        externalContext: body.brief,
-      }));
-      const result = await pipeline.resyncChapterArtifacts(id, chapterNum);
-      return c.json(result);
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // --- Detect All chapters ---
-
-  app.post("/api/v1/books/:id/detect-all", async (c) => {
-    const id = c.req.param("id");
-    const bookDir = state.bookDir(id);
-
-    try {
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const mdFiles = files.filter((f) => f.endsWith(".md") && /^\d{4}/.test(f)).sort();
-      const { analyzeAITells } = await import("@actalk/inkos-core");
-
-      const results = await Promise.all(
-        mdFiles.map(async (f) => {
-          const num = parseInt(f.slice(0, 4), 10);
-          const content = await readFile(join(chaptersDir, f), "utf-8");
-          const result = analyzeAITells(content);
-          return { chapterNumber: num, filename: f, ...result };
-        }),
-      );
-      return c.json({ bookId: id, results });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // --- Detect Stats ---
-
-  app.get("/api/v1/books/:id/detect/stats", async (c) => {
-    const id = c.req.param("id");
-    try {
-      const { loadDetectionHistory, analyzeDetectionInsights } = await import("@actalk/inkos-core");
-      const bookDir = state.bookDir(id);
-      const history = await loadDetectionHistory(bookDir);
-      const insights = analyzeDetectionInsights(history);
-      return c.json(insights);
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
   });
 
   // --- Genre Create ---
@@ -3657,66 +2854,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     }
   });
 
-  // --- Style Import to Book ---
-
-  app.post("/api/v1/books/:id/style/import", async (c) => {
-    const id = c.req.param("id");
-    const { text, sourceName } = await c.req.json<{ text: string; sourceName: string }>();
-    if (!text?.trim()) return c.json({ error: "text is required" }, 400);
-
-    broadcast("style:start", { bookId: id });
-    try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      const result = await pipeline.generateStyleGuide(id, text, sourceName ?? "unknown");
-      broadcast("style:complete", { bookId: id });
-      return c.json({ ok: true, result });
-    } catch (e) {
-      broadcast("style:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // --- Import Chapters ---
-
-  app.post("/api/v1/books/:id/import/chapters", async (c) => {
-    const id = c.req.param("id");
-    const { text, splitRegex } = await c.req.json<{ text: string; splitRegex?: string }>();
-    if (!text?.trim()) return c.json({ error: "text is required" }, 400);
-
-    broadcast("import:start", { bookId: id, type: "chapters" });
-    try {
-      const { splitChapters } = await import("@actalk/inkos-core");
-      const chapters = [...splitChapters(text, splitRegex)];
-
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      const result = await pipeline.importChapters({ bookId: id, chapters });
-      broadcast("import:complete", { bookId: id, type: "chapters", count: result.importedCount });
-      return c.json(result);
-    } catch (e) {
-      broadcast("import:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // --- Import Canon ---
-
-  app.post("/api/v1/books/:id/import/canon", async (c) => {
-    const id = c.req.param("id");
-    const { fromBookId } = await c.req.json<{ fromBookId: string }>();
-    if (!fromBookId) return c.json({ error: "fromBookId is required" }, 400);
-
-    broadcast("import:start", { bookId: id, type: "canon" });
-    try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      await pipeline.importCanon(id, fromBookId);
-      broadcast("import:complete", { bookId: id, type: "canon" });
-      return c.json({ ok: true });
-    } catch (e) {
-      broadcast("import:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
   // --- Fanfic Init ---
 
   app.post("/api/v1/fanfic/init", async (c) => {
@@ -3754,39 +2891,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       return c.json({ ok: true, bookId });
     } catch (e) {
       broadcast("fanfic:error", { bookId, error: String(e) });
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // --- Fanfic Show (read canon) ---
-
-  app.get("/api/v1/books/:id/fanfic", async (c) => {
-    const id = c.req.param("id");
-    const bookDir = state.bookDir(id);
-    try {
-      const content = await readFile(join(bookDir, "story", "fanfic_canon.md"), "utf-8");
-      return c.json({ bookId: id, content });
-    } catch {
-      return c.json({ bookId: id, content: null });
-    }
-  });
-
-  // --- Fanfic Refresh ---
-
-  app.post("/api/v1/books/:id/fanfic/refresh", async (c) => {
-    const id = c.req.param("id");
-    const { sourceText, sourceName } = await c.req.json<{ sourceText: string; sourceName?: string }>();
-    if (!sourceText?.trim()) return c.json({ error: "sourceText is required" }, 400);
-
-    broadcast("fanfic:refresh:start", { bookId: id });
-    try {
-      const book = await state.loadBookConfig(id);
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      await pipeline.importFanficCanon(id, sourceText, sourceName ?? "source", (book.fanficMode ?? "canon") as "canon");
-      broadcast("fanfic:refresh:complete", { bookId: id });
-      return c.json({ ok: true });
-    } catch (e) {
-      broadcast("fanfic:refresh:error", { bookId: id, error: String(e) });
       return c.json({ error: String(e) }, 500);
     }
   });
@@ -3855,6 +2959,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     return c.json(checks);
   });
 
+  app.post("/api/v1/doctor/repair", async (c) => {
+    const repaired = await repairStudioStartupCompatibility(root);
+    await ensureProjectStorageSkeleton(root);
+    return c.json({ ok: true, repaired });
+  });
+
   return app;
 }
 
@@ -3865,6 +2975,44 @@ export async function startStudioServer(
   port = 4567,
   options?: { readonly staticDir?: string },
 ): Promise<void> {
+  await repairStudioStartupCompatibility(root);
+  await ensureProjectStorageSkeleton(root);
+  const projectConfigPath = join(root, "inkos.json");
+
+  try {
+    await access(projectConfigPath);
+    const raw = JSON.parse(await readFile(projectConfigPath, "utf-8")) as Record<string, unknown>;
+    const llm = raw.llm && typeof raw.llm === "object" ? raw.llm as Record<string, unknown> : {};
+    const needsRepair = raw.name === undefined
+      || raw.version !== "0.1.0"
+      || typeof llm.service !== "string"
+      || typeof llm.defaultModel !== "string"
+      || (typeof llm.provider === "string" && !["openai", "anthropic", "custom"].includes(llm.provider));
+    if (needsRepair) {
+      await writeFile(projectConfigPath, JSON.stringify(buildDefaultStudioProjectConfig(raw), null, 2), "utf-8");
+    }
+  } catch {
+    await writeFile(projectConfigPath, JSON.stringify(buildDefaultStudioProjectConfig(), null, 2), "utf-8");
+  }
+  const envPath = join(root, ".env");
+  try {
+    await access(envPath);
+  } catch {
+    await writeFile(envPath, "", "utf-8");
+  }
+
+  try {
+    await mkdir(GLOBAL_CONFIG_DIR, { recursive: true });
+    await access(GLOBAL_ENV_PATH);
+  } catch {
+    await writeFile(GLOBAL_ENV_PATH, [
+      "# InkOS global environment",
+      "# This file is created automatically by InkOS Studio on Android.",
+      "# Configure provider credentials in the app's model settings; they are stored in .inkos/secrets.json.",
+      "",
+    ].join("\n"), "utf-8");
+  }
+
   const config = await loadProjectConfig(root, { consumer: "studio", requireApiKey: false });
 
   const app = createStudioServer(config, root);
@@ -3910,11 +3058,35 @@ export async function startStudioServer(
 
   const server = serve({ fetch: app.fetch, port });
   server.on("listening", () => {
-    console.log(`\nInkOS Studio running on http://localhost:${port}\n`);
+    writeConsoleLogEntry({
+      level: "info",
+      tag: "studio",
+      message: `InkOS Studio running on http://localhost:${port}`,
+    });
+    void (async () => {
+      try {
+        await mkdir(root, { recursive: true });
+        await writeFile(join(root, "runtime-status.json"), JSON.stringify({
+          state: "running",
+          message: `Node backend listening on 127.0.0.1:${port}`,
+          updatedAt: Date.now(),
+        }, null, 2), "utf-8");
+      } catch (error) {
+        writeConsoleLogEntry({
+          level: "warn",
+          tag: "studio",
+          message: `Unable to write runtime status: ${formatUnknownError(error)}`,
+        });
+      }
+    })();
   });
   server.on("error", (err: NodeJS.ErrnoException) => {
     if (err.code === "EADDRINUSE") {
-      console.error(`\nPort ${port} is already in use. Stop the other process or use --port <number>.\n`);
+      writeConsoleLogEntry({
+        level: "error",
+        tag: "studio",
+        message: `Port ${port} is already in use. Stop the other process or use --port <number>.`,
+      });
       process.exit(1);
     }
   });

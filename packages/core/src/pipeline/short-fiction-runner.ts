@@ -711,7 +711,7 @@ function slugify(value: string): string {
   const slug = value
     .toLowerCase()
     .replace(/['"]/g, "")
-    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/[^0-9a-zA-Z\u3400-\u9fff]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 60);
   return slug || `short-${Date.now()}`;

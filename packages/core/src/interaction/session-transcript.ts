@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { TranscriptEventSchema, type TranscriptEvent } from "./session-transcript-schema.js";
@@ -87,6 +87,43 @@ export async function appendTranscriptEvents(
   appendQueues.set(key, next.catch(() => undefined));
   await next;
   return result;
+}
+
+export async function compactDeletedTranscriptMessages(
+  projectRoot: string,
+  sessionId: string,
+): Promise<void> {
+  const key = `${projectRoot}:${sessionId}`;
+  const previous = appendQueues.get(key) ?? Promise.resolve();
+  const next = previous.then(async () => {
+    const events = await readTranscriptEvents(projectRoot, sessionId);
+    const deleted = new Set(
+      events
+        .filter((event) => event.type === "message_deleted")
+        .map((event) => event.targetUuid),
+    );
+    if (deleted.size === 0) return;
+
+    const compacted = events
+      .filter((event) =>
+        event.type !== "message_deleted" &&
+        !(event.type === "message" && deleted.has(event.uuid)),
+      )
+      .map((event, index) => ({ ...event, seq: index + 1 }));
+    const path = transcriptPath(projectRoot, sessionId);
+    const temporaryPath = `${path}.compact-${process.pid}-${Date.now()}`;
+    await mkdir(sessionsDir(projectRoot), { recursive: true });
+    await writeFile(
+      temporaryPath,
+      compacted.length > 0
+        ? `${compacted.map((event) => JSON.stringify(event)).join("\n")}\n`
+        : "",
+      "utf-8",
+    );
+    await rename(temporaryPath, path);
+  });
+  appendQueues.set(key, next.catch(() => undefined));
+  await next;
 }
 
 function transcriptRoleForMessage(message: AgentMessage): TranscriptRole | null {

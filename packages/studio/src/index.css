@@ -1,9 +1,7 @@
 /*
   InkOS Studio — Soft editorial workbench
-  Fonts: Source Serif 4 & Lora for literary voice, Inter Variable for clean UI.
+  Fonts: system UI stack for fast Android startup.
 */
-@import url("https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400..700;1,400..700&family=Source+Serif+4:ital,opsz,wght@0,8..60,200..900;1,8..60,200..900&display=swap");
-@import "@fontsource-variable/inter";
 
 @import "tailwindcss";
 
@@ -17,6 +15,11 @@ body,
 #root {
   height: 100%;
   min-width: 0;
+}
+
+html {
+  background: var(--background);
+  -webkit-text-size-adjust: 100%;
 }
 
 @theme inline {
@@ -46,7 +49,7 @@ body,
   --radius-xl: calc(var(--radius) + 4px);
 
   --font-serif: 'Source Serif 4', 'Lora', Georgia, 'Times New Roman', serif;
-  --font-sans: 'Inter Variable', "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-mono: "SFMono-Regular", "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
 
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
@@ -143,6 +146,8 @@ body {
   color: var(--foreground);
   overflow-x: hidden;
   transition: background 0.5s ease, color 0.5s ease;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: pan-x pan-y;
 }
 
 /* ── Cursor interaction rules ── */
@@ -412,7 +417,91 @@ h3 { font-size: 1.125rem; line-height: 1.4; }
   display: none;
 }
 
+/* ── Artifact / truth-file readers ── */
+.artifact-markdown {
+  min-width: 0;
+  overflow-x: hidden;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+.artifact-markdown [data-streamdown="table-wrapper"] {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
+  border-radius: 1rem;
+  background: color-mix(in oklch, var(--card) 72%, transparent);
+}
+
+.artifact-markdown table {
+  min-width: 42rem;
+  width: max-content;
+  border-collapse: collapse;
+  table-layout: auto;
+}
+
+.artifact-markdown th,
+.artifact-markdown td {
+  min-width: 7.5rem;
+  max-width: 18rem;
+  padding: 0.7rem 0.85rem;
+  vertical-align: top;
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.artifact-markdown th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: color-mix(in oklch, var(--card) 88%, var(--secondary));
+  font-weight: 700;
+}
+
+.artifact-markdown td {
+  line-height: 1.75;
+}
+
+.artifact-markdown pre,
+.artifact-markdown code {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.truth-file-pre {
+  display: block;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 640px) {
+  .artifact-markdown {
+    font-size: 0.86rem;
+    line-height: 1.7;
+  }
+
+  .artifact-markdown table {
+    min-width: 36rem;
+  }
+
+  .artifact-markdown th,
+  .artifact-markdown td {
+    min-width: 6.25rem;
+    max-width: 14rem;
+    padding: 0.58rem 0.68rem;
+  }
+}
+
 /* ── Mobile Utilities ── */
+
+.mobile-scroll-area {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
 
 /* Safe area insets for notched devices */
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
@@ -447,6 +536,15 @@ h3 { font-size: 1.125rem; line-height: 1.4; }
     min-height: 44px;
     min-width: 44px;
   }
+
+  button,
+  [role="button"],
+  a,
+  select,
+  input,
+  textarea {
+    min-height: 44px;
+  }
 }
 
 /* Prevent iOS elastic overscroll on the body */
@@ -464,5 +562,236 @@ html {
 @media (max-width: 640px) {
   body {
     background-attachment: scroll;
+  }
+
+  .mobile-safe-top {
+    padding-top: max(2.25rem, env(safe-area-inset-top));
+  }
+
+  .mobile-safe-bottom {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+
+  .chat-message-scroll {
+    padding-bottom: 0.75rem;
+  }
+
+  body,
+  #root {
+    width: 100%;
+    overflow-x: clip;
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  .glass-panel,
+  .paper-sheet,
+  .soft-pill {
+    backdrop-filter: blur(12px) saturate(1.05);
+  }
+}
+
+@media (max-width: 640px) {
+  header {
+    gap: 0.45rem !important;
+  }
+
+  header .soft-pill:has(svg) {
+    width: 2.8rem !important;
+    min-width: 2.8rem !important;
+    max-width: 2.8rem !important;
+    height: 2.8rem !important;
+    padding-inline: 0 !important;
+    flex: 0 0 2.8rem !important;
+    justify-content: center !important;
+  }
+
+  header .soft-pill:has(svg) span {
+    display: none !important;
+  }
+
+  header .soft-pill:has(svg) svg {
+    width: 1.05rem !important;
+    height: 1.05rem !important;
+    flex-shrink: 0 !important;
+  }
+}
+@media (max-width: 640px) {
+  header .soft-pill,
+  nav .soft-pill,
+  .app-header .soft-pill,
+  .mobile-topbar .soft-pill {
+    height: 3.25rem;
+    min-width: 3.25rem;
+    padding-inline: 0.8rem;
+    flex-shrink: 0;
+  }
+
+  header .soft-pill:has(svg + span),
+  nav .soft-pill:has(svg + span),
+  .app-header .soft-pill:has(svg + span),
+  .mobile-topbar .soft-pill:has(svg + span) {
+    min-width: 7.25rem;
+    max-width: 10rem;
+  }
+
+  header .soft-pill span,
+  nav .soft-pill span,
+  .app-header .soft-pill span,
+  .mobile-topbar .soft-pill span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 640px) {
+  header {
+    gap: 0.6rem !important;
+    justify-content: space-between !important;
+  }
+
+  header .soft-pill:has(svg) {
+    width: 2.5rem !important;
+    min-width: 2.5rem !important;
+    max-width: 2.5rem !important;
+    height: 2.5rem !important;
+    padding-inline: 0 !important;
+    flex: 0 0 2.5rem !important;
+    justify-content: center !important;
+  }
+
+  header .soft-pill:has(svg) span {
+    display: none !important;
+  }
+
+  header .soft-pill:has(svg) svg {
+    width: 0.98rem !important;
+    height: 0.98rem !important;
+    flex-shrink: 0 !important;
+  }
+
+  header .soft-pill:not(:has(svg)) {
+    min-width: 7.1rem !important;
+    max-width: 7.4rem !important;
+    height: 2.5rem !important;
+    padding-inline: 0.75rem !important;
+    flex: 0 0 auto !important;
+  }
+}
+
+@media (max-width: 640px) {
+  header {
+    gap: 0.62rem !important;
+    justify-content: space-between !important;
+  }
+
+  header > div:first-child {
+    flex: 0 0 auto !important;
+    margin-right: 0.45rem !important;
+  }
+
+  header > div:last-child {
+    gap: 0.55rem !important;
+  }
+
+  header .soft-pill:has(svg) {
+    width: 2.36rem !important;
+    min-width: 2.36rem !important;
+    max-width: 2.36rem !important;
+    height: 2.36rem !important;
+    min-height: 2.36rem !important;
+    padding-inline: 0 !important;
+    flex: 0 0 2.36rem !important;
+    justify-content: center !important;
+  }
+
+  header .soft-pill:has(svg) span {
+    display: none !important;
+  }
+
+  header .soft-pill:has(svg) svg {
+    width: 0.92rem !important;
+    height: 0.92rem !important;
+  }
+
+  header > div:last-child > .soft-pill:not(:has(svg)) {
+    height: 2.36rem !important;
+    min-height: 2.36rem !important;
+    min-width: 5.1rem !important;
+    max-width: 5.1rem !important;
+    padding: 0.2rem !important;
+    flex: 0 0 5.1rem !important;
+  }
+
+  header > div:last-child > .soft-pill:not(:has(svg)) button {
+    min-width: 2.22rem !important;
+    min-height: 1.96rem !important;
+    padding-inline: 0.35rem !important;
+  }
+}
+
+@media (max-width: 640px) {
+  header {
+    display: grid !important;
+    grid-template-columns: auto minmax(0, 1fr) !important;
+    gap: 0.22rem !important;
+    justify-content: normal !important;
+    overflow: visible !important;
+    padding-left: max(0.35rem, env(safe-area-inset-left)) !important;
+    padding-right: max(0.35rem, env(safe-area-inset-right)) !important;
+  }
+
+  header > div:first-child {
+    gap: 0.22rem !important;
+    margin-right: 0 !important;
+    min-width: 0 !important;
+  }
+
+  header > div:last-child {
+    gap: 0.22rem !important;
+    justify-content: flex-end !important;
+    min-width: 0 !important;
+    overflow: visible !important;
+    overscroll-behavior-x: auto !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+  }
+
+  header .soft-pill:has(svg) {
+    width: 2.05rem !important;
+    min-width: 2.05rem !important;
+    max-width: 2.05rem !important;
+    height: 2.05rem !important;
+    min-height: 2.05rem !important;
+    flex: 0 0 2.05rem !important;
+    padding-inline: 0 !important;
+  }
+
+  header .soft-pill:has(svg) svg {
+    width: 0.86rem !important;
+    height: 0.86rem !important;
+  }
+
+  header > div:last-child > .soft-pill:not(:has(svg)) {
+    width: 4.35rem !important;
+    min-width: 4.35rem !important;
+    max-width: 4.35rem !important;
+    height: 2.05rem !important;
+    min-height: 2.05rem !important;
+    flex: 0 0 4.35rem !important;
+    padding: 0.16rem !important;
+  }
+
+  header > div:last-child > .soft-pill:not(:has(svg)) button {
+    min-width: 1.95rem !important;
+    min-height: 1.72rem !important;
+    padding-inline: 0.2rem !important;
+    font-size: 0.72rem !important;
   }
 }

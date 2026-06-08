@@ -19,6 +19,15 @@ import { getEndpoint } from "./providers/index.js";
 import { lookupModel } from "./providers/lookup.js";
 import { fetchWithProxy } from "../utils/proxy-fetch.js";
 import { isApiKeyOptionalForEndpoint } from "../utils/llm-endpoint-auth.js";
+import {
+  applyOfficialOptimizationConfig,
+  getSemanticCache,
+  optimizeMessagesForTokenPipelineAsync,
+  putSemanticCache,
+  recordTokenCompressionSavings,
+  recordTokenOptimizationEvent,
+} from "../utils/headroom-cache.js";
+import { headroomLightCompress, normalizePromptForCache, type HeadroomLightMode } from "../utils/prompt-optimizer.js";
 
 
 // === Streaming Monitor Types ===
@@ -38,6 +47,13 @@ const UNKNOWN_MODEL_FALLBACK_MAX_TOKENS = 16_384;
 export const WRITING_MAX_OUTPUT_TOKENS = 24_576;
 const TRANSIENT_LLM_RETRIES = 2;
 const STABLE_PI_CONTEXT_TIMESTAMP = 0;
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const reason = signal.reason;
+  if (reason instanceof Error) throw reason;
+  throw new Error(typeof reason === "string" && reason.trim() ? reason : "用户已停止当前生成。");
+}
 
 function isByteString(value: string): boolean {
   for (let i = 0; i < value.length; i++) {
@@ -67,7 +83,7 @@ function mergeUserAgent(headers?: Record<string, string>): Record<string, string
 
 export function createStreamMonitor(
   onProgress?: OnStreamProgress,
-  intervalMs: number = 30000,
+  intervalMs: number = 2000,
 ): { readonly onChunk: (text: string) => void; readonly stop: () => void } {
   let totalChars = 0;
   let chineseChars = 0;
@@ -146,6 +162,20 @@ export interface LLMClient {
     readonly thinkingBudget: number;
     readonly extra: Record<string, unknown>;
   };
+}
+
+export interface TokenOptimizationOptions {
+  readonly enabled?: boolean;
+  readonly projectRoot?: string;
+  readonly bookId?: string;
+  readonly compress?: boolean;
+  readonly cache?: boolean;
+  /**
+   * Disable semantic cache reads for creative/side-effectful requests while
+   * keeping compression and cache writes enabled for diagnostics/statistics.
+   */
+  readonly cacheRead?: boolean;
+  readonly cacheWrite?: boolean;
 }
 
 // === Tool-calling Types ===
@@ -243,6 +273,93 @@ export function createLLMClient(config: LLMConfig): LLMClient {
     _apiKey: config.apiKey,
     defaults,
   };
+}
+
+function resolveTokenOptimization(options?: TokenOptimizationOptions): TokenOptimizationOptions | undefined {
+  if (options?.enabled === false) return options;
+  const projectRoot = options?.projectRoot ?? process.env.INKOS_PROJECT_ROOT;
+  if (!projectRoot) return options;
+  return { ...options, projectRoot };
+}
+
+function resolveTokenOptimizationContext(
+  options: TokenOptimizationOptions | undefined,
+  client: LLMClient,
+  model: string,
+  variant?: string,
+): {
+  readonly projectRoot: string;
+  readonly bookId?: string;
+  readonly model: string;
+  readonly service?: string;
+  readonly variant?: string;
+} | null {
+  const projectRoot = options?.projectRoot ?? process.env.INKOS_PROJECT_ROOT;
+  if (!projectRoot) return null;
+  return {
+    projectRoot,
+    ...(options?.bookId ? { bookId: options.bookId } : {}),
+    model,
+    service: client.service,
+    ...(variant ? { variant } : {}),
+  };
+}
+
+function optimizeAgentMessagesForTokenPipeline(
+  messages: ReadonlyArray<AgentMessage>,
+  options?: TokenOptimizationOptions,
+): ReadonlyArray<AgentMessage> {
+  const compress = options?.compress ?? true;
+  const lastUserIndex = findLastAgentUserIndex(messages);
+  return messages.map((message, index) => {
+    if (typeof message.content !== "string") return message;
+    const normalized = normalizePromptForCache(message.content);
+    recordTokenOptimizationEvent({
+      kind: "standardized",
+      label: `Prompt 标准化：${message.role}`,
+      originalChars: message.content.length,
+      optimizedChars: normalized.length,
+      estimatedTokensSaved: Math.max(0, Math.ceil((message.content.length - normalized.length) / 2)),
+    });
+    if (!compress || index === lastUserIndex || normalized.length < 600) {
+      recordTokenOptimizationEvent({
+        kind: "compression-skipped",
+        label: index === lastUserIndex ? "保留当前用户指令原文" : "内容较短，无需压缩",
+        originalChars: normalized.length,
+        optimizedChars: normalized.length,
+        estimatedTokensSaved: 0,
+      });
+      return { ...message, content: normalized } as AgentMessage;
+    }
+    const mode = inferAgentCompressionMode(message.role, normalized);
+    const compressed = headroomLightCompress(normalized, mode);
+    const content = compressed.length < normalized.length ? compressed : normalized;
+    recordTokenCompressionSavings(normalized.length, content.length);
+    recordTokenOptimizationEvent({
+      kind: content.length < normalized.length ? "compressed" : "compression-skipped",
+      label: content.length < normalized.length ? `Headroom 压缩：${mode}` : "压缩收益不足，保留标准化文本",
+      originalChars: normalized.length,
+      optimizedChars: content.length,
+      estimatedTokensSaved: Math.max(0, Math.ceil((normalized.length - content.length) / 2)),
+    });
+    return { ...message, content } as AgentMessage;
+  });
+}
+
+function inferAgentCompressionMode(role: AgentMessage["role"], content: string): HeadroomLightMode {
+  const trimmed = content.trim();
+  if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+    return "json";
+  }
+  if (role === "assistant") return "narrative";
+  return "setting";
+}
+
+function findLastAgentUserIndex(messages: ReadonlyArray<AgentMessage>): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") return index;
+  }
+  return -1;
 }
 
 function resolvePiApi(
@@ -649,46 +766,85 @@ function parseSseEvents(buffer: string): { readonly events: ParsedSseEvent[]; re
   return { events, rest };
 }
 
-function extractOpenAITextPart(value: any): string {
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readJsonPath(value: unknown, path: ReadonlyArray<string | number>): unknown {
+  let current = value;
+  for (const segment of path) {
+    if (typeof segment === "number") {
+      if (!Array.isArray(current)) return undefined;
+      current = current[segment];
+      continue;
+    }
+    if (!isJsonRecord(current)) return undefined;
+    current = current[segment];
+  }
+  return current;
+}
+
+function readJsonString(value: unknown, path: ReadonlyArray<string | number>): string | undefined {
+  const candidate = readJsonPath(value, path);
+  return typeof candidate === "string" ? candidate : undefined;
+}
+
+function readJsonNumber(value: unknown, path: ReadonlyArray<string | number>): number | undefined {
+  const candidate = readJsonPath(value, path);
+  return typeof candidate === "number" && Number.isFinite(candidate) ? candidate : undefined;
+}
+
+function extractOpenAITextPart(value: unknown): string {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) {
     return value
-      .map((item) => typeof item?.text === "string" ? item.text : typeof item?.content === "string" ? item.content : "")
+      .map((item) => {
+        if (!isJsonRecord(item)) return "";
+        if (typeof item.text === "string") return item.text;
+        if (typeof item.content === "string") return item.content;
+        return "";
+      })
       .join("");
   }
   return "";
 }
 
-function extractChatContent(json: any): string {
-  const message = json?.choices?.[0]?.message;
-  return extractOpenAITextPart(message?.content) || extractOpenAITextPart(message?.reasoning_content);
+function extractChatContent(json: unknown): string {
+  return extractOpenAITextPart(readJsonPath(json, ["choices", 0, "message", "content"]))
+    || extractOpenAITextPart(readJsonPath(json, ["choices", 0, "message", "reasoning_content"]));
 }
 
-function extractChatDeltaContent(json: any): string {
-  return extractOpenAITextPart(json?.choices?.[0]?.delta?.content);
+function extractChatDeltaContent(json: unknown): string {
+  return extractOpenAITextPart(readJsonPath(json, ["choices", 0, "delta", "content"]));
 }
 
-function extractChatDeltaReasoningContent(json: any): string {
-  return extractOpenAITextPart(json?.choices?.[0]?.delta?.reasoning_content);
+function extractChatDeltaReasoningContent(json: unknown): string {
+  return extractOpenAITextPart(readJsonPath(json, ["choices", 0, "delta", "reasoning_content"]));
 }
 
-function extractResponsesContent(json: any): string {
-  const output = Array.isArray(json?.output) ? json.output : [];
-  return output
-    .flatMap((item: any) => Array.isArray(item?.content) ? item.content : [])
-    .map((part: any) => {
-      if (typeof part?.text === "string") return part.text;
-      if (typeof part?.content === "string") return part.content;
-      if (typeof part?.output_text === "string") return part.output_text;
+function extractResponsesContent(json: unknown): string {
+  const output = readJsonPath(json, ["output"]);
+  const outputItems = Array.isArray(output) ? output : [];
+  return outputItems
+    .flatMap((item) => {
+      if (!isJsonRecord(item) || !Array.isArray(item.content)) return [];
+      return item.content;
+    })
+    .map((part) => {
+      if (!isJsonRecord(part)) return "";
+      if (typeof part.text === "string") return part.text;
+      if (typeof part.content === "string") return part.content;
+      if (typeof part.output_text === "string") return part.output_text;
       return "";
     })
     .join("");
 }
 
-function extractAnthropicContent(json: any): string {
-  const content = Array.isArray(json?.content) ? json.content : [];
+function extractAnthropicContent(json: unknown): string {
+  const rawContent = readJsonPath(json, ["content"]);
+  const content = Array.isArray(rawContent) ? rawContent : [];
   return content
-    .map((part: any) => typeof part?.text === "string" ? part.text : "")
+    .map((part) => isJsonRecord(part) && typeof part.text === "string" ? part.text : "")
     .join("");
 }
 
@@ -699,6 +855,7 @@ async function chatCompletionViaCustomAnthropicCompatible(
   resolved: { readonly temperature: number; readonly maxTokens: number; readonly extra: Record<string, unknown> },
   onStreamProgress?: OnStreamProgress,
   onTextDelta?: (text: string) => void,
+  signal?: AbortSignal,
 ): Promise<LLMResponse> {
   const baseUrl = client._piModel?.baseUrl ?? "";
   const errorCtx = { baseUrl, model, service: client.service };
@@ -726,6 +883,7 @@ async function chatCompletionViaCustomAnthropicCompatible(
       ...(client._piModel?.headers ?? {}),
     }) ?? { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+    signal,
   }, client.proxyUrl);
 
   if (!response.ok) {
@@ -733,17 +891,19 @@ async function chatCompletionViaCustomAnthropicCompatible(
   }
 
   if (!client.stream) {
-    const json = await response.json() as any;
+    const json = await response.json() as unknown;
     const content = extractAnthropicContent(json);
     if (!content) {
       throw wrapLLMError(new Error("LLM returned empty response"), errorCtx);
     }
+    const promptTokens = readJsonNumber(json, ["usage", "input_tokens"]) ?? 0;
+    const completionTokens = readJsonNumber(json, ["usage", "output_tokens"]) ?? 0;
     return {
       content,
       usage: {
-        promptTokens: json?.usage?.input_tokens ?? 0,
-        completionTokens: json?.usage?.output_tokens ?? 0,
-        totalTokens: (json?.usage?.input_tokens ?? 0) + (json?.usage?.output_tokens ?? 0),
+        promptTokens,
+        completionTokens,
+        totalTokens: promptTokens + completionTokens,
       },
     };
   }
@@ -758,26 +918,32 @@ async function chatCompletionViaCustomAnthropicCompatible(
 
   try {
     while (true) {
+      throwIfAborted(signal);
       const { value, done } = await reader.read();
+      throwIfAborted(signal);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const parsed = parseSseEvents(buffer);
       buffer = parsed.rest;
       for (const event of parsed.events) {
         if (!event.data) continue;
-        const json = JSON.parse(event.data);
-        if (json.type === "message_start" && json.message?.usage) {
-          usage.promptTokens = json.message.usage.input_tokens ?? usage.promptTokens;
+        const json = JSON.parse(event.data) as unknown;
+        const type = readJsonString(json, ["type"]);
+        if (type === "message_start") {
+          usage.promptTokens = readJsonNumber(json, ["message", "usage", "input_tokens"]) ?? usage.promptTokens;
         }
-        if (json.type === "content_block_delta" && json.delta?.type === "text_delta" && typeof json.delta.text === "string") {
-          content += json.delta.text;
-          monitor.onChunk(json.delta.text);
-          onTextDelta?.(json.delta.text);
+        if (type === "content_block_delta" && readJsonString(json, ["delta", "type"]) === "text_delta") {
+          const text = readJsonString(json, ["delta", "text"]);
+          if (text) {
+            content += text;
+            monitor.onChunk(text);
+            onTextDelta?.(text);
+          }
         }
-        if (json.type === "message_delta" && json.usage) {
-          usage.completionTokens = json.usage.output_tokens ?? usage.completionTokens;
+        if (type === "message_delta") {
+          usage.completionTokens = readJsonNumber(json, ["usage", "output_tokens"]) ?? usage.completionTokens;
         }
-        if (json.type === "message_stop") {
+        if (type === "message_stop") {
           usage.totalTokens = usage.promptTokens + usage.completionTokens;
         }
       }
@@ -802,10 +968,11 @@ async function chatCompletionViaCustomOpenAICompatible(
   resolved: { readonly temperature: number; readonly maxTokens: number; readonly extra: Record<string, unknown> },
   onStreamProgress?: OnStreamProgress,
   onTextDelta?: (text: string) => void,
+  signal?: AbortSignal,
   allowSystemRoleFallback = true,
 ): Promise<LLMResponse> {
   if (client.provider === "anthropic") {
-    return chatCompletionViaCustomAnthropicCompatible(client, model, messages, resolved, onStreamProgress, onTextDelta);
+    return chatCompletionViaCustomAnthropicCompatible(client, model, messages, resolved, onStreamProgress, onTextDelta, signal);
   }
   const baseUrl = client._piModel?.baseUrl ?? "";
   const headers = buildCustomHeaders(client);
@@ -829,13 +996,14 @@ async function chatCompletionViaCustomOpenAICompatible(
       method: "POST",
       headers,
       body: JSON.stringify(payload),
+      signal,
     }, client.proxyUrl);
     if (!response.ok) {
       throw wrapLLMError(new Error(await readErrorResponse(response)), errorCtx);
     }
 
     if (!client.stream) {
-      const json = await response.json() as any;
+      const json = await response.json() as unknown;
       const content = extractResponsesContent(json);
       if (!content) {
         throw wrapLLMError(new Error("LLM returned empty response"), errorCtx);
@@ -843,9 +1011,9 @@ async function chatCompletionViaCustomOpenAICompatible(
       return {
         content,
         usage: {
-          promptTokens: json?.usage?.input_tokens ?? 0,
-          completionTokens: json?.usage?.output_tokens ?? 0,
-          totalTokens: json?.usage?.total_tokens ?? 0,
+          promptTokens: readJsonNumber(json, ["usage", "input_tokens"]) ?? 0,
+          completionTokens: readJsonNumber(json, ["usage", "output_tokens"]) ?? 0,
+          totalTokens: readJsonNumber(json, ["usage", "total_tokens"]) ?? 0,
         },
       };
     }
@@ -860,27 +1028,33 @@ async function chatCompletionViaCustomOpenAICompatible(
 
     try {
       while (true) {
+        throwIfAborted(signal);
         const { value, done } = await reader.read();
+        throwIfAborted(signal);
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const parsed = parseSseEvents(buffer);
         buffer = parsed.rest;
         for (const event of parsed.events) {
           if (!event.data) continue;
-          const json = JSON.parse(event.data);
-          if (json.type === "response.output_text.delta" && typeof json.delta === "string") {
-            content += json.delta;
-            monitor.onChunk(json.delta);
-            onTextDelta?.(json.delta);
+          const json = JSON.parse(event.data) as unknown;
+          const type = readJsonString(json, ["type"]);
+          if (type === "response.output_text.delta") {
+            const delta = readJsonString(json, ["delta"]);
+            if (delta) {
+              content += delta;
+              monitor.onChunk(delta);
+              onTextDelta?.(delta);
+            }
           }
-          if (json.type === "response.completed") {
+          if (type === "response.completed") {
             usage = {
-              promptTokens: json.response?.usage?.input_tokens ?? 0,
-              completionTokens: json.response?.usage?.output_tokens ?? 0,
-              totalTokens: json.response?.usage?.total_tokens ?? 0,
+              promptTokens: readJsonNumber(json, ["response", "usage", "input_tokens"]) ?? 0,
+              completionTokens: readJsonNumber(json, ["response", "usage", "output_tokens"]) ?? 0,
+              totalTokens: readJsonNumber(json, ["response", "usage", "total_tokens"]) ?? 0,
             };
             if (!content) {
-              content = extractResponsesContent(json.response);
+              content = extractResponsesContent(readJsonPath(json, ["response"]));
             }
           }
         }
@@ -916,6 +1090,7 @@ async function chatCompletionViaCustomOpenAICompatible(
     method: "POST",
     headers,
     body: JSON.stringify(payload),
+    signal,
   }, client.proxyUrl);
   if (!response.ok) {
     const detail = await readErrorResponse(response);
@@ -927,6 +1102,7 @@ async function chatCompletionViaCustomOpenAICompatible(
         resolved,
         onStreamProgress,
         onTextDelta,
+        signal,
         false,
       );
     }
@@ -934,7 +1110,7 @@ async function chatCompletionViaCustomOpenAICompatible(
   }
 
   if (!client.stream) {
-    const json = await response.json() as any;
+    const json = await response.json() as unknown;
     const content = extractChatContent(json);
     if (!content) {
       throw wrapLLMError(new Error("LLM returned empty response"), errorCtx);
@@ -942,9 +1118,9 @@ async function chatCompletionViaCustomOpenAICompatible(
     return {
       content,
       usage: {
-        promptTokens: json?.usage?.prompt_tokens ?? 0,
-        completionTokens: json?.usage?.completion_tokens ?? 0,
-        totalTokens: json?.usage?.total_tokens ?? 0,
+        promptTokens: readJsonNumber(json, ["usage", "prompt_tokens"]) ?? 0,
+        completionTokens: readJsonNumber(json, ["usage", "completion_tokens"]) ?? 0,
+        totalTokens: readJsonNumber(json, ["usage", "total_tokens"]) ?? 0,
       },
     };
   }
@@ -960,14 +1136,16 @@ async function chatCompletionViaCustomOpenAICompatible(
 
   try {
     while (true) {
+      throwIfAborted(signal);
       const { value, done } = await reader.read();
+      throwIfAborted(signal);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const parsed = parseSseEvents(buffer);
       buffer = parsed.rest;
       for (const event of parsed.events) {
         if (!event.data || event.data === "[DONE]") continue;
-        const json = JSON.parse(event.data);
+        const json = JSON.parse(event.data) as unknown;
         const delta = extractChatDeltaContent(json);
         if (delta) {
           content += delta;
@@ -980,11 +1158,11 @@ async function chatCompletionViaCustomOpenAICompatible(
             monitor.onChunk(reasoningDelta);
           }
         }
-        if (json?.usage) {
+        if (isJsonRecord(readJsonPath(json, ["usage"]))) {
           usage = {
-            promptTokens: json.usage.prompt_tokens ?? usage.promptTokens,
-            completionTokens: json.usage.completion_tokens ?? usage.completionTokens,
-            totalTokens: json.usage.total_tokens ?? usage.totalTokens,
+            promptTokens: readJsonNumber(json, ["usage", "prompt_tokens"]) ?? usage.promptTokens,
+            completionTokens: readJsonNumber(json, ["usage", "completion_tokens"]) ?? usage.completionTokens,
+            totalTokens: readJsonNumber(json, ["usage", "total_tokens"]) ?? usage.totalTokens,
           };
         }
       }
@@ -1012,6 +1190,8 @@ export async function chatCompletion(
     readonly webSearch?: boolean;
     readonly onStreamProgress?: OnStreamProgress;
     readonly onTextDelta?: (text: string) => void;
+    readonly signal?: AbortSignal;
+    readonly tokenOptimization?: TokenOptimizationOptions;
   },
 ): Promise<LLMResponse> {
   // C1 (v2.0.0)：删除 maxTokensCap 机制。per-call 显式传的 maxTokens 永远不被裁剪。
@@ -1026,15 +1206,68 @@ export async function chatCompletion(
   };
   const onStreamProgress = options?.onStreamProgress;
   const onTextDelta = options?.onTextDelta;
+  const signal = options?.signal;
   const errorCtx = { baseUrl: client._piModel?.baseUrl ?? "(unknown)", model, service: client.service };
+  const tokenOptimization = resolveTokenOptimization(options?.tokenOptimization);
+  const optimizationContext = tokenOptimization?.enabled === false
+    ? null
+    : resolveTokenOptimizationContext(
+        tokenOptimization,
+        client,
+        model,
+        JSON.stringify({
+          temperature: resolved.temperature,
+          maxTokens: resolved.maxTokens,
+          webSearch: options?.webSearch === true,
+          extra: resolved.extra,
+        }),
+      );
+  if (optimizationContext) {
+    applyOfficialOptimizationConfig(optimizationContext.projectRoot);
+  }
+  const optimized = optimizationContext
+    ? await optimizeMessagesForTokenPipelineAsync(messages, {
+        model,
+        compress: tokenOptimization?.compress ?? true,
+      })
+    : { messages: [...messages], events: [], originalChars: 0, optimizedChars: 0, estimatedTokensSaved: 0 };
+  const cacheEnabled = tokenOptimization?.cache !== false;
+  const cacheReadEnabled = cacheEnabled && tokenOptimization?.cacheRead !== false;
+  const cacheWriteEnabled = cacheEnabled && tokenOptimization?.cacheWrite !== false;
+  if (optimizationContext && cacheReadEnabled) {
+    const cached = await getSemanticCache(optimizationContext, optimized.messages);
+    if (cached) {
+      onTextDelta?.(cached.content);
+      return cached;
+    }
+  } else if (optimizationContext && cacheEnabled && !cacheReadEnabled) {
+    recordTokenOptimizationEvent({
+      kind: "cache-check",
+      label: "语义缓存检查：创作请求只写不读",
+    });
+    recordTokenOptimizationEvent({
+      kind: "cache-skip",
+      label: "语义缓存读取跳过：创作请求不复用旧生成结果",
+    });
+  } else if (optimizationContext) {
+    recordTokenOptimizationEvent({ kind: "cache-skip", label: "语义缓存跳过：当前请求关闭缓存" });
+  }
 
   try {
     return await withTransientLLMRetry(
       async () => {
+        throwIfAborted(signal);
+        recordTokenOptimizationEvent({ kind: "llm-call", label: "LLM 调用：缓存未命中后请求模型" });
+        let response: LLMResponse;
         if (shouldUseNativeCustomTransport(client)) {
-          return chatCompletionViaCustomOpenAICompatible(client, model, messages, resolved, onStreamProgress, onTextDelta);
+          response = await chatCompletionViaCustomOpenAICompatible(client, model, optimized.messages, resolved, onStreamProgress, onTextDelta, signal);
+        } else {
+          response = await chatCompletionViaPiAi(client, model, optimized.messages, resolved, onStreamProgress, onTextDelta, signal);
         }
-        return chatCompletionViaPiAi(client, model, messages, resolved, onStreamProgress, onTextDelta);
+        if (optimizationContext && cacheWriteEnabled) {
+          await putSemanticCache(optimizationContext, optimized.messages, response).catch(() => undefined);
+        }
+        return response;
       },
       // Retrying after UI text deltas have been emitted can duplicate visible text.
       { enabled: !onTextDelta },
@@ -1061,6 +1294,7 @@ export async function chatWithTools(
   options?: {
     readonly temperature?: number;
     readonly maxTokens?: number;
+    readonly tokenOptimization?: TokenOptimizationOptions;
   },
 ): Promise<ChatWithToolsResult> {
   const errorCtx = { baseUrl: client._piModel?.baseUrl ?? "(unknown)", model, service: client.service };
@@ -1073,7 +1307,16 @@ export async function chatWithTools(
       ),
       maxTokens: options?.maxTokens ?? client.defaults.maxTokens,
     };
-    return await chatWithToolsViaPiAi(client, model, messages, tools, resolved);
+    const tokenOptimization = resolveTokenOptimization(options?.tokenOptimization);
+    const optimizedMessages = tokenOptimization?.enabled === false
+      ? messages
+      : optimizeAgentMessagesForTokenPipeline(messages, tokenOptimization);
+    if (tokenOptimization?.enabled !== false) {
+      recordTokenOptimizationEvent({ kind: "cache-check", label: "语义缓存检查：工具请求" });
+      recordTokenOptimizationEvent({ kind: "cache-skip", label: "工具调用请求不跳过 LLM，避免跳过工具执行" });
+      recordTokenOptimizationEvent({ kind: "llm-call", label: "LLM 工具调用请求" });
+    }
+    return await chatWithToolsViaPiAi(client, model, optimizedMessages, tools, resolved);
   } catch (error) {
     throw wrapLLMError(error, errorCtx);
   }
@@ -1185,6 +1428,7 @@ async function chatCompletionViaPiAi(
   resolved: { readonly temperature: number; readonly maxTokens: number; readonly extra: Record<string, unknown> },
   onStreamProgress?: OnStreamProgress,
   onTextDelta?: (text: string) => void,
+  signal?: AbortSignal,
 ): Promise<LLMResponse> {
   const piModel = resolvePiModel(client, model);
   const context = toPiContext(messages);
@@ -1196,7 +1440,9 @@ async function chatCompletionViaPiAi(
   };
 
   if (!client.stream) {
+    throwIfAborted(signal);
     const response = await piCompleteSimple(piModel, context, streamOpts);
+    throwIfAborted(signal);
     if (response.stopReason === "error" && response.errorMessage) {
       throw new Error(response.errorMessage);
     }
@@ -1227,6 +1473,7 @@ async function chatCompletionViaPiAi(
 
   try {
     for await (const event of eventStream) {
+      throwIfAborted(signal);
       if (event.type === "text_delta") {
         chunks.push(event.delta);
         monitor.onChunk(event.delta);

@@ -122,7 +122,7 @@ export class ChapterAnalyzerAgent extends BaseAgent {
       chapterContent,
       chapterTitle,
       currentState,
-      ledger: genreProfile.numericalSystem ? ledger : "",
+      ledger,
       hooks: hooksWorkingSet,
       chapterSummaries,
       subplotBoard: subplotWorkingSet,
@@ -200,6 +200,7 @@ export class ChapterAnalyzerAgent extends BaseAgent {
         title: chapterTitle,
         content: canonicalContent,
         wordCount: canonicalWordCount,
+        tokenUsage: response.usage,
       };
     }
 
@@ -207,6 +208,7 @@ export class ChapterAnalyzerAgent extends BaseAgent {
       ...output,
       content: canonicalContent,
       wordCount: canonicalWordCount,
+      tokenUsage: response.usage,
     };
   }
 
@@ -220,7 +222,7 @@ export class ChapterAnalyzerAgent extends BaseAgent {
     if (language === "en") {
       const numericalBlock = genreProfile.numericalSystem
         ? "\n- This genre tracks numerical/resources systems; UPDATED_LEDGER must capture every resource change shown in the chapter."
-        : "\n- This genre has no numerical system; leave UPDATED_LEDGER empty.";
+        : "\n- This genre has no numerical system; still update UPDATED_LEDGER as a general resource ledger for items, clues, information, access, promises, debts, relationships-as-assets, and opportunity windows.";
 
       return `【LANGUAGE OVERRIDE】ALL output MUST be in English. The === TAG === markers remain unchanged.
 
@@ -285,7 +287,7 @@ Updated state card as a Markdown table reflecting the end-of-chapter state:
 | Current Conflict | ... |
 
 === UPDATED_LEDGER ===
-(If the genre has a numerical system: output the fully updated resource ledger table. Otherwise leave empty.)
+Output the fully updated resource ledger table. For non-numerical genres, track items, clues, information, access, promises, debts, relationship assets, and opportunity windows with source chapters.
 
 === UPDATED_HOOKS ===
 Updated hooks pool as a Markdown table with the latest status of every known hook:
@@ -328,7 +330,7 @@ Updated character matrix (one ## section per character, bullet-list fields):
 
     const numericalBlock = genreProfile.numericalSystem
       ? `\n- 本题材有数值/资源体系，你必须在 UPDATED_LEDGER 中追踪正文中出现的所有资源变动`
-      : `\n- 本题材无数值系统，UPDATED_LEDGER 留空`;
+      : `\n- 本题材无数值系统，UPDATED_LEDGER 仍必须作为通用资源账本更新：追踪物品、线索、情报、权限、承诺/欠债、人脉、身份筹码、机会窗口等剧情资源`;
 
     return `你是小说连续性分析师。你的任务是分析一章已完成的小说正文，从中提取所有状态变化并更新追踪文件。
 
@@ -392,7 +394,7 @@ ${bookRulesBody ? `## 本书规则\n\n${bookRulesBody}` : ""}
 | 当前冲突 | ... |
 
 === UPDATED_LEDGER ===
-（如有数值系统：更新后的完整资源账本表格；无则留空）
+（更新后的完整资源账本表格。无数值系统时，也要记录物品、线索、情报、权限、承诺/欠债、人脉、身份筹码、机会窗口等剧情资源）
 
 === UPDATED_HOOKS ===
 更新后的伏笔池（Markdown表格），包含所有已知伏笔的最新状态：
@@ -482,7 +484,7 @@ Please return the result strictly in the === TAG === format.`;
       : "";
 
     const ledgerBlock = params.ledger
-      ? `\n## 当前资源账本\n${params.ledger}\n`
+      ? `\n## 当前资源账本（数值/物品/线索/情报/权限/承诺等剧情资源）\n${params.ledger}\n`
       : "";
 
     return `请分析第${params.chapterNumber}章正文，更新所有追踪文件。

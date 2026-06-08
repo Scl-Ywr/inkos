@@ -351,6 +351,21 @@ describe("agent deterministic writing tools", () => {
     }
   });
 
+  it("reads project-relative books paths with Chinese names", async () => {
+    await mkdir(join(root, "books", "爱恋绝殇", "story"), { recursive: true });
+    await writeFile(join(root, "books", "爱恋绝殇", "story", "current_state.md"), "中文状态卡", "utf-8");
+    const tool = createReadTool(root);
+
+    const result = await tool.execute("tool-read-chinese-project-relative", {
+      path: "books/爱恋绝殇/story/current_state.md",
+    });
+
+    expect(result.content[0]?.type).toBe("text");
+    if (result.content[0]?.type === "text") {
+      expect(result.content[0].text).toContain("中文状态卡");
+    }
+  });
+
   it("reads absolute system paths when explicitly enabled", async () => {
     const outsidePath = join(root, "outside.md");
     await writeFile(outsidePath, "outside secret", "utf-8");
@@ -377,6 +392,19 @@ describe("agent deterministic writing tools", () => {
     expect(result.content[0]?.type).toBe("text");
     await expect(readFile(join(state.bookDir("harbor"), "story", "runtime", "notes.md"), "utf-8"))
       .resolves.toContain("Watch the harbor ledger");
+  });
+
+  it("writes project-relative files with Chinese book and file names", async () => {
+    const tool = createWriteFileTool(root);
+
+    const result = await tool.execute("tool-write-chinese-project-relative", {
+      path: "爱恋绝殇/story/章节备注.md",
+      content: "第二章续写提示",
+    });
+
+    expect(result.content[0]?.type).toBe("text");
+    await expect(readFile(join(root, "books", "爱恋绝殇", "story", "章节备注.md"), "utf-8"))
+      .resolves.toBe("第二章续写提示");
   });
 
   it("writes Phase 5 outline truth files through write_truth_file", async () => {

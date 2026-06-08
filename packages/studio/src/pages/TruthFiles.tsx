@@ -1,8 +1,10 @@
 import { fetchJson, useApi } from "../hooks/use-api";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
+import { mobileTextInputHandlers } from "../lib/mobile-input";
+import { appAlert } from "../lib/app-dialog";
 import { Pencil, Save, X } from "lucide-react";
 
 interface TruthFile {
@@ -21,10 +23,8 @@ export const SHIM_AUTHORITATIVE_PATH: Readonly<Record<string, string>> = {
 };
 
 /**
- * Phase hotfix 2: when the GET response carries `legacy: true`, the file is
- * a Phase 5 compat shim. The UI must hide the Edit button and surface a
- * warning pointing at the authoritative outline path. This helper centralizes
- * the rule so it's unit-testable without a DOM.
+ * When the GET response carries `legacy: true`, the file is a Phase 5 compat
+ * entry. Hide the Edit button and point at the authoritative outline path.
  */
 export interface FilePresentation {
   readonly canEdit: boolean;
@@ -55,6 +55,7 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
   const [editMode, setEditMode] = useState(false);
   const [editText, setEditText] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
+  const editRef = useRef<HTMLTextAreaElement>(null);
   const { data: fileData, refetch: refetchFile } = useApi<{ file: string; content: string | null; legacy?: boolean }>(
     selected ? `/books/${bookId}/truth/${selected}` : "",
   );
@@ -73,17 +74,19 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
 
   const handleSaveEdit = async () => {
     if (!selected) return;
+    const nextText = editRef.current?.value ?? editText;
+    setEditText(nextText);
     setSavingEdit(true);
     try {
       await fetchJson(`/books/${bookId}/truth/${selected}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: editText }),
+        body: JSON.stringify({ content: nextText }),
       });
       setEditMode(false);
       refetchFile();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to save");
+      await appAlert({ title: "保存失败", message: e instanceof Error ? e.message : "Failed to save", tone: "danger" });
     } finally {
       setSavingEdit(false);
     }
@@ -101,7 +104,7 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
 
       <h1 className="font-serif text-3xl">{t("truth.title")}</h1>
 
-      <div className="grid grid-cols-[240px_1fr] gap-6">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-6">
         {/* File list */}
         <div className={`border ${c.cardStatic} rounded-lg overflow-hidden`}>
           {data?.files.map((f) => (
@@ -124,7 +127,7 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
         </div>
 
         {/* Content viewer */}
-        <div className={`border ${c.cardStatic} rounded-lg p-5 min-h-[400px] flex flex-col`}>
+        <div className={`min-w-0 border ${c.cardStatic} rounded-lg p-4 sm:p-5 min-h-[400px] flex flex-col overflow-hidden`}>
           {selected && fileData?.content != null ? (
             <>
               {isLegacyShim && (
@@ -132,9 +135,9 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
                   data-testid="legacy-shim-warning"
                   className="mb-3 px-3 py-2 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-xs leading-relaxed"
                 >
-                  <div className="font-medium">兼容层只读 / Read-only compat shim</div>
+                  <div className="font-medium">只读兼容入口 / Read-only compat entry</div>
                   <div className="mt-1">
-                    本文件已废弃，仅供外部读取。权威来源：
+                    本文件只是旧入口的索引和摘录；实际写作读取与编辑请使用：
                     <code className="ml-1 px-1 py-0.5 rounded bg-background/40 font-mono">
                       {SHIM_AUTHORITATIVE_PATH[selected] ?? "outline/"}
                     </code>
@@ -174,12 +177,13 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
               </div>
               {editMode ? (
                 <textarea
-                  value={editText}
-                  onChange={(e) => setEditText(e.target.value)}
+                  ref={editRef}
+                  defaultValue={editText}
+                  {...mobileTextInputHandlers(setEditText)}
                   className={`${c.input} flex-1 rounded-md p-3 text-sm font-mono leading-relaxed resize-none min-h-[360px]`}
                 />
               ) : (
-                <pre className="text-sm leading-relaxed whitespace-pre-wrap font-mono text-foreground/80">{fileData.content}</pre>
+                <pre className="truth-file-pre min-w-full overflow-x-auto text-sm leading-relaxed font-mono text-foreground/80">{fileData.content}</pre>
               )}
             </>
           ) : selected && fileData?.content === null ? (

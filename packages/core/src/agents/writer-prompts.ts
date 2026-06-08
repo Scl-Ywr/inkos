@@ -5,6 +5,7 @@ import type { LengthSpec } from "../models/length-governance.js";
 import { buildFanficCanonSection, buildCharacterVoiceProfiles, buildFanficModeInstructions } from "./fanfic-prompt-sections.js";
 import { buildEnglishCoreRules, buildEnglishAntiAIRules, buildEnglishCharacterMethod, buildEnglishPreWriteChecklist, buildEnglishGenreIntro } from "./en-prompt-sections.js";
 import { buildLengthSpec } from "../utils/length-metrics.js";
+import { normalizePromptForCache, optimizePromptBlock } from "../utils/prompt-optimizer.js";
 
 export interface FanficContext {
   readonly fanficCanon: string;
@@ -57,11 +58,11 @@ export function buildWriterSystemPrompt(
         buildCreativeConstitution("en"),
         buildImmersionPillars("en"),
         buildGoldenOpeningDiscipline(chapterNumber, "en"),
-        buildGenreRules(genreProfile, genreBody),
+        buildGenreRules(genreProfile, optimizePromptBlock(genreBody, "setting")),
         buildProtagonistRules(bookRules),
-        buildBookRulesBody(bookRulesBody),
-        buildStyleGuide(styleGuide),
-        buildStyleFingerprint(styleFingerprint),
+        buildBookRulesBody(optimizePromptBlock(bookRulesBody, "setting")),
+        buildStyleGuide(optimizePromptBlock(styleGuide, "setting")),
+        buildStyleFingerprint(styleFingerprint ? optimizePromptBlock(styleFingerprint, "setting") : undefined),
         fanficContext ? buildFanficCanonSection(fanficContext.fanficCanon, fanficContext.fanficMode) : "",
         fanficContext ? buildCharacterVoiceProfiles(fanficContext.fanficCanon) : "",
         fanficContext ? buildFanficModeInstructions(fanficContext.fanficMode, fanficContext.allowedDeviations) : "",
@@ -80,11 +81,11 @@ export function buildWriterSystemPrompt(
         buildGoldenOpeningDiscipline(chapterNumber, "zh"),
         buildGoldenChaptersRules(chapterNumber, isEnglish ? "en" : "zh"),
         bookRules?.enableFullCastTracking ? buildFullCastTracking() : "",
-        buildGenreRules(genreProfile, genreBody),
+        buildGenreRules(genreProfile, optimizePromptBlock(genreBody, "setting")),
         buildProtagonistRules(bookRules),
-        buildBookRulesBody(bookRulesBody),
-        buildStyleGuide(styleGuide),
-        buildStyleFingerprint(styleFingerprint),
+        buildBookRulesBody(optimizePromptBlock(bookRulesBody, "setting")),
+        buildStyleGuide(optimizePromptBlock(styleGuide, "setting")),
+        buildStyleFingerprint(styleFingerprint ? optimizePromptBlock(styleFingerprint, "setting") : undefined),
         fanficContext ? buildFanficCanonSection(fanficContext.fanficCanon, fanficContext.fanficMode) : "",
         fanficContext ? buildCharacterVoiceProfiles(fanficContext.fanficCanon) : "",
         fanficContext ? buildFanficModeInstructions(fanficContext.fanficMode, fanficContext.allowedDeviations) : "",
@@ -92,7 +93,7 @@ export function buildWriterSystemPrompt(
         outputSection,
       ];
 
-  return sections.filter(Boolean).join("\n\n");
+  return normalizePromptForCache(sections.filter(Boolean).join("\n\n"));
 }
 
 // ---------------------------------------------------------------------------

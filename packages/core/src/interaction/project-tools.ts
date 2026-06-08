@@ -1,5 +1,5 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import type {
   InteractionEvent,
   Logger,
@@ -83,6 +83,66 @@ type InstrumentablePipelineLike = PipelineLike & {
     model?: string;
   };
 };
+
+export type FileAuditAction = "read" | "write" | "modify" | "create" | "list" | "ensure";
+
+export interface FileAuditEvent {
+  readonly action: FileAuditAction;
+  readonly path: string;
+  readonly bookId?: string;
+  readonly tool?: string;
+  readonly detail?: string;
+}
+
+interface InteractionToolHooks {
+  readonly onChatTextDelta?: (text: string) => void;
+  readonly onDraftTextDelta?: (text: string) => void;
+  readonly onDraftRawDelta?: (text: string) => void;
+  readonly onFileAudit?: (event: FileAuditEvent) => void;
+  readonly getChatRequestOptions?: () => {
+    readonly temperature?: number;
+    readonly maxTokens?: number;
+  };
+}
+
+function normalizeAuditPath(path: string): string {
+  return path.replace(/\\/g, "/");
+}
+
+function bookAuditPath(state: StateLike, bookId: string, targetPath: string): string {
+  const rel = relative(state.bookDir(bookId), targetPath);
+  return normalizeAuditPath(join("books", bookId, rel));
+}
+
+function emitFileAudit(hooks: InteractionToolHooks | undefined, event: FileAuditEvent): void {
+  try {
+    hooks?.onFileAudit?.({
+      ...event,
+      path: normalizeAuditPath(event.path),
+    });
+  } catch {
+    // Audit logging must never break the underlying file operation.
+  }
+}
+
+function emitTouchedFilesAudit(
+  hooks: InteractionToolHooks | undefined,
+  state: StateLike,
+  bookId: string,
+  tool: string,
+  touchedFiles: ReadonlyArray<string>,
+  detail: string,
+): void {
+  for (const touchedFile of touchedFiles) {
+    emitFileAudit(hooks, {
+      action: "modify",
+      bookId,
+      tool,
+      path: bookAuditPath(state, bookId, touchedFile),
+      detail,
+    });
+  }
+}
 
 function buildBookConfig(input: {
   readonly title: string;
@@ -460,20 +520,20 @@ function formatDraftForUserMessage(
 export function createInteractionToolsFromDeps(
   pipeline: PipelineLike,
   state: StateLike,
-  hooks?: {
-    readonly onChatTextDelta?: (text: string) => void;
-    readonly onDraftTextDelta?: (text: string) => void;
-    readonly onDraftRawDelta?: (text: string) => void;
-    readonly getChatRequestOptions?: () => {
-      readonly temperature?: number;
-      readonly maxTokens?: number;
-    };
-  },
+  hooks?: InteractionToolHooks,
 ): InteractionRuntimeTools {
   const instrumentedPipeline = pipeline as InstrumentablePipelineLike;
 
   return {
-    listBooks: () => state.listBooks(),
+    listBooks: async () => {
+      emitFileAudit(hooks, {
+        action: "list",
+        tool: "listBooks",
+        path: "books/",
+        detail: "读取书籍列表",
+      });
+      return state.listBooks();
+    },
     developBookDraft: async (input, existingDraft) => {
       const concept = existingDraft?.concept ?? input;
 
@@ -549,11 +609,33 @@ export function createInteractionToolsFromDeps(
       if (!pipeline.initBook) {
         throw new Error("Pipeline does not support shared book creation.");
       }
+      emitFileAudit(hooks, {
+        action: "create",
+        bookId: book.id,
+        tool: "createBook",
+        path: `books/${book.id}/`,
+        detail: "创建书籍目录与基础文件",
+      });
       await pipeline.initBook(book, {
         externalContext: buildCreationExternalContext(input),
         authorIntent: input.authorIntent,
         currentFocus: input.currentFocus,
       });
+      for (const file of [
+        "book.json",
+        "chapter-index.json",
+        "story/story_bible.md",
+        "story/current_focus.md",
+        "story/author_intent.md",
+      ]) {
+        emitFileAudit(hooks, {
+          action: "write",
+          bookId: book.id,
+          tool: "createBook",
+          path: `books/${book.id}/${file}`,
+          detail: "建书流程写入基础资料",
+        });
+      }
       return {
         bookId: book.id,
         title: book.title,
@@ -568,6 +650,13 @@ export function createInteractionToolsFromDeps(
     },
     exportBook: async (bookId, options) => {
       const result = await exportBookToPath(state, bookId, options);
+      emitFileAudit(hooks, {
+        action: "write",
+        bookId,
+        tool: "exportBook",
+        path: result.outputPath,
+        detail: `导出 ${result.chaptersExported} 章为 ${result.format}`,
+      });
       return {
         ...result,
         __interaction: {
@@ -630,16 +719,67 @@ export function createInteractionToolsFromDeps(
         },
       };
     },
-    writeNextChapter: (bookId) => withPipelineInteractionTelemetry(
-      instrumentedPipeline,
-      bookId,
-      () => pipeline.writeNextChapter(bookId),
-    ),
-    reviseDraft: (bookId, chapterNumber, mode) => withPipelineInteractionTelemetry(
-      instrumentedPipeline,
-      bookId,
-      () => pipeline.reviseDraft(bookId, chapterNumber, mode as ReviseMode),
-    ),
+    writeNextChapter: async (bookId) => {
+      emitFileAudit(hooks, {
+        action: "read",
+        bookId,
+        tool: "writeNextChapter",
+        path: `books/${bookId}/story/`,
+        detail: "读取世界观、角色、伏笔和章节上下文",
+      });
+      const result = await withPipelineInteractionTelemetry(
+        instrumentedPipeline,
+        bookId,
+        () => pipeline.writeNextChapter(bookId),
+      );
+      const chapterLabel = typeof result.chapterNumber === "number"
+        ? String(result.chapterNumber).padStart(4, "0")
+        : "*";
+      emitFileAudit(hooks, {
+        action: "write",
+        bookId,
+        tool: "writeNextChapter",
+        path: `books/${bookId}/chapters/${chapterLabel}-*.md`,
+        detail: `写入第 ${result.chapterNumber ?? "?"} 章正文`,
+      });
+      emitFileAudit(hooks, {
+        action: "modify",
+        bookId,
+        tool: "writeNextChapter",
+        path: `books/${bookId}/story/`,
+        detail: "更新核心文件、角色状态、章节摘要和伏笔进度",
+      });
+      emitFileAudit(hooks, {
+        action: "modify",
+        bookId,
+        tool: "writeNextChapter",
+        path: `books/${bookId}/chapter-index.json`,
+        detail: "更新章节索引",
+      });
+      return result;
+    },
+    reviseDraft: async (bookId, chapterNumber, mode) => {
+      emitFileAudit(hooks, {
+        action: "read",
+        bookId,
+        tool: "reviseDraft",
+        path: `books/${bookId}/chapters/${String(chapterNumber).padStart(4, "0")}-*.md`,
+        detail: "读取待修订章节",
+      });
+      const result = await withPipelineInteractionTelemetry(
+        instrumentedPipeline,
+        bookId,
+        () => pipeline.reviseDraft(bookId, chapterNumber, mode as ReviseMode),
+      );
+      emitFileAudit(hooks, {
+        action: "modify",
+        bookId,
+        tool: "reviseDraft",
+        path: `books/${bookId}/chapters/${String(chapterNumber).padStart(4, "0")}-*.md`,
+        detail: `修订第 ${chapterNumber} 章：${mode}`,
+      });
+      return result;
+    },
     patchChapterText: async (bookId, chapterNumber, targetText, replacementText) => {
       const execution = await executeEditTransaction(
         {
@@ -656,10 +796,22 @@ export function createInteractionToolsFromDeps(
           replacementText,
         },
       );
+      emitTouchedFilesAudit(
+        hooks,
+        state,
+        bookId,
+        "patchChapterText",
+        execution.touchedFiles,
+        `替换第 ${chapterNumber} 章局部文本`,
+      );
       return {
         __interaction: {
           activeChapterNumber: chapterNumber,
           responseText: execution.summary,
+          details: {
+            touchedFiles: execution.touchedFiles.map((file) => bookAuditPath(state, bookId, file)),
+            reviewRequired: execution.reviewRequired,
+          },
         },
       };
     },
@@ -678,27 +830,83 @@ export function createInteractionToolsFromDeps(
           newValue,
         },
       );
+      emitTouchedFilesAudit(
+        hooks,
+        state,
+        bookId,
+        "renameEntity",
+        execution.touchedFiles,
+        `重命名角色/实体：${oldValue} -> ${newValue}`,
+      );
       return {
         __interaction: {
           responseText: execution.summary,
+          details: {
+            touchedFiles: execution.touchedFiles.map((file) => bookAuditPath(state, bookId, file)),
+            reviewRequired: execution.reviewRequired,
+          },
         },
       };
     },
     updateCurrentFocus: async (bookId, content) => {
+      emitFileAudit(hooks, {
+        action: "ensure",
+        bookId,
+        tool: "updateCurrentFocus",
+        path: `books/${bookId}/story/`,
+        detail: "确认核心控制文件存在",
+      });
       await state.ensureControlDocuments(bookId);
-      await writeFile(join(state.bookDir(bookId), "story", "current_focus.md"), content, "utf-8");
+      const targetPath = join(state.bookDir(bookId), "story", "current_focus.md");
+      await writeFile(targetPath, content, "utf-8");
+      emitFileAudit(hooks, {
+        action: "write",
+        bookId,
+        tool: "updateCurrentFocus",
+        path: bookAuditPath(state, bookId, targetPath),
+        detail: "写入当前写作焦点",
+      });
     },
     updateAuthorIntent: async (bookId, content) => {
+      emitFileAudit(hooks, {
+        action: "ensure",
+        bookId,
+        tool: "updateAuthorIntent",
+        path: `books/${bookId}/story/`,
+        detail: "确认核心控制文件存在",
+      });
       await state.ensureControlDocuments(bookId);
-      await writeFile(join(state.bookDir(bookId), "story", "author_intent.md"), content, "utf-8");
+      const targetPath = join(state.bookDir(bookId), "story", "author_intent.md");
+      await writeFile(targetPath, content, "utf-8");
+      emitFileAudit(hooks, {
+        action: "write",
+        bookId,
+        tool: "updateAuthorIntent",
+        path: bookAuditPath(state, bookId, targetPath),
+        detail: "写入作者意图",
+      });
     },
     writeTruthFile: async (bookId, fileName, content) => {
+      emitFileAudit(hooks, {
+        action: "ensure",
+        bookId,
+        tool: "writeTruthFile",
+        path: `books/${bookId}/story/`,
+        detail: "确认真相文件目录存在",
+      });
       await state.ensureControlDocuments(bookId);
       const storyDir = join(state.bookDir(bookId), "story");
       const safeFileName = assertSafeTruthFileName(fileName);
       const targetPath = safeChildPath(storyDir, safeFileName);
       await mkdir(dirname(targetPath), { recursive: true });
       await writeFile(targetPath, content, "utf-8");
+      emitFileAudit(hooks, {
+        action: "write",
+        bookId,
+        tool: "writeTruthFile",
+        path: bookAuditPath(state, bookId, targetPath),
+        detail: "写入核心/角色真相文件",
+      });
     },
   };
 }

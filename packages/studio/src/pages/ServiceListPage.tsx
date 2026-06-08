@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Eye, EyeOff, Loader2, Plus, Search, X } from "lucide-react";
 import { GROUP_DESCRIPTIONS, GROUP_LABELS, GROUP_ORDER, GROUP_SHORT_LABELS } from "../constants/service-groups";
 import { fetchJson } from "../hooks/use-api";
@@ -6,6 +6,7 @@ import { useServiceStore } from "../store/service";
 import type { EndpointGroup, ServiceInfo } from "../store/service";
 import { ServiceQuickLinks, getServiceQuickLinks } from "../components/ServiceQuickLinks";
 import { StudioSelect } from "../components/StudioSelect";
+import { mobileTextInputHandlers } from "../lib/mobile-input";
 
 interface Nav {
   toDashboard: () => void;
@@ -74,8 +75,24 @@ function CoverConfigCard() {
   const [showKey, setShowKey] = useState(false);
   const [status, setStatus] = useState<"idle" | "loading" | "saving" | "saved" | "error">("loading");
   const [message, setMessage] = useState("");
+  const apiKeyRef = useRef<HTMLInputElement>(null);
+  const dirtyRef = useRef({
+    service: false,
+    model: false,
+    apiKey: false,
+  });
 
   const selected = providers.find((provider) => provider.service === service);
+  const apiKeyHandlers = mobileTextInputHandlers((value) => {
+    dirtyRef.current.apiKey = true;
+    setApiKey(value);
+  });
+  const writeApiKey = (value: string) => {
+    setApiKey(value);
+    if (apiKeyRef.current && apiKeyRef.current.value !== value) {
+      apiKeyRef.current.value = value;
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -85,8 +102,8 @@ function CoverConfigCard() {
         setProviders(payload.providers);
         const nextService = payload.service ?? payload.providers[0]?.service ?? "kkaiapi";
         const provider = payload.providers.find((item) => item.service === nextService) ?? payload.providers[0];
-        setService(nextService);
-        setModel(payload.model ?? provider?.defaultModel ?? "gpt-image-2");
+        if (!dirtyRef.current.service) setService(nextService);
+        if (!dirtyRef.current.model) setModel(payload.model ?? provider?.defaultModel ?? "gpt-image-2");
         setStatus("idle");
       })
       .catch((error) => {
@@ -103,18 +120,22 @@ function CoverConfigCard() {
     void fetchJson<{ apiKey?: string }>(`/cover/secret/${encodeURIComponent(service)}`)
       .then((payload) => {
         if (cancelled) return;
-        setApiKey(payload.apiKey ?? "");
+        if (!dirtyRef.current.apiKey) writeApiKey(payload.apiKey ?? "");
       })
       .catch(() => {
-        if (!cancelled) setApiKey("");
+        if (!cancelled && !dirtyRef.current.apiKey) writeApiKey("");
       });
     return () => { cancelled = true; };
   }, [service]);
 
   const handleServiceChange = (nextService: string) => {
     const provider = providers.find((item) => item.service === nextService);
+    dirtyRef.current.service = true;
+    dirtyRef.current.model = false;
+    dirtyRef.current.apiKey = false;
     setService(nextService);
     setModel(provider?.defaultModel ?? "gpt-image-2");
+    writeApiKey("");
     setStatus("idle");
     setMessage("");
   };
@@ -128,13 +149,15 @@ function CoverConfigCard() {
       await fetchJson(`/cover/secret/${encodeURIComponent(provider.service)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: apiKey.trim() }),
+        body: JSON.stringify({ apiKey: (apiKeyRef.current?.value ?? apiKey).trim() }),
       });
       await fetchJson("/cover/config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ service: provider.service, model }),
       });
+      dirtyRef.current.apiKey = false;
+      dirtyRef.current.model = false;
       setStatus("saved");
       setMessage("封面配置已保存");
     } catch (error) {
@@ -146,9 +169,9 @@ function CoverConfigCard() {
   if (providers.length === 0 && status !== "error") return null;
 
   return (
-    <section className="rounded-xl border border-border/50 bg-card/50 p-4 space-y-3">
-      <div className="flex items-start justify-between gap-3">
-        <div>
+    <section className="min-w-0 space-y-4 rounded-xl border border-border/50 bg-card/50 p-4 sm:p-5">
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="min-w-0">
           <h2 className="text-sm font-medium text-foreground">封面生成</h2>
           <p className="mt-1 text-xs text-muted-foreground/70">
             只配置封面通道和模型；封面尺寸由短篇封面提示词和内部默认处理。
@@ -161,8 +184,8 @@ function CoverConfigCard() {
         )}
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <label className="space-y-1.5">
+      <div className="grid min-w-0 gap-3 md:grid-cols-2">
+        <label className="min-w-0 space-y-1.5">
           <span className="block text-xs font-medium text-muted-foreground/70">服务</span>
           <StudioSelect
             value={service}
@@ -171,32 +194,36 @@ function CoverConfigCard() {
               value: provider.service,
               label: provider.label,
             }))}
-            triggerClassName="bg-background shadow-none"
+            triggerClassName="min-w-0 bg-background shadow-none"
           />
         </label>
-        <label className="space-y-1.5">
+        <label className="min-w-0 space-y-1.5">
           <span className="block text-xs font-medium text-muted-foreground/70">封面模型</span>
           <StudioSelect
             value={model}
-            onValueChange={setModel}
+            onValueChange={(value) => {
+              dirtyRef.current.model = true;
+              setModel(value);
+            }}
             options={(selected?.models ?? [model]).map((item) => ({
               value: item,
               label: item,
             }))}
-            triggerClassName="bg-background font-mono shadow-none"
+            triggerClassName="min-w-0 bg-background font-mono shadow-none"
           />
         </label>
       </div>
 
-      <label className="space-y-1.5">
+      <label className="min-w-0 space-y-1.5">
         <span className="block text-xs font-medium text-muted-foreground/70">API Key</span>
         <div className="relative">
           <input
             type={showKey ? "text" : "password"}
-            value={apiKey}
-            onChange={(event) => setApiKey(event.target.value)}
+            ref={apiKeyRef}
+            defaultValue={apiKey}
+            {...apiKeyHandlers}
             placeholder="sk-..."
-            className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 pr-10 text-sm font-mono"
+            className="w-full min-w-0 rounded-lg border border-border/60 bg-background px-3 py-2 pr-10 text-sm font-mono"
           />
           <button
             type="button"
@@ -208,22 +235,22 @@ function CoverConfigCard() {
         </div>
       </label>
 
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex min-w-0 flex-col items-stretch gap-3 pt-2 sm:flex-row sm:flex-wrap sm:items-center">
         <button
           onClick={handleSave}
           disabled={status === "saving" || !selected}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-xs text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+          className="inline-flex min-h-12 items-center justify-center gap-1.5 rounded-xl bg-primary px-5 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 sm:min-h-11 sm:w-auto"
         >
           {status === "saving" && <Loader2 size={12} className="animate-spin" />}
           保存封面配置
         </button>
         {selected?.baseUrl && (
-          <span className="text-xs text-muted-foreground/60">
+          <span className="min-w-0 break-words text-xs text-muted-foreground/60">
             Base URL: <span className="font-mono">{selected.baseUrl}</span>
           </span>
         )}
         {message && (
-          <span className={`text-xs ${status === "error" ? "text-destructive" : "text-emerald-500"}`}>
+          <span className={`break-words text-xs ${status === "error" ? "text-destructive" : "text-emerald-500"}`}>
             {message}
           </span>
         )}
@@ -307,7 +334,7 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
   const showCustomSection = !loading && selectedGroups.size === 0 && (filteredCustom.length > 0 || canCreateCustom);
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="mx-auto max-w-2xl min-w-0 space-y-6">
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <button
           onClick={nav.toDashboard}
@@ -328,7 +355,7 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
         <input
           type="text"
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          {...mobileTextInputHandlers(setQuery)}
           placeholder="搜索服务商"
           className="w-full rounded-lg border border-border/60 bg-background py-2 pl-9 pr-9 text-sm outline-none focus:border-primary/50"
         />

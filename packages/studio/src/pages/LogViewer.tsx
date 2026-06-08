@@ -3,7 +3,7 @@ import { fetchJson, useApi } from "../hooks/use-api";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
-import { useSSE } from "../hooks/use-sse";
+import type { ActiveOperation, SSEMessage } from "../hooks/use-sse";
 
 interface LogEntry {
   readonly level?: string;
@@ -14,6 +14,11 @@ interface LogEntry {
 
 interface Nav {
   toDashboard: () => void;
+}
+
+interface LogViewerSseState {
+  readonly messages: ReadonlyArray<SSEMessage>;
+  readonly activeOperations?: ReadonlyArray<ActiveOperation>;
 }
 
 const LEVEL_COLORS: Record<string, string> = {
@@ -45,10 +50,20 @@ function logKey(entry: LogEntry): string {
   return `${entry.timestamp ?? ""}\u0000${entry.level ?? ""}\u0000${entry.tag ?? ""}\u0000${entry.message}`;
 }
 
-export function LogViewer({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunction }) {
+function formatOperationElapsed(operation: ActiveOperation): string {
+  const startedAt = operation.startedAt ?? operation.updatedAt;
+  if (!startedAt) return "刚刚";
+  const seconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return `${minutes}m ${rest}s`;
+}
+
+export function LogViewer({ nav, theme, t, sse }: { nav: Nav; theme: Theme; t: TFunction; sse: LogViewerSseState }) {
   const c = useColors(theme);
   const { data, refetch } = useApi<{ entries: ReadonlyArray<LogEntry> }>("/logs");
-  const { messages } = useSSE();
+  const { messages, activeOperations = [] } = sse;
   const [liveEntries, setLiveEntries] = useState<ReadonlyArray<LogEntry>>([]);
   const [clearing, setClearing] = useState(false);
   const [clearError, setClearError] = useState<string | null>(null);
@@ -129,6 +144,25 @@ export function LogViewer({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunct
         </div>
       </div>
 
+      {activeOperations.length > 0 && (
+        <section className="rounded-3xl border border-primary/20 bg-primary/[0.045] p-4 shadow-lg shadow-primary/5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-xs font-semibold text-primary">当前后端任务</div>
+              <div className="mt-1 truncate text-base font-bold text-foreground">
+                {activeOperations[0]?.label ?? "任务正在执行"}
+              </div>
+            </div>
+            <span className="shrink-0 rounded-full bg-primary/12 px-3 py-1.5 text-xs font-bold text-primary">
+              {formatOperationElapsed(activeOperations[0])}
+            </span>
+          </div>
+          <p className="mt-3 text-sm leading-6 text-muted-foreground">
+            {activeOperations[0]?.message ?? "Node 后端仍在处理任务，切换页面不会中断执行。"}
+          </p>
+        </section>
+      )}
+
       {clearError && (
         <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
           {clearError}
@@ -136,25 +170,29 @@ export function LogViewer({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunct
       )}
 
       <div className={`border ${c.cardStatic} rounded-lg overflow-hidden`}>
-        <div className="p-4 max-h-[600px] overflow-y-auto">
+        <div className="max-h-[600px] overflow-y-auto overflow-x-hidden p-2.5 sm:p-4">
           {entries.length > 0 ? (
-            <div className="space-y-1 font-mono text-sm leading-relaxed">
+            <div className="space-y-1 font-mono text-[11px] leading-5 sm:text-xs sm:leading-5">
               {entries.map((entry, i) => (
-                <div key={i} className="flex gap-2">
-                  {entry.timestamp && (
-                    <span className="text-muted-foreground shrink-0 w-20 tabular-nums">
-                      {new Date(entry.timestamp).toLocaleTimeString()}
+                <div
+                  key={i}
+                  className="grid grid-cols-[4.35rem_2.7rem_minmax(0,1fr)] items-start gap-1.5 rounded-xl px-2 py-1.5 sm:grid-cols-[5.2rem_3.5rem_7.5rem_minmax(0,1fr)] sm:gap-2.5 sm:px-3"
+                >
+                  <span className="text-muted-foreground tabular-nums">
+                    {entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : "--:--:--"}
+                  </span>
+                  <span className={`uppercase ${LEVEL_COLORS[entry.level ?? ""] ?? "text-muted-foreground"}`}>
+                    {entry.level ?? "info"}
+                  </span>
+                  <span className="hidden truncate text-primary/70 sm:block">
+                    {entry.tag ? `[${entry.tag}]` : "[app]"}
+                  </span>
+                  <span className="min-w-0 break-words text-foreground/80">
+                    <span className="mr-1 text-primary/70 sm:hidden">
+                      {entry.tag ? `[${entry.tag}]` : "[app]"}
                     </span>
-                  )}
-                  {entry.level && (
-                    <span className={`shrink-0 w-12 uppercase ${LEVEL_COLORS[entry.level] ?? "text-muted-foreground"}`}>
-                      {entry.level}
-                    </span>
-                  )}
-                  {entry.tag && (
-                    <span className="text-primary/70 shrink-0">[{entry.tag}]</span>
-                  )}
-                  <span className="text-foreground/80">{entry.message}</span>
+                    {entry.message}
+                  </span>
                 </div>
               ))}
             </div>

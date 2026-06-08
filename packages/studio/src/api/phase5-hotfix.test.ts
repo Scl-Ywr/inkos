@@ -75,8 +75,20 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     createLogger: vi.fn(() => logger),
     computeAnalytics: vi.fn(() => ({})),
     isSafeBookId: actual.isSafeBookId,
+    ensureSemanticCacheStorage: vi.fn((projectRoot: string) => ({
+      sqliteAvailable: false,
+      path: join(projectRoot, ".inkos", "cache", "semantic-cache.db"),
+      fallbackPath: join(projectRoot, ".inkos", "cache", "semantic-cache.json"),
+    })),
     chatCompletion: chatCompletionMock,
     loadProjectConfig: loadProjectConfigMock,
+    listBookSessions: vi.fn(async () => []),
+    buildExportArtifact: vi.fn(async () => ({ content: "", filename: "export.txt" })),
+    clearIdleL1Caches: vi.fn(async () => 0),
+    installPresetSceneTemplates: vi.fn(async () => {}),
+    getHeadroomSavingsTelemetry: vi.fn(() => ({})),
+    diffHeadroomSavingsTelemetry: vi.fn(() => ({})),
+    GLOBAL_CONFIG_DIR: join(tmpdir(), "inkos-global-config"),
     GLOBAL_ENV_PATH: join(tmpdir(), "inkos-global.env"),
   };
 });
@@ -128,7 +140,7 @@ describe("Phase 5 hotfix 1 — Studio truth file endpoints", () => {
   });
 
   afterEach(async () => {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
   });
 
   it("serves outline/story_frame.md content (Phase 5 authoritative path)", async () => {
@@ -148,7 +160,7 @@ describe("Phase 5 hotfix 1 — Studio truth file endpoints", () => {
     expect(body.file).toBe("outline/story_frame.md");
     expect(body.content).toContain("# Frame prose");
     expect(body.legacy).toBeUndefined();
-  });
+  }, 10_000);
 
   it("serves roles/主要角色/<name>.md content", async () => {
     await writeFile(

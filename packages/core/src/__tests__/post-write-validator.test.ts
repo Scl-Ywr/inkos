@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   detectDuplicateTitle,
+  detectCrossChapterRepetition,
   detectParagraphLengthDrift,
   detectParagraphShapeWarnings,
   resolveDuplicateTitle,
@@ -157,6 +158,16 @@ describe("validatePostWrite", () => {
     const result = validatePostWrite(content, baseProfile, null);
     expect(findRule(result, "段落过碎")).toBeDefined();
     expect(findRule(result, "段落过碎")?.severity).toBe("warning");
+  });
+
+  it("flags whole-chapter reuse as a hard post-write error", () => {
+    const body = "苏川荔把磨砂文件袋压在桌角，盯着消防通道尽头那盏坏掉的绿灯。".repeat(90);
+    const current = `${body}\n\n她没有立刻离开，而是把录音笔重新推回袖口。`;
+    const recent = `# 第4章 《静默协议》\n\n${body}\n\n她没有立刻离开，而是把录音笔重新推回袖口。`;
+
+    const result = detectCrossChapterRepetition(current, recent, "zh");
+
+    expect(findRule(result, "整章重复")?.severity).toBe("error");
   });
 
   it("detects runs of consecutive short paragraphs", () => {

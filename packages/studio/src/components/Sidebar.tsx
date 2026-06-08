@@ -5,6 +5,7 @@ import { applyBookCollectionEvent, shouldRefetchBookCollections, shouldRefetchDa
 import type { TFunction } from "../hooks/use-i18n";
 import { setProjectChatSessionId } from "../pages/chat-page-state";
 import { useChatStore } from "../store/chat";
+import { mobileTextInputHandlers } from "../lib/mobile-input";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
   Dialog,
@@ -129,6 +130,7 @@ export function Sidebar({ nav, activePage, sse, t, onClose, mobileOpen }: {
   // bookDataVersion 变化（外部数据信号）时才重拉当前已展开书的 session 列表；
   // 展开/折叠本身不触发请求（展开由 toggleBook 驱动，已带"首次加载"判断）。
   useEffect(() => {
+    void refetchBooks();
     for (const bookId of expandedBooks) {
       void loadSessionList(bookId);
     }
@@ -136,7 +138,7 @@ export function Sidebar({ nav, activePage, sse, t, onClose, mobileOpen }: {
       void loadSessionList(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookDataVersion, loadSessionList, projectChatExpanded]);
+  }, [bookDataVersion, loadSessionList, projectChatExpanded, refetchBooks]);
 
   useEffect(() => {
     if (activePage === "chat") {
@@ -200,6 +202,16 @@ export function Sidebar({ nav, activePage, sse, t, onClose, mobileOpen }: {
     const sessionId = createDraftSession(null);
     setProjectChatSessionId(sessionId);
     nav.toChat();
+  };
+
+  const toggleProjectChat = () => {
+    setProjectChatExpanded((prev) => {
+      const next = !prev;
+      if (next && sessionIdsByBook[projectChatKey] === undefined) {
+        void loadSessionList(null);
+      }
+      return next;
+    });
   };
 
   const handleRenameConfirm = async () => {
@@ -410,25 +422,36 @@ export function Sidebar({ nav, activePage, sse, t, onClose, mobileOpen }: {
           </div>
           <div className="space-y-1">
             <div>
-              <div className="group/chat flex items-center">
+              <div
+                data-active={activePage === "chat"}
+                className={`claude-nav-item group/chat flex min-h-11 items-center rounded-2xl px-3 py-2.5 text-sm transition-all duration-200 md:min-h-0 ${
+                  activePage === "chat"
+                    ? "text-foreground font-medium"
+                    : "text-foreground font-medium hover:text-foreground hover:bg-card/45"
+                }`}
+              >
                 <button
                   type="button"
                   onClick={() => {
-                    setProjectChatExpanded((prev) => !prev);
                     nav.toChat();
+                    if (!projectChatExpanded) {
+                      setProjectChatExpanded(true);
+                    }
                     if (sessionIdsByBook[projectChatKey] === undefined) {
                       void loadSessionList(null);
                     }
                   }}
-                  data-active={activePage === "chat"}
-                  className={`claude-nav-item flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-2xl px-3 py-2.5 text-sm transition-all duration-200 md:min-h-0 ${
-                    activePage === "chat"
-                      ? "text-foreground font-medium"
-                      : "text-foreground font-medium hover:text-foreground hover:bg-card/45"
-                  }`}
+                  className="flex min-w-0 flex-1 items-center gap-3 text-left"
                 >
                   <MessageSquare size={16} className={activePage === "chat" ? "text-primary" : "text-muted-foreground group-hover/chat:text-foreground"} />
                   <span className="flex-1 text-left">{t("nav.chat")}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={toggleProjectChat}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-card/60 hover:text-foreground"
+                  aria-label={projectChatExpanded ? "收起普通聊天会话" : "展开普通聊天会话"}
+                >
                   <ChevronRight
                     size={13}
                     className={`text-muted-foreground/60 transition-transform ${projectChatExpanded ? "rotate-90" : ""}`}
@@ -561,7 +584,7 @@ export function Sidebar({ nav, activePage, sse, t, onClose, mobileOpen }: {
             id="session-rename-input"
             autoFocus
             value={renameValue}
-            onChange={(event) => setRenameValue(event.target.value)}
+            {...mobileTextInputHandlers(setRenameValue)}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();

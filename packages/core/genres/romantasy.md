@@ -1,45 +1,25 @@
 ---
-name: Romantasy
+name: 奇幻言情
 id: romantasy
-language: en
-chapterTypes: ["Romance", "Action", "Setup", "Transition", "Payoff"]
-fatigueWords: ["delve", "tapestry", "testament", "intricate", "pivotal", "vibrant", "comprehensive", "nuanced", "embark", "foster", "underscore", "bolstered", "crucial"]
+language: zh
+chapterTypes: ["相遇章", "试探章", "契约章", "并肩章", "误会章", "告白章"]
+fatigueWords: ["命运", "禁忌", "心动", "契约", "王冠", "魔法", "宿命"]
 numericalSystem: false
-powerScaling: false
+powerScaling: true
 eraResearch: false
-pacingRule: "Romance beats at every act break. Chemistry scenes every 2-3 chapters. Fantasy romance: consummation at 60-75%. Romantic fantasy: romance resolution aligned with plot resolution."
-satisfactionTypes: ["Chemistry Moment", "Vulnerability Shared", "Obstacle Overcome Together", "First Kiss", "Relationship Defined", "HEA/HFN Achieved"]
-auditDimensions: [1,2,3,6,7,8,9,10,13,14,15,16,17,18,19,24,25,26]
+pacingRule: "感情推进和主线危机必须互相推动；每3-5章出现一次关系状态变化。"
+satisfactionTypes: ["暧昧拉扯", "并肩作战", "身份揭露", "误会化解", "双向奔赴"]
+auditDimensions: [1, 2, 3, 4, 5, 8, 9, 10, 13, 14, 15, 16, 17, 18, 24, 25, 26]
 ---
 
-## Genre Prohibitions
+## 感情规则
 
-- Chemistry that isn't earned — readers must understand why characters care for each other
-- Love interest who doesn't drive protagonist's transformation
-- Easy romance without real conflict — tension is mandatory
-- Fantasy romance without HEA/HFN ending — readers feel betrayed
-- Mislabeling heat level — communicate clearly in story setup; readers self-select
-- World-building that feels like afterthought to romance — setting must complicate or enable the relationship
-- Love triangles dragged out without decisive resolution
-- "Tell" emotions instead of showing them — inner feelings shown through action, not declaration
+吸引力来自选择与代价：一方为另一方破例、冒险、让步或承担后果。
 
-## Romance Rules
+关系变化要有阶段：警惕、利用、信任、依赖、冲突、承认、共同承担。
 
-- Show attraction subtly: physical detail notices, lingering touches, involuntary reactions (heartbeat, breath catching)
-- Banter and wit: clever dialogue showing mutual understanding and intellectual challenge
-- Vulnerability moments: characters sharing weakness, fear, secrets, past trauma
-- Shared goals reveal compatibility: working together toward a goal shows how the partner handles conflict
-- Conflict must be real — external barriers (class, species, faction, magic) or internal barriers (fear, trust, past wounds)
-- Fantasy setting complicates romance: magic bonds, soul connections, species differences, political marriages
-- Action scenes show relationship dynamics — fighting together reveals trust and compatibility
-- Heat level must be consistent throughout — don't escalate or pull back without narrative reason
+## 题材禁忌
 
-## Pacing Guidance
+不要让爱情替代人物动机；双方都要有独立目标、恐惧和不可退让之处。
 
-- Fantasy romance: heavy romance focus early, building to consummation around 60-75%, resolution after romance established
-- Romantic fantasy: romance subplot woven through action plot, key romantic moments at act breaks, romance resolution aligned with plot resolution
-- Chemistry scenes every 2-3 chapters minimum — readers came for the relationship
-- Sexual tension can heighten during/after action (adrenaline, relief, protective instincts)
-- Break up long dialogue-heavy romance scenes with physical action or setting detail
-- Enemies-to-lovers needs slow burn: opposition -> forced proximity -> grudging respect -> attraction -> surrender
-- Second-chance romance: history adds depth and pain; show how characters have changed
+误会不能靠不说话硬拖，必须有身份、制度、信息差或价值观冲突支撑。

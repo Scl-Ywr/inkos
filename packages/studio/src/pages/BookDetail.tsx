@@ -1,4 +1,4 @@
-import { fetchJson, useApi, postApi } from "../hooks/use-api";
+import { buildApiUrl, fetchJson, useApi, postApi } from "../hooks/use-api";
 import { useEffect, useMemo, useState, useRef } from "react";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
@@ -7,6 +7,8 @@ import { useColors } from "../hooks/use-colors";
 import { deriveBookActivity, shouldRefetchBookView } from "../hooks/use-book-activity";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { StudioSelect } from "../components/StudioSelect";
+import { mobileTextInputHandlers } from "../lib/mobile-input";
+import { appAlert, appPrompt } from "../lib/app-dialog";
 import {
   ChevronLeft,
   Zap,
@@ -201,7 +203,7 @@ export function BookDetail({
       await postApi(`/books/${bookId}/write-next`);
     } catch (e) {
       setWriteRequestPending(false);
-      alert(e instanceof Error ? e.message : "Failed");
+      await appAlert({ title: "写作启动失败", message: e instanceof Error ? e.message : "Failed", tone: "danger" });
     }
   };
 
@@ -211,7 +213,7 @@ export function BookDetail({
       await postApi(`/books/${bookId}/draft`);
     } catch (e) {
       setDraftRequestPending(false);
-      alert(e instanceof Error ? e.message : "Failed");
+      await appAlert({ title: "草稿生成失败", message: e instanceof Error ? e.message : "Failed", tone: "danger" });
     }
   };
 
@@ -219,26 +221,24 @@ export function BookDetail({
     setConfirmDeleteOpen(false);
     setDeleting(true);
     try {
-      const res = await fetch(`/api/v1/books/${bookId}`, { method: "DELETE" });
-      if (!res.ok) {
-        const json = await res.json().catch(() => ({}));
-        throw new Error((json as { error?: string }).error ?? `${res.status}`);
-      }
+      await fetchJson(`/books/${bookId}`, { method: "DELETE" });
       nav.toDashboard();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Delete failed");
+      await appAlert({ title: "删除失败", message: e instanceof Error ? e.message : "Delete failed", tone: "danger" });
     } finally {
       setDeleting(false);
     }
   };
 
   const handleRewrite = async (chapterNum: number) => {
-    const brief = window.prompt(
-      data?.book.language === "en"
+    const brief = await appPrompt({
+      title: data?.book.language === "en" ? "Rewrite brief" : "重写说明",
+      message: data?.book.language === "en"
         ? "Optional rewrite brief for this run only. Leave blank to use existing focus."
         : "可选：输入这次重写要遵循的补充想法。留空则沿用现有 focus。",
-      "",
-    );
+      confirmLabel: data?.book.language === "en" ? "Rewrite" : "开始重写",
+      placeholder: data?.book.language === "en" ? "Optional brief..." : "可留空",
+    });
     if (brief === null) return;
     setRewritingChapters((prev) => [...prev, chapterNum]);
     try {
@@ -249,19 +249,21 @@ export function BookDetail({
       });
       refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Rewrite failed");
+      await appAlert({ title: "重写失败", message: e instanceof Error ? e.message : "Rewrite failed", tone: "danger" });
     } finally {
       setRewritingChapters((prev) => prev.filter((n) => n !== chapterNum));
     }
   };
 
   const handleRevise = async (chapterNum: number, mode: ReviseMode) => {
-    const brief = window.prompt(
-      data?.book.language === "en"
+    const brief = await appPrompt({
+      title: data?.book.language === "en" ? "Revision brief" : "修订说明",
+      message: data?.book.language === "en"
         ? "Optional revise brief for this run only. Leave blank to use existing focus."
         : "可选：输入这次修订要遵循的补充想法。留空则沿用现有 focus。",
-      "",
-    );
+      confirmLabel: data?.book.language === "en" ? "Revise" : "开始修订",
+      placeholder: data?.book.language === "en" ? "Optional brief..." : "可留空",
+    });
     if (brief === null) return;
     setRevisingChapters((prev) => [...prev, chapterNum]);
     try {
@@ -272,19 +274,21 @@ export function BookDetail({
       });
       refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Revision failed");
+      await appAlert({ title: "修订失败", message: e instanceof Error ? e.message : "Revision failed", tone: "danger" });
     } finally {
       setRevisingChapters((prev) => prev.filter((n) => n !== chapterNum));
     }
   };
 
   const handleSync = async (chapterNum: number) => {
-    const brief = window.prompt(
-      data?.book.language === "en"
+    const brief = await appPrompt({
+      title: data?.book.language === "en" ? "Sync brief" : "同步说明",
+      message: data?.book.language === "en"
         ? "Optional sync brief for interpreting the edited chapter body. Leave blank to sync directly from the text."
         : "可选：输入这次同步时要遵循的补充说明。留空则直接按正文同步。",
-      "",
-    );
+      confirmLabel: data?.book.language === "en" ? "Sync" : "开始同步",
+      placeholder: data?.book.language === "en" ? "Optional brief..." : "可留空",
+    });
     if (brief === null) return;
     setSyncingChapters((prev) => [...prev, chapterNum]);
     try {
@@ -295,7 +299,7 @@ export function BookDetail({
       });
       refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Sync failed");
+      await appAlert({ title: "同步失败", message: e instanceof Error ? e.message : "Sync failed", tone: "danger" });
     } finally {
       setSyncingChapters((prev) => prev.filter((n) => n !== chapterNum));
     }
@@ -316,7 +320,7 @@ export function BookDetail({
       });
       refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Save failed");
+      await appAlert({ title: "保存失败", message: e instanceof Error ? e.message : "Save failed", tone: "danger" });
     } finally {
       setSavingSettings(false);
     }
@@ -334,7 +338,7 @@ export function BookDetail({
       }
     }
     if (failed > 0) {
-      alert(`${failed}/${reviewable.length} approve(s) failed`);
+      await appAlert({ title: "批量通过失败", message: `${failed}/${reviewable.length} approve(s) failed`, tone: "danger" });
     }
     refetch();
   };
@@ -357,7 +361,7 @@ export function BookDetail({
   const currentTargetChapters = settingsTargetChapters ?? book.targetChapters ?? 0;
   const currentStatus = settingsStatus ?? (book.status as BookStatus);
 
-  const exportHref = `/api/v1/books/${bookId}/export?format=${exportFormat}${exportApprovedOnly ? "&approvedOnly=true" : ""}`;
+  const exportHref = buildApiUrl(`/books/${bookId}/export?format=${exportFormat}${exportApprovedOnly ? "&approvedOnly=true" : ""}`) ?? "#";
   const exportFormatOptions = [
     { value: "txt" as const, label: "TXT" },
     { value: "md" as const, label: "MD" },
@@ -545,9 +549,9 @@ export function BookDetail({
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ format: exportFormat, approvedOnly: exportApprovedOnly }),
                   });
-                  alert(`${t("common.exportSuccess")}\n${data.path}\n(${data.chapters} ${t("dash.chapters")})`);
+                  await appAlert({ title: t("common.exportSuccess"), message: `${data.path}\n(${data.chapters} ${t("dash.chapters")})`, tone: "success" });
                 } catch (e) {
-                  alert(e instanceof Error ? e.message : "Export failed");
+                  await appAlert({ title: "导出失败", message: e instanceof Error ? e.message : "Export failed", tone: "danger" });
                 }
               }}
               className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg hover:text-foreground hover:bg-secondary transition-all border border-border/50"
@@ -567,7 +571,7 @@ export function BookDetail({
             <input
               type="number"
               value={currentWordCount}
-              onChange={(e) => setSettingsWordCount(Number(e.target.value))}
+              {...mobileTextInputHandlers((value) => setSettingsWordCount(Number(value)))}
               className="px-3 py-2 text-sm rounded-lg border border-border/50 bg-secondary/30 outline-none focus:border-primary/50 w-32"
             />
           </div>
@@ -576,7 +580,7 @@ export function BookDetail({
             <input
               type="number"
               value={currentTargetChapters}
-              onChange={(e) => setSettingsTargetChapters(Number(e.target.value))}
+              {...mobileTextInputHandlers((value) => setSettingsTargetChapters(Number(value)))}
               className="px-3 py-2 text-sm rounded-lg border border-border/50 bg-secondary/30 outline-none focus:border-primary/50 w-32"
             />
           </div>
@@ -639,7 +643,7 @@ export function BookDetail({
                       <button
                         onClick={async () => {
                           try { await postApi(`/books/${bookId}/chapters/${ch.number}/approve`); refetch(); }
-                          catch (e) { alert(e instanceof Error ? e.message : "Approve failed"); }
+                          catch (e) { await appAlert({ title: "操作失败", message: e instanceof Error ? e.message : "Approve failed", tone: "danger" }); }
                         }}
                         className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-500 text-white shadow-sm shadow-emerald-500/20"
                         title={t("book.approve")}
@@ -650,7 +654,7 @@ export function BookDetail({
                       <button
                         onClick={async () => {
                           try { await postApi(`/books/${bookId}/chapters/${ch.number}/reject`); refetch(); }
-                          catch (e) { alert(e instanceof Error ? e.message : "Reject failed"); }
+                          catch (e) { await appAlert({ title: "操作失败", message: e instanceof Error ? e.message : "Reject failed", tone: "danger" }); }
                         }}
                         className="flex h-11 w-11 items-center justify-center rounded-2xl bg-destructive/10 text-destructive"
                         title={t("book.reject")}
@@ -664,10 +668,14 @@ export function BookDetail({
                     onClick={async () => {
                       try {
                         const auditResult = await fetchJson<{ passed?: boolean; issues?: unknown[] }>(`/books/${bookId}/audit/${ch.number}`, { method: "POST" });
-                        alert(auditResult.passed ? "Audit passed" : `Audit failed: ${auditResult.issues?.length ?? 0} issues`);
+                        await appAlert({
+                          title: auditResult.passed ? "Audit passed" : "Audit failed",
+                          message: auditResult.passed ? "Audit passed" : `${auditResult.issues?.length ?? 0} issues`,
+                          tone: auditResult.passed ? "success" : "danger",
+                        });
                         refetch();
                       } catch (e) {
-                        alert(e instanceof Error ? e.message : "Audit failed");
+                        await appAlert({ title: "Audit failed", message: e instanceof Error ? e.message : "Audit failed", tone: "danger" });
                       }
                     }}
                     className="flex h-11 w-11 items-center justify-center rounded-2xl bg-secondary text-muted-foreground"
@@ -751,7 +759,7 @@ export function BookDetail({
                           <button
                             onClick={async () => {
                               try { await postApi(`/books/${bookId}/chapters/${ch.number}/approve`); refetch(); }
-                              catch (e) { alert(e instanceof Error ? e.message : "Approve failed"); }
+                              catch (e) { await appAlert({ title: "操作失败", message: e instanceof Error ? e.message : "Approve failed", tone: "danger" }); }
                             }}
                             className="p-2 rounded-lg bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500 hover:text-white transition-all shadow-sm"
                             title={t("book.approve")}
@@ -761,7 +769,7 @@ export function BookDetail({
                           <button
                             onClick={async () => {
                               try { await postApi(`/books/${bookId}/chapters/${ch.number}/reject`); refetch(); }
-                              catch (e) { alert(e instanceof Error ? e.message : "Reject failed"); }
+                              catch (e) { await appAlert({ title: "操作失败", message: e instanceof Error ? e.message : "Reject failed", tone: "danger" }); }
                             }}
                             className="p-2 rounded-lg bg-destructive/10 text-destructive hover:bg-destructive hover:text-white transition-all shadow-sm"
                             title={t("book.reject")}
@@ -774,10 +782,14 @@ export function BookDetail({
                         onClick={async () => {
                           try {
                             const auditResult = await fetchJson<{ passed?: boolean; issues?: unknown[] }>(`/books/${bookId}/audit/${ch.number}`, { method: "POST" });
-                            alert(auditResult.passed ? "Audit passed" : `Audit failed: ${auditResult.issues?.length ?? 0} issues`);
+                            await appAlert({
+                              title: auditResult.passed ? "Audit passed" : "Audit failed",
+                              message: auditResult.passed ? "Audit passed" : `${auditResult.issues?.length ?? 0} issues`,
+                              tone: auditResult.passed ? "success" : "danger",
+                            });
                             refetch();
                           } catch (e) {
-                            alert(e instanceof Error ? e.message : "Audit failed");
+                            await appAlert({ title: "Audit failed", message: e instanceof Error ? e.message : "Audit failed", tone: "danger" });
                           }
                         }}
                         className="p-2 rounded-lg bg-secondary text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all shadow-sm"

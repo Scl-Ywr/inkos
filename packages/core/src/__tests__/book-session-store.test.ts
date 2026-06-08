@@ -8,6 +8,7 @@ import {
   listBookSessions,
   renameBookSession,
   deleteBookSession,
+  deleteBookSessionMessage,
   migrateBookSession,
   createAndPersistBookSession,
   extractFirstUserMessageTitle,
@@ -55,6 +56,47 @@ describe("book-session-store", () => {
       const loaded = await loadBookSession(tempDir, session.sessionId);
       expect(loaded!.messages).toHaveLength(1);
       expect(loaded!.messages[0].content).toBe("test");
+    });
+
+    it("permanently deletes user and assistant messages from the transcript", async () => {
+      const session = createBookSession("book");
+      await persistBookSession(tempDir, session);
+      await appendManualSessionMessages(tempDir, session.sessionId, [
+        { role: "user", content: "保留问题", timestamp: 100 } as never,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "删除回答" }],
+          api: "anthropic-messages",
+          provider: "test",
+          model: "test",
+          timestamp: 200,
+        } as never,
+      ]);
+
+      await deleteBookSessionMessage(tempDir, session.sessionId, {
+        role: "assistant",
+        content: "删除回答",
+        timestamp: 200,
+      });
+      expect((await loadBookSession(tempDir, session.sessionId))?.messages.map((message) => message.content))
+        .toEqual(["保留问题"]);
+
+      await deleteBookSessionMessage(tempDir, session.sessionId, {
+        role: "user",
+        content: "保留问题",
+        timestamp: 100,
+      });
+      expect((await loadBookSession(tempDir, session.sessionId))?.messages).toEqual([]);
+      expect((await restoreAgentMessagesFromTranscript(tempDir, session.sessionId))).toEqual([]);
+
+      const events = await readTranscriptEvents(tempDir, session.sessionId);
+      expect(events.filter((event) => event.type === "message_deleted")).toHaveLength(0);
+      const raw = await readFile(
+        join(tempDir, ".inkos", "sessions", `${session.sessionId}.jsonl`),
+        "utf-8",
+      );
+      expect(raw).not.toContain("删除回答");
+      expect(raw).not.toContain("保留问题");
     });
 
     it("createBookSession initializes title as null", () => {

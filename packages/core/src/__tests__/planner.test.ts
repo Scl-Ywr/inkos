@@ -214,6 +214,24 @@ describe("PlannerAgent.planChapter memo generation", () => {
     expect(userMsg?.content).toContain("上次输出的错误");
   });
 
+  it("corrects stale memo chapter frontmatter when the model reuses the previous chapter number", async () => {
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
+      content: validMemoRaw(1),
+      usage: ZERO_USAGE,
+    } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const result = await makePlanner().planChapter({
+      book: makeBook(),
+      bookDir,
+      chapterNumber: 2,
+    });
+
+    expect(chatSpy).toHaveBeenCalledTimes(1);
+    expect(result.memo.chapter).toBe(2);
+    expect(result.memo.goal).toBe("把七号门被动过手脚钉成现场实证");
+    expect(result.intent.chapter).toBe(2);
+  });
+
   // Phase hotfix 4: English books must receive English system + user prompts
   // and English golden-opening guidance for chapters ≤ 3.
   it("uses English prompts end-to-end when book.language is en", async () => {

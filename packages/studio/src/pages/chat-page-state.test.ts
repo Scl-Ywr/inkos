@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearBookCreateSessionId,
+  clearBookCreateAssistantInput,
   filterModelGroups,
+  getBookCreateAssistantInput,
   getBookCreateSessionId,
   getProjectChatSessionId,
   pickModelSelection,
   pickProjectChatSessionId,
+  resolveComposerTextSync,
+  setBookCreateAssistantInput,
   setBookCreateSessionId,
   setProjectChatSessionId,
 } from "./chat-page-state";
@@ -58,6 +62,18 @@ describe("book-create session localStorage helpers", () => {
   it("clearBookCreateSessionId is safe when key doesn't exist", () => {
     clearBookCreateSessionId();
     expect(getBookCreateSessionId()).toBeNull();
+  });
+
+  it("persists the book-create assistant input separately from the session id", () => {
+    setBookCreateSessionId("sess-123");
+    setBookCreateAssistantInput("帮我写一本赛博修仙");
+
+    expect(getBookCreateSessionId()).toBe("sess-123");
+    expect(getBookCreateAssistantInput()).toBe("帮我写一本赛博修仙");
+
+    clearBookCreateAssistantInput();
+    expect(getBookCreateAssistantInput()).toBe("");
+    expect(getBookCreateSessionId()).toBe("sess-123");
   });
 
   it("keeps project chat session separate from book-create session", () => {
@@ -202,5 +218,59 @@ describe("pickProjectChatSessionId", () => {
 
   it("returns null when there is no project chat session", () => {
     expect(pickProjectChatSessionId([])).toBeNull();
+  });
+});
+
+describe("resolveComposerTextSync", () => {
+  it("keeps focused textarea text when store input is stale or empty", () => {
+    expect(resolveComposerTextSync({
+      storeInput: "",
+      composerText: "本地草稿",
+      elementValue: "正在输入的新内容",
+      elementFocused: true,
+    })).toEqual({
+      text: "正在输入的新内容",
+      syncStoreText: "正在输入的新内容",
+      syncElementText: null,
+    });
+  });
+
+  it("preserves the local composer snapshot when an external store refresh clears input", () => {
+    expect(resolveComposerTextSync({
+      storeInput: "",
+      composerText: "还没发送的草稿",
+      elementValue: "还没发送的草稿",
+      elementFocused: false,
+    })).toEqual({
+      text: "还没发送的草稿",
+      syncStoreText: "还没发送的草稿",
+      syncElementText: null,
+    });
+  });
+
+  it("allows an intentional clear after the composer snapshot is also empty", () => {
+    expect(resolveComposerTextSync({
+      storeInput: "",
+      composerText: "",
+      elementValue: "",
+      elementFocused: false,
+    })).toEqual({
+      text: "",
+      syncStoreText: null,
+      syncElementText: null,
+    });
+  });
+
+  it("syncs focused deletion back to the store instead of refilling old text", () => {
+    expect(resolveComposerTextSync({
+      storeInput: "旧内容",
+      composerText: "",
+      elementValue: "",
+      elementFocused: true,
+    })).toEqual({
+      text: "",
+      syncStoreText: "",
+      syncElementText: null,
+    });
   });
 });

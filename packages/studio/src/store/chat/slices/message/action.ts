@@ -6,18 +6,24 @@ import type {
   SessionResponse,
   SessionSummary,
 } from "../../types";
-import { fetchJson } from "../../../../hooks/use-api";
+import { buildApiUrl, fetchJson } from "../../../../hooks/use-api";
+import { ensureEmbeddedNodeRunning } from "../../../../lib/android-runtime-plugin";
+import { isNativeRuntime } from "../../../../lib/mobile-runtime";
+import { persistInputDraft } from "../../persistence";
 import { attachSessionStreamListeners } from "./stream-events";
 import {
   bookKey,
   createSessionRuntime,
   deserializeMessages,
   extractErrorMessage,
+  filterDeletedMessages,
   mergeSessionIds,
+  messageDeletionKey,
   updateSession,
   upsertSessionSummary,
 } from "./runtime";
 import type { Message } from "../../types";
+import type { TokenUsageSnapshot } from "../../types";
 
 function shouldUseRemoteMessages(
   localMessages: ReadonlyArray<Message>,
@@ -60,11 +66,129 @@ function parseAgentSseResult(text: string): AgentResponse | null {
   return null;
 }
 
+function normalizeAgentTokenUsage(data: AgentResponse): TokenUsageSnapshot | undefined {
+  const usage = data.tokenUsage;
+  const savings = data.tokenSavings;
+  const responseText = data.details?.draftRaw || data.response || "";
+  const estimatedTotal = estimateResponseTokens(responseText);
+  const normalizedUsage = usage && usage.totalTokens > 0
+    ? usage
+    : estimatedTotal > 0
+      ? {
+          completionTokens: estimatedTotal,
+          totalTokens: estimatedTotal,
+          estimated: true,
+          source: "final" as const,
+          updatedAt: Date.now(),
+        }
+      : undefined;
+  const hasSavings = Boolean(savings && (savings.estimatedTokensSaved > 0 || savings.cacheSkippedCalls > 0));
+  if (!normalizedUsage && !hasSavings) return undefined;
+  return {
+    ...(normalizedUsage ?? {
+      totalTokens: 0,
+      estimated: true,
+      source: "final" as const,
+      updatedAt: Date.now(),
+    }),
+    ...(hasSavings && savings ? { tokenSavings: savings } : {}),
+  };
+}
+
+function estimateResponseTokens(text: string): number {
+  const trimmed = text.trim();
+  if (!trimmed) return 0;
+  let chinese = 0;
+  let nonWhitespace = 0;
+  for (const char of trimmed) {
+    if (/\s/u.test(char)) continue;
+    nonWhitespace += 1;
+    if (/[\u3400-\u9fff]/u.test(char)) chinese += 1;
+  }
+  const nonChinese = Math.max(0, nonWhitespace - chinese);
+  return Math.max(1, Math.ceil(chinese + nonChinese / 4));
+}
+
+const AGENT_REQUEST_TIMEOUT_MS = 60 * 60_000;
+
+function isLikelyBackgroundDisconnect(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return error instanceof TypeError
+    || /failed to fetch|network|load failed|connection|aborted|net::|无法连接|api 服务|err_connection|econnrefused/iu.test(message);
+}
+
+function isCancelledAgentResponse(data: AgentResponse): boolean {
+  const error = data.error;
+  if (!error) return false;
+  const message = extractErrorMessage(error);
+  return /operation_cancelled|用户已停止当前生成|当前生成已停止/i.test(message);
+}
+
+function isRecoverableBackendApiError(data: AgentResponse): boolean {
+  const message = data.error ? extractErrorMessage(data.error) : data.response ?? "";
+  return /无法连接到 API 服务|failed to fetch|network|api 服务暂时不可用|baseUrl|econnrefused|err_connection|请求超时/i.test(message);
+}
+
+async function cancelBackendOperation(sessionId: string): Promise<void> {
+  try {
+    await fetchJson(`/active-operations/${encodeURIComponent(`agent:${sessionId}`)}/cancel`, {
+      method: "POST",
+    });
+  } catch {
+    // Local UI cancellation must remain responsive even if the backend is busy.
+  }
+}
+
+async function hasActiveBackgroundSession(sessionId: string): Promise<boolean> {
+  try {
+    const data = await fetchJson<{
+      operations?: ReadonlyArray<{ sessionId?: string; type?: string; status?: string }>;
+    }>("/active-operations");
+    return Boolean(data.operations?.some((operation) => operation.sessionId === sessionId));
+  } catch {
+    return false;
+  }
+}
+
+async function pollAgentRequestResult(
+  sessionId: string,
+  requestId: string,
+  timeoutMs = 15_000,
+): Promise<AgentResponse | null> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const url = buildApiUrl(`/agent-results/${encodeURIComponent(sessionId)}/${encodeURIComponent(requestId)}`);
+    if (!url) return null;
+    try {
+      const response = await fetch(url, { headers: { Accept: "application/json" } });
+      if (response.status === 202) {
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        continue;
+      }
+      if (!response.ok) return null;
+      const data = await response.json() as {
+        status?: string;
+        payload?: AgentResponse;
+      };
+      if (data.status === "completed" && data.payload) {
+        return data.payload;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    }
+  }
+  return null;
+}
+
 export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions> = (set, get) => ({
   activateSession: (sessionId) =>
     set({ activeSessionId: sessionId }),
 
-  setInput: (text) => set({ input: text }),
+  setInput: (text) => {
+    persistInputDraft(text);
+    set({ input: text });
+  },
 
   addUserMessage: (sessionId, content) =>
     set((state) => ({
@@ -89,7 +213,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       }),
     })),
 
-  finalizeStream: (sessionId, streamTs, content, toolCall) =>
+  finalizeStream: (sessionId, streamTs, content, toolCall, tokenUsage) =>
     set((state) => ({
       sessions: updateSession(state.sessions, sessionId, (session) => ({
         messages: session.messages.map((message) => {
@@ -101,7 +225,13 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
           } else if (content) {
             parts.push({ type: "text", content });
           }
-          return { ...message, content, toolCall, parts };
+          return {
+            ...message,
+            content,
+            toolCall,
+            parts,
+            ...(tokenUsage ? { tokenUsage } : {}),
+          };
         }),
       })),
     })),
@@ -128,6 +258,102 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         lastError: errorMsg,
       })),
     })),
+
+  deleteMessage: async (sessionId, messageIndex) => {
+    const session = get().sessions[sessionId];
+    if (session?.isStreaming) {
+      // If we are deleting a message while generating, abort the stream
+      // so it doesn't immediately recreate the assistant message from SSE events.
+      session.abortController?.abort();
+      session.stream?.close();
+      set((state) => ({
+        sessions: updateSession(state.sessions, sessionId, () => ({
+          isStreaming: false,
+          abortController: null,
+          stream: null,
+        })),
+      }));
+    }
+
+    const beforeDelete = get().sessions[sessionId];
+    const target = beforeDelete?.messages[messageIndex];
+    if (!beforeDelete || !target) return;
+
+    set((state) => ({
+      sessions: updateSession(state.sessions, sessionId, (session) => {
+        if (messageIndex < 0 || messageIndex >= session.messages.length) return {};
+        const target = session.messages[messageIndex];
+        const newDeletedKeys = [messageDeletionKey(target)];
+        const deletedMessageKeys = Array.from(new Set([...session.deletedMessageKeys, ...newDeletedKeys]));
+        return {
+          messages: session.messages.filter((_, index) => index !== messageIndex),
+          deletedMessageKeys,
+          lastError: null,
+        };
+      }),
+    }));
+
+    if (beforeDelete.isDraft) return;
+    try {
+      const data = await fetchJson<SessionResponse>(`/sessions/${encodeURIComponent(sessionId)}/messages`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          role: target.role,
+          content: target.content,
+          timestamp: target.timestamp,
+          messageIndex,
+        }),
+      });
+      const deletedSession = data.session;
+      if (deletedSession?.sessionId) {
+        const remoteMessages = deletedSession.messages ? deserializeMessages(deletedSession.messages) : [];
+        set((state) => {
+          const runtime = state.sessions[sessionId];
+          if (!runtime) return {};
+          return {
+            sessions: updateSession(state.sessions, sessionId, () => ({
+              messages: filterDeletedMessages(remoteMessages, runtime.deletedMessageKeys),
+              title: deletedSession.title ?? runtime.title,
+              bookId: deletedSession.bookId ?? runtime.bookId,
+            })),
+          };
+        });
+      }
+    } catch {
+      set((state) => ({
+        sessions: {
+          ...state.sessions,
+          [sessionId]: beforeDelete,
+        },
+      }));
+    }
+  },
+
+  cancelMessage: async (sessionId) => {
+    const session = get().sessions[sessionId];
+    if (!session?.isStreaming) return;
+
+    session.abortController?.abort();
+    session.stream?.close();
+    set((state) => ({
+      sessions: updateSession(state.sessions, sessionId, (runtime) => ({
+        messages: [
+          ...runtime.messages,
+          {
+            role: "assistant",
+            content: "已停止当前生成。需要的话可以调整提示后重新发送。",
+            timestamp: Date.now(),
+          },
+        ],
+        isStreaming: false,
+        stream: null,
+        abortController: null,
+        lastError: null,
+      })),
+    }));
+    await cancelBackendOperation(sessionId);
+  },
 
   loadSessionMessages: (sessionId, msgs) =>
     set((state) => ({
@@ -291,11 +517,13 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       set((state) => {
         const runtime = state.sessions[detailSessionId];
         const nextBookId = detail.bookId ?? runtime?.bookId ?? null;
+        const deletedMessageKeys = runtime?.deletedMessageKeys ?? [];
+        const remoteMessages = filterDeletedMessages(messages, deletedMessageKeys);
         const nextMessages = runtime?.isStreaming
           ? runtime.messages
-          : shouldUseRemoteMessages(runtime?.messages ?? [], messages)
-            ? messages
-            : runtime?.messages ?? messages;
+          : shouldUseRemoteMessages(runtime?.messages ?? [], remoteMessages)
+            ? remoteMessages
+            : runtime?.messages ?? remoteMessages;
         return {
           sessions: {
             ...state.sessions,
@@ -308,6 +536,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
               bookId: nextBookId,
               title: detail.title ?? runtime?.title ?? null,
               messages: nextMessages,
+              deletedMessageKeys,
             },
           },
           sessionIdsByBook: {
@@ -332,6 +561,9 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     if (!get().selectedModel) {
       get().addUserMessage(sessionId, trimmed);
       get().addErrorMessage(sessionId, "请先选择一个模型");
+      set((state) => ({
+        input: state.input || trimmed,
+      }));
       return;
     }
 
@@ -358,26 +590,55 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
           },
         }));
       } catch (err) {
-        get().addErrorMessage(sessionId, err instanceof Error ? err.message : String(err));
-        return;
+        set((state) => ({
+          sessions: updateSession(state.sessions, sessionId, () => ({
+            lastError: err instanceof Error ? err.message : String(err),
+          })),
+        }));
       }
     }
 
     const instruction = trimmed;
     const streamTs = Date.now() + 1;
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const clientStartedAt = Date.now();
+    const abortController = new AbortController();
+    let requestBackgrounded = typeof document !== "undefined" && document.visibilityState === "hidden";
+    const markBackgrounded = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        requestBackgrounded = true;
+      }
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", markBackgrounded);
+    }
 
     set((state) => ({
-      input: "",
       activeSessionId: sessionId,
       sessions: updateSession(state.sessions, sessionId, () => ({
         isStreaming: true,
+        abortController,
         lastError: null,
       })),
     }));
 
     get().addUserMessage(sessionId, trimmed);
+
     session.stream?.close();
-    const streamEs = new EventSource("/api/v1/events");
+    const eventsUrl = buildApiUrl("/events");
+    if (!eventsUrl) {
+      get().addErrorMessage(sessionId, "API 地址无效");
+      set((state) => ({
+        input: state.input || trimmed,
+        sessions: updateSession(state.sessions, sessionId, () => ({
+          isStreaming: false,
+          stream: null,
+          abortController: null,
+        })),
+      }));
+      return;
+    }
+    const streamEs = new EventSource(eventsUrl);
     set((state) => ({
       sessions: updateSession(state.sessions, sessionId, () => ({ stream: streamEs })),
     }));
@@ -409,21 +670,107 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       }
     });
 
+    if (abortController.signal.aborted || get().sessions[sessionId]?.abortController !== abortController) {
+      streamEs.close();
+      return;
+    }
+
+    const applyAgentResponse = async (data: AgentResponse) => {
+      if (get().sessions[sessionId]?.abortController !== abortController) {
+        return;
+      }
+      if (isCancelledAgentResponse(data)) {
+        return;
+      }
+      if (isNativeRuntime() && requestBackgrounded && data.error && isRecoverableBackendApiError(data)) {
+        await get().loadSessionDetail(sessionId);
+        set((state) => ({
+          sessions: updateSession(state.sessions, sessionId, () => ({
+            lastError: null,
+          })),
+        }));
+        return;
+      }
+      set((state) => ({
+        input: state.input === trimmed ? "" : state.input,
+      }));
+
+      const finalContent = data.details?.draftRaw || data.response || "";
+      const toolCall = data.details?.toolCall ?? undefined;
+      const tokenUsage = normalizeAgentTokenUsage(data);
+      const hasStream = Boolean(
+        get().sessions[sessionId]?.messages.some((message) => message.timestamp === streamTs),
+      );
+
+      if (data.error) {
+        const errorMessage = extractErrorMessage(data.error);
+        if (hasStream) {
+          get().replaceStreamWithError(sessionId, streamTs, errorMessage);
+        } else {
+          get().addErrorMessage(sessionId, errorMessage);
+        }
+      } else if (finalContent) {
+        if (hasStream) {
+          get().finalizeStream(sessionId, streamTs, finalContent, toolCall, tokenUsage);
+        } else {
+          set((state) => ({
+            sessions: updateSession(state.sessions, sessionId, (runtime) => ({
+              messages: [
+                ...runtime.messages,
+                {
+                  role: "assistant",
+                  content: finalContent,
+                  timestamp: Date.now(),
+                  toolCall,
+                  ...(tokenUsage ? { tokenUsage } : {}),
+                },
+              ],
+            })),
+          }));
+        }
+      } else {
+        const emptyMessage = "模型未返回文本内容。请检查协议类型（chat/responses）、流式开关或上游服务兼容性。";
+        if (hasStream) {
+          get().replaceStreamWithError(sessionId, streamTs, emptyMessage);
+        } else {
+          get().addErrorMessage(sessionId, emptyMessage);
+        }
+      }
+    };
+
     try {
-      const response = await fetch("/api/v1/agent", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "text/event-stream",
-        },
-        body: JSON.stringify({
-          instruction,
-          activeBookId,
-          sessionId,
-          model: get().selectedModel ?? undefined,
-          service: get().selectedService ?? undefined,
-        }),
-      });
+      const agentUrl = buildApiUrl("/agent");
+      if (!agentUrl) {
+        throw new Error("API 地址无效");
+      }
+      const timeoutId = globalThis.setTimeout(() => {
+        abortController.abort();
+      }, AGENT_REQUEST_TIMEOUT_MS);
+      let response: Response;
+      try {
+        response = await fetch(agentUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "text/event-stream",
+          },
+          signal: abortController.signal,
+          body: JSON.stringify({
+            instruction,
+            activeBookId,
+            sessionId,
+            requestId,
+            clientStartedAt,
+            model: get().selectedModel ?? undefined,
+            service: get().selectedService ?? undefined,
+          }),
+        });
+      } catch (error) {
+        globalThis.clearTimeout(timeoutId);
+        streamEs.close();
+        throw error;
+      }
+      globalThis.clearTimeout(timeoutId);
 
       let data: AgentResponse | null = null;
       const contentType = response.headers.get("content-type") ?? "";
@@ -447,49 +794,56 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       }
 
       streamEs.close();
-
-      const finalContent = data.details?.draftRaw || data.response || "";
-      const toolCall = data.details?.toolCall ?? undefined;
-      const hasStream = Boolean(
-        get().sessions[sessionId]?.messages.some((message) => message.timestamp === streamTs),
-      );
-
-      if (data.error) {
-        const errorMessage = extractErrorMessage(data.error);
-        if (hasStream) {
-          get().replaceStreamWithError(sessionId, streamTs, errorMessage);
-        } else {
-          get().addErrorMessage(sessionId, errorMessage);
+      if (get().sessions[sessionId]?.abortController !== abortController) {
+        return;
+      }
+      await applyAgentResponse(data);
+    } catch (error) {
+      streamEs.close();
+      if (get().sessions[sessionId]?.abortController !== abortController) {
+        return;
+      }
+      if (error instanceof DOMException
+        && error.name === "AbortError"
+        && get().sessions[sessionId]?.abortController !== abortController) {
+        return;
+      }
+      if (isNativeRuntime() && isLikelyBackgroundDisconnect(error)) {
+        await ensureEmbeddedNodeRunning();
+        const recoveredResult = await pollAgentRequestResult(sessionId, requestId);
+        if (recoveredResult) {
+          await applyAgentResponse(recoveredResult);
+          return;
         }
-      } else if (finalContent) {
-        if (hasStream) {
-          get().finalizeStream(sessionId, streamTs, finalContent, toolCall);
-        } else {
+        if (await hasActiveBackgroundSession(sessionId)) {
           set((state) => ({
             sessions: updateSession(state.sessions, sessionId, (runtime) => ({
               messages: [
                 ...runtime.messages,
                 {
                   role: "assistant",
-                  content: finalContent,
+                  content: "已转入后台继续执行。你可以稍后回到本会话，InkOS 会从本地 Node 后端恢复最新进度和结果。",
                   timestamp: Date.now(),
-                  toolCall,
                 },
               ],
+              lastError: null,
             })),
           }));
+          return;
         }
-      } else {
-        const emptyMessage = "模型未返回文本内容。请检查协议类型（chat/responses）、流式开关或上游服务兼容性。";
-        if (hasStream) {
-          get().replaceStreamWithError(sessionId, streamTs, emptyMessage);
-        } else {
-          get().addErrorMessage(sessionId, emptyMessage);
-        }
+        await get().loadSessionDetail(sessionId);
+        set((state) => ({
+          sessions: updateSession(state.sessions, sessionId, () => ({
+            lastError: null,
+          })),
+        }));
+        return;
       }
-    } catch (error) {
-      streamEs.close();
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = error instanceof DOMException && error.name === "AbortError"
+        ? get().sessions[sessionId]?.abortController === abortController
+          ? "请求超时或已被手动停止，发送按钮已解锁。"
+          : "当前生成已停止。"
+        : error instanceof Error ? error.message : String(error);
       const hasStream = Boolean(
         get().sessions[sessionId]?.messages.some((message) => message.timestamp === streamTs),
       );
@@ -498,11 +852,18 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       } else {
         get().addErrorMessage(sessionId, errorMessage);
       }
+      set((state) => ({
+        input: state.input || trimmed,
+      }));
     } finally {
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", markBackgrounded);
+      }
       set((state) => ({
         sessions: updateSession(state.sessions, sessionId, (runtime) => ({
           isStreaming: false,
           stream: runtime.stream === streamEs ? null : runtime.stream,
+          abortController: runtime.abortController === abortController ? null : runtime.abortController,
         })),
       }));
     }

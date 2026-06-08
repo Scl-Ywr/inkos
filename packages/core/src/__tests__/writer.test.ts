@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WriterAgent } from "../agents/writer.js";
 import { buildLengthSpec } from "../utils/length-metrics.js";
+import { getHeadroomSavingsTelemetry, headroomRetrieve } from "../utils/headroom-cache.js";
 
 const ZERO_USAGE = {
   promptTokens: 0,
@@ -101,6 +102,107 @@ describe("WriterAgent", () => {
     expect(prompt).toContain("当面对质");
   });
 
+  it("compresses governed chapter context before sending it to the model and keeps a CCR handle", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "inkos-writer-compressed-context-"));
+    try {
+      const agent = new WriterAgent({
+        client: {
+          provider: "openai",
+          apiFormat: "chat",
+          stream: false,
+          defaults: {
+            temperature: 0.7,
+            maxTokens: 4096,
+            thinkingBudget: 0,
+            extra: {},
+          },
+        },
+        model: "test-model",
+        projectRoot,
+      });
+      const verboseExcerpt = Array.from(
+        { length: 80 },
+        (_, index) => `第${index + 1}条：这是非常重要且极其关键的账本线索。`,
+      ).join("\n");
+
+      const prompt = (agent as unknown as {
+        buildGovernedUserPrompt(params: {
+          readonly chapterNumber: number;
+          readonly chapterMemo: {
+            readonly chapter: number;
+            readonly goal: string;
+            readonly isGoldenOpening: boolean;
+            readonly body: string;
+            readonly threadRefs: readonly string[];
+          };
+          readonly contextPackage: {
+            readonly chapter: number;
+            readonly selectedContext: ReadonlyArray<{
+              readonly source: string;
+              readonly reason: string;
+              readonly excerpt: string;
+            }>;
+          };
+          readonly ruleStack: {
+            readonly layers: readonly [];
+            readonly sections: {
+              readonly hard: readonly string[];
+              readonly soft: readonly string[];
+              readonly diagnostic: readonly string[];
+            };
+            readonly overrideEdges: readonly [];
+            readonly activeOverrides: readonly [];
+          };
+          readonly lengthSpec: ReturnType<typeof buildLengthSpec>;
+          readonly language?: "zh" | "en";
+          readonly externalContext?: string;
+        }): string;
+      }).buildGovernedUserPrompt({
+        chapterNumber: 8,
+        chapterMemo: {
+          chapter: 8,
+          goal: "追查账本",
+          isGoldenOpening: false,
+          body: "## 当前任务\n追查账本。",
+          threadRefs: [],
+        },
+        contextPackage: {
+          chapter: 8,
+          selectedContext: [{
+            source: "story/chapter_summaries.md",
+            reason: "保留账本线索",
+            excerpt: verboseExcerpt,
+          }],
+        },
+        ruleStack: {
+          layers: [],
+          sections: { hard: ["不得改变账本归属"], soft: [], diagnostic: [] },
+          overrideEdges: [],
+          activeOverrides: [],
+        },
+        lengthSpec: buildLengthSpec(1200, "zh"),
+        language: "zh",
+        externalContext: "本章必须在仓库对质。",
+      });
+
+      expect(prompt).toContain("<!-- headroom:ccr ");
+      expect(prompt).not.toContain("非常重要且极其关键");
+      expect(prompt).toContain("本章必须在仓库对质");
+      expect(prompt).toContain("不得改变账本归属");
+      const handle = prompt.match(/<!-- headroom:ccr ([^\s]+) /)?.[1];
+      expect(handle).toBeTruthy();
+      await expect(headroomRetrieve(projectRoot, handle!)).resolves.toContain("非常重要且极其关键");
+      expect(getHeadroomSavingsTelemetry().pipeline).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          kind: "compressed",
+          label: "writer-ch8-selected-context",
+        }),
+      ]));
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it("caps oversized legacy truth files in creative prompts", () => {
     const agent = new WriterAgent({
       client: {
@@ -160,6 +262,56 @@ describe("WriterAgent", () => {
     expect(prompt).toContain("InkOS context budget");
     expect(prompt).toContain("story_bible");
     expect(prompt).not.toContain("MIDDLE-MARKER");
+  });
+
+  it("persists a generic resource ledger row for non-numerical genres", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-writer-ledger-test-"));
+    const bookDir = join(root, "book");
+    const storyDir = join(bookDir, "story");
+    await mkdir(storyDir, { recursive: true });
+
+    try {
+      const agent = new WriterAgent({
+        client: {
+          provider: "openai",
+          apiFormat: "chat",
+          stream: false,
+          defaults: {
+            temperature: 0.7,
+            maxTokens: 4096,
+            thinkingBudget: 0,
+            extra: {},
+          },
+        },
+        model: "test-model",
+        projectRoot: root,
+      });
+
+      await agent.saveChapter(bookDir, {
+        chapterNumber: 3,
+        title: "雨夜账本",
+        content: "林秋把账本藏进伞骨。",
+        wordCount: 9,
+        preWriteCheck: "",
+        postSettlement: "",
+        updatedState: "# 当前状态\n\n| 字段 | 值 |\n|---|---|\n| 当前章节 | 3 |",
+        updatedLedger: "(账本未更新)",
+        updatedHooks: "# 待回收伏笔\n\n| hook_id | 状态 |\n|---|---|\n| ledger | open |",
+        chapterSummary: "| 3 | 雨夜账本 | 林秋 | 账本被藏入伞骨 | 线索从公开变为私藏 | ledger advanced | 紧张 | 主线 |",
+        updatedSubplots: "",
+        updatedEmotionalArcs: "",
+        updatedCharacterMatrix: "",
+        postWriteErrors: [],
+        postWriteWarnings: [],
+      }, false, "zh");
+
+      const ledger = await readFile(join(storyDir, "particle_ledger.md"), "utf-8");
+      expect(ledger).toContain("雨夜账本");
+      expect(ledger).toContain("剧情资源");
+      expect(ledger).toContain("账本被藏入伞骨");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("uses compact summary context plus selected long-range evidence during governed settlement", async () => {

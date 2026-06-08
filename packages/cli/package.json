@@ -1,6 +1,6 @@
 {
   "name": "@actalk/inkos",
-  "version": "1.4.1",
+  "version": "1.4.4",
   "description": "Autonomous AI novel writing CLI agent — 10-agent pipeline that writes, audits, and revises novels with continuity tracking. Supports LitRPG, Progression Fantasy, Isekai, Romantasy, Sci-Fi and more.",
   "keywords": [
     "ai-novel-writing",
@@ -43,6 +43,9 @@
     "dev": "tsc --watch",
     "pretest": "pnpm run build",
     "test": "vitest run --passWithNoTests",
+    "test:unit": "pnpm run build && vitest run --exclude \"src/__tests__/cli-integration.test.ts\" --exclude \"src/__tests__/publish-package.test.ts\"",
+    "test:integration": "pnpm run build && vitest run src/__tests__/cli-integration.test.ts",
+    "test:packaging": "pnpm run build && vitest run src/__tests__/publish-package.test.ts",
     "lint": "pnpm run typecheck",
     "pretypecheck": "pnpm run prepare:workspace-core",
     "typecheck": "tsc --noEmit"

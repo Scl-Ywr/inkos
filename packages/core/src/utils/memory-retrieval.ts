@@ -6,7 +6,7 @@ import {
   CurrentStateStateSchema,
   HooksStateSchema,
 } from "../models/runtime-state.js";
-import { MemoryDB, type Fact, type StoredHook, type StoredSummary } from "../state/memory-db.js";
+import { MemoryDB, type Fact, type StoredHook, type StoredSummary, type VectorHit } from "../state/memory-db.js";
 import { bootstrapStructuredStateFromMarkdown } from "../state/state-bootstrap.js";
 import {
   filterActiveHooks,
@@ -20,6 +20,7 @@ import {
   renderHookSnapshot,
   renderSummarySnapshot,
 } from "./story-markdown.js";
+import { INKOS_PROMPT_CACHE_POLICY, headroomLightCompress } from "./prompt-optimizer.js";
 export {
   isFuturePlannedHook,
   isHookWithinChapterWindow,
@@ -44,6 +45,7 @@ export interface MemorySelection {
   readonly recyclableHooks: ReadonlyArray<StoredHook>;
   readonly facts: ReadonlyArray<Fact>;
   readonly volumeSummaries: ReadonlyArray<VolumeSummarySelection>;
+  readonly vectorHits?: ReadonlyArray<VectorHit>;
   readonly dbPath?: string;
 }
 
@@ -125,6 +127,10 @@ export async function retrieveMemorySelection(params: {
       }
 
       const activeHooks = memoryDb.getActiveHooks();
+      const vectorHits = memoryDb.searchVectors(
+        [params.goal, params.outlineNode ?? "", ...(params.mustKeep ?? [])].join("\n"),
+        INKOS_PROMPT_CACHE_POLICY.ragTopK,
+      );
 
       return {
         summaries: selectRelevantSummaries(
@@ -137,6 +143,7 @@ export async function retrieveMemorySelection(params: {
         recyclableHooks: computeRecyclableHooks(activeHooks, params.chapterNumber),
         facts: selectRelevantFacts(memoryDb.getCurrentFacts(), factQueryTerms),
         volumeSummaries,
+        vectorHits,
         dbPath: join(storyDir, "memory.db"),
       };
     } finally {
@@ -373,10 +380,10 @@ function selectRelevantSummaries(
         summary.chapterType,
       ].join(" "), queryTerms),
     }))
-    .filter((entry) => entry.matched || entry.summary.chapter >= chapterNumber - 3)
+    .filter((entry) => entry.matched || entry.summary.chapter >= chapterNumber - INKOS_PROMPT_CACHE_POLICY.rollingChapterWindow)
     .sort((left, right) => right.score - left.score || right.summary.chapter - left.summary.chapter)
-    .slice(0, 4)
-    .map((entry) => entry.summary)
+    .slice(0, INKOS_PROMPT_CACHE_POLICY.ragTopK)
+    .map((entry) => compressSummary(entry.summary))
     .sort((left, right) => left.chapter - right.chapter);
 }
 
@@ -403,7 +410,7 @@ function selectRelevantHooks(
       entry.matched || isHookWithinChapterWindow(entry.hook, chapterNumber, 5),
     )
     .sort((left, right) => right.score - left.score || right.hook.lastAdvancedChapter - left.hook.lastAdvancedChapter)
-    .slice(0, 6);
+    .slice(0, INKOS_PROMPT_CACHE_POLICY.ragTopK);
 
   const selectedIds = new Set(primary.map((entry: { hook: StoredHook; score: number; matched: boolean }) => entry.hook.hookId));
   const stale = ranked
@@ -415,7 +422,7 @@ function selectRelevantHooks(
     .sort((left, right) => left.hook.lastAdvancedChapter - right.hook.lastAdvancedChapter || right.score - left.score)
     .slice(0, 2);
 
-  return [...primary, ...stale].map((entry: { hook: StoredHook; score: number; matched: boolean }) => entry.hook);
+  return [...primary, ...stale].map((entry: { hook: StoredHook; score: number; matched: boolean }) => compressHook(entry.hook));
 }
 
 function selectRelevantFacts(
@@ -449,8 +456,8 @@ function selectRelevantFacts(
     })
     .filter((entry) => entry.matched || entry.score >= 14)
     .sort((left, right) => right.score - left.score)
-    .slice(0, 4)
-    .map((entry) => entry.fact);
+    .slice(0, INKOS_PROMPT_CACHE_POLICY.ragTopK)
+    .map((entry) => compressFact(entry.fact));
 }
 
 function selectRelevantVolumeSummaries(
@@ -476,11 +483,39 @@ function selectRelevantVolumeSummaries(
     })
     .filter((entry, index, all) => entry.matched || index === all.length - 1)
     .sort((left, right) => right.score - left.score)
-    .slice(0, 2)
+    .slice(0, INKOS_PROMPT_CACHE_POLICY.ragTopK)
     .sort((left, right) => left.index - right.index)
-    .map((entry) => entry.summary);
+    .map((entry) => ({
+      ...entry.summary,
+      content: headroomLightCompress(entry.summary.content, "narrative"),
+    }));
 
   return ranked;
+}
+
+function compressSummary(summary: StoredSummary): StoredSummary {
+  return {
+    ...summary,
+    characters: headroomLightCompress(summary.characters, "setting"),
+    events: headroomLightCompress(summary.events, "narrative"),
+    stateChanges: headroomLightCompress(summary.stateChanges, "narrative"),
+    hookActivity: headroomLightCompress(summary.hookActivity, "narrative"),
+  };
+}
+
+function compressHook(hook: StoredHook): StoredHook {
+  return {
+    ...hook,
+    expectedPayoff: headroomLightCompress(hook.expectedPayoff, "narrative"),
+    notes: headroomLightCompress(hook.notes, "narrative"),
+  };
+}
+
+function compressFact(fact: Fact): Fact {
+  return {
+    ...fact,
+    object: headroomLightCompress(fact.object, "setting"),
+  };
 }
 
 function scoreSummary(summary: StoredSummary, chapterNumber: number, queryTerms: ReadonlyArray<string>): number {

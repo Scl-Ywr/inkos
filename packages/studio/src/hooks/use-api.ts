@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { localizeKnownRuntimeMessage } from "../lib/error-copy";
+import { buildApiUrl } from "../lib/api-url";
 
-const BASE = "/api/v1";
 const API_INVALIDATE_EVENT = "inkos:api-invalidate";
 const apiDataCache = new Map<string, unknown>();
 
@@ -10,43 +10,60 @@ interface ApiInvalidateDetail {
   readonly paths: ReadonlyArray<string>;
 }
 
-export function buildApiUrl(path: string): string | null {
-  const normalized = String(path ?? "").trim();
-  if (!normalized) return null;
-  if (normalized.startsWith(`${BASE}/`) || normalized === BASE) {
+export { buildApiUrl } from "../lib/api-url";
+
+function getApiPathname(path: string): string {
+  const normalized = buildApiUrl(path);
+  if (!normalized) return "";
+  try {
+    const base = typeof window === "undefined" ? "http://localhost" : window.location.origin;
+    return new URL(normalized, base).pathname;
+  } catch {
     return normalized;
   }
-  return normalized.startsWith("/") ? `${BASE}${normalized}` : `${BASE}/${normalized}`;
+}
+
+function getApiCacheKey(path: string): string {
+  return buildApiUrl(path) ?? "";
 }
 
 export function deriveInvalidationPaths(path: string): ReadonlyArray<string> {
-  const normalized = buildApiUrl(path);
+  const normalized = getApiPathname(path);
   if (!normalized) return [];
 
   if (normalized === "/api/v1/books/create") {
-    return ["/api/v1/books"];
+    return [getApiCacheKey("/books")];
   }
 
   if (normalized === "/api/v1/project") {
-    return ["/api/v1/project"];
+    return [getApiCacheKey("/project")];
   }
 
   if (normalized.startsWith("/api/v1/project/")) {
-    return ["/api/v1/project", normalized];
+    return [getApiCacheKey("/project"), getApiCacheKey(normalized)];
   }
 
   const bookAction = normalized.match(/^\/api\/v1\/books\/([^/]+)\/(write-next|draft)$/);
   if (bookAction) {
-    return ["/api/v1/books", `/api/v1/books/${bookAction[1]}`];
+    return [
+      getApiCacheKey("/books"),
+      getApiCacheKey(`/books/${bookAction[1]}`),
+      getApiCacheKey(`/books/${bookAction[1]}/chapters/*`),
+    ];
   }
 
   const chapterAction = normalized.match(/^\/api\/v1\/books\/([^/]+)\/chapters\/\d+\/(approve|reject)$/);
   if (chapterAction) {
-    return ["/api/v1/books", `/api/v1/books/${chapterAction[1]}`];
+    return [getApiCacheKey("/books"), getApiCacheKey(`/books/${chapterAction[1]}`)];
+  }
+
+  const chapterResource = normalized.match(/^\/api\/v1\/books\/([^/]+)\/chapters\/\d+$/);
+  if (chapterResource) {
+    return [getApiCacheKey("/books"), getApiCacheKey(`/books/${chapterResource[1]}`), getApiCacheKey(normalized)];
   }
 
   if (/^\/api\/v1\/daemon\/(start|stop)$/.test(normalized)) {
-    return ["/api/v1/daemon"];
+    return [getApiCacheKey("/daemon")];
   }
 
   return [];
@@ -55,6 +72,18 @@ export function deriveInvalidationPaths(path: string): ReadonlyArray<string> {
 export function invalidateApiPaths(paths: ReadonlyArray<string>): void {
   if (!paths.length || typeof window === "undefined") {
     return;
+  }
+  for (const path of paths) {
+    if (path.endsWith("*")) {
+      const prefix = path.slice(0, -1);
+      for (const key of [...apiDataCache.keys()]) {
+        if (key.startsWith(prefix)) {
+          apiDataCache.delete(key);
+        }
+      }
+    } else {
+      apiDataCache.delete(path);
+    }
   }
 
   window.dispatchEvent(new CustomEvent<ApiInvalidateDetail>(API_INVALIDATE_EVENT, {
@@ -97,7 +126,19 @@ export async function fetchJson<T>(
   }
 
   const fetchImpl = deps?.fetchImpl ?? fetch;
-  const res = await fetchImpl(url, init);
+  const method = init.method?.toUpperCase() ?? "GET";
+  const requestInit: RequestInit = method === "GET"
+    ? {
+        ...init,
+        cache: init.cache ?? "no-store",
+        headers: {
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
+          ...(init.headers ?? {}),
+        },
+      }
+    : init;
+  const res = await fetchImpl(url, requestInit);
 
   if (!res.ok) {
     throw new Error(await readErrorMessage(res));
@@ -183,7 +224,7 @@ export function useApi<T>(path: string) {
 
     const handleInvalidate = (event: Event) => {
       const detail = (event as CustomEvent<ApiInvalidateDetail>).detail;
-      if (!detail?.paths.includes(url)) return;
+      if (!detail?.paths.some((candidate) => matchesInvalidationPath(url, candidate))) return;
       void refetch();
     };
 
@@ -194,6 +235,13 @@ export function useApi<T>(path: string) {
   }, [path, refetch]);
 
   return { data, loading, error, refetch, mutate };
+}
+
+function matchesInvalidationPath(url: string, candidate: string): boolean {
+  if (candidate.endsWith("*")) {
+    return url.startsWith(candidate.slice(0, -1));
+  }
+  return url === candidate;
 }
 
 export async function postApi<T>(path: string, body?: unknown): Promise<T> {

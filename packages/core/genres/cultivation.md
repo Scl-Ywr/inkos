@@ -1,42 +1,25 @@
 ---
-name: English Cultivation
+name: 修炼成长
 id: cultivation
-language: en
-chapterTypes: ["Training", "Breakthrough", "Combat", "Setup", "Transition", "Payoff"]
-fatigueWords: ["delve", "tapestry", "testament", "intricate", "pivotal", "vibrant", "comprehensive", "nuanced", "embark", "foster", "underscore", "bolstered", "crucial"]
-numericalSystem: false
+language: zh
+chapterTypes: ["修炼章", "破境章", "试炼章", "宗门章", "因果章", "对决章"]
+fatigueWords: ["灵气", "机缘", "天赋", "顿悟", "逆天", "恐怖如斯", "大道"]
+numericalSystem: true
 powerScaling: true
 eraResearch: false
-pacingRule: "Training/meditation alternates with application/combat. Breakthrough every 5-10 chapters early, every 15-25 late. Each stage must feel earned through discipline."
-satisfactionTypes: ["Stage Breakthrough", "Technique Mastery", "Tribulation Survived", "Martial Victory", "Philosophical Insight", "Core Formation"]
-auditDimensions: [1,2,3,4,6,7,8,9,10,13,14,15,16,17,18,19,24,25,26]
+pacingRule: "每3-5章推进一次境界、功法、资源或人脉；破境必须付出代价或触发新因果。"
+satisfactionTypes: ["破境升级", "资源获取", "宗门认可", "因果清算", "越级反杀"]
+auditDimensions: [1, 2, 3, 4, 5, 8, 9, 10, 12, 14, 15, 17, 18, 21, 24, 25, 26]
 ---
 
-## Genre Prohibitions
+## 数值规则
 
-- Cultivation that feels instant or effortless — it must read like genuine labor
-- Breakthrough scenes treated as throwaway moments — each tier transition deserves a full dramatic scene
-- Ignoring philosophical/spiritual depth — meditation and inner balance matter as much as combat power
-- Adopting full Chinese cultural trappings without adaptation — this is Western cultivation, use accessible naming (Copper/Iron/Jade/Gold, not Qi Condensation/Core Formation unless earned)
-- Power gains disconnected from training, sacrifice, or problem-solving
-- Cultivation stages with no meaningful difference in capability between them
+境界、功法、法器、丹药和资源必须形成清晰阶梯，同阶内也要有差异，避免一句“更强”带过。
 
-## Cultivation Rules
+每次破境后要给出新的限制：心魔、资源缺口、宗门任务、仇家追索、天道代价。
 
-- Typical Western cultivation stages: Qi Foundation / Energy Gathering -> Core Formation -> Immortal Ascension -> Tribulation / Transcendence (or custom equivalents)
-- Each stage represents meaningful power transformation — characters at different stages should not compete directly without explanation
-- Cultivation must feel like work: meditation scenes with five-sense description, not abstract philosophy lectures
-- Breakthrough scenes show struggle, transformation, and cost — not instant "ding" level-ups
-- Martial integration: cultivation combines with physical combat training, not just sitting and meditating
-- Philosophical elements add depth but must emerge through experience, not exposition
-- Spiritual attribute development: sensitivity to energy, intuition, capacity increases are valid non-numerical progression markers
+## 题材禁忌
 
-## Pacing Guidance
+不要让机缘凭空掉落；机缘需要线索、风险、竞争者和后续因果。
 
-- Mix detailed training scenes (showing struggle, failure, epiphanies) with montages covering longer periods
-- 1-2 detailed breakthrough scenes per cultivation stage — these are the genre's peak moments
-- Combat tests what was learned in training — progression and action feed each other
-- Internal struggle escalates with power: pride, responsibility, temptation, and enemies grow alongside cultivation
-- Sect/academy politics and mentorship relationships provide non-combat tension
-- Early: frequent small gains. Mid: longer plateaus with harder breakthroughs. Late: rare, climactic stage transitions
-- The journey of cultivation is the story — readers came for the grind, not just the destination
+越级战斗要依赖具体优势：环境、阵法、情报、功法克制、心境差距，而不是单纯主角光环。

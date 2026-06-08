@@ -11,37 +11,52 @@ import {
   XCircle,
   ChevronDown,
   Wrench,
+  PenLine,
 } from "lucide-react";
 import { buildApiUrl } from "../../hooks/use-api";
 
 // -- Status rendering helpers --
 
-function ExecStatusBadge({ status }: { status: ToolExecution["status"] }) {
+const WRITING_HINTS = [
+  "整理世界观与角色关系",
+  "推演章节目标与冲突",
+  "生成正文段落",
+  "检查节奏与伏笔",
+  "保存章节与运行记录",
+] as const;
+
+function activeWritingHint(startedAt: number): string {
+  const elapsed = Math.max(0, Date.now() - startedAt);
+  return WRITING_HINTS[Math.floor(elapsed / 9000) % WRITING_HINTS.length];
+}
+
+function ExecStatusBadge({ exec }: { exec: ToolExecution }) {
+  const { status } = exec;
   switch (status) {
     case "running":
       return (
-        <span className="inline-flex items-center gap-1 text-xs text-primary font-medium">
+        <span className="inline-flex items-center gap-1.5 text-[11px] text-primary font-semibold">
           <Loader2 size={12} className="animate-spin" />
-          <span>写作中...</span>
+          <span>{activeWritingHint(exec.startedAt)}</span>
         </span>
       );
     case "processing":
       return (
-        <span className="inline-flex items-center gap-1 text-xs text-primary/70">
+        <span className="inline-flex items-center gap-1.5 text-[11px] text-primary/70">
           <Loader2 size={12} className="animate-spin" style={{ animationDuration: "2s" }} />
-          <span>处理中...</span>
+          <span>正在合并结果</span>
         </span>
       );
     case "completed":
       return (
-        <span className="inline-flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
+        <span className="inline-flex items-center gap-1.5 text-[11px] text-green-600 dark:text-green-400">
           <CheckCircle2 size={12} />
           <span>写作完成</span>
         </span>
       );
     case "error":
       return (
-        <span className="inline-flex items-center gap-1 text-xs text-destructive">
+        <span className="inline-flex items-center gap-1.5 text-[11px] text-destructive">
           <XCircle size={12} />
           <span>写作失败</span>
         </span>
@@ -62,12 +77,25 @@ function StageIcon({ status }: { status: PipelineStage["status"] }) {
 
 function formatProgress(progress: NonNullable<PipelineStage["progress"]>): string {
   const secs = Math.round(progress.elapsedMs / 1000);
-  const statusLabel = progress.status === "thinking" ? "🧠 思考中" : "✍️ 写作中";
+  const statusLabel = progress.status === "thinking" ? "思考设定" : "生成正文";
   const chars = progress.totalChars > 0
     ? progress.chineseChars > 0 ? `已写 ${progress.totalChars} 字` : `${progress.totalChars} chars`
     : "";
-  const parts = [statusLabel, `${secs}秒`, chars].filter(Boolean);
+  const tokens = progress.estimatedTokens && progress.estimatedTokens > 0
+    ? `约 ${progress.estimatedTokens.toLocaleString()} tokens`
+    : "";
+  const parts = [statusLabel, `${secs}秒`, chars, tokens].filter(Boolean);
   return parts.join(" · ");
+}
+
+function formatTokenUsage(exec: ToolExecution): string | null {
+  const usage = exec.tokenUsage;
+  if (!usage || usage.totalTokens <= 0) return null;
+  const completion = usage.completionTokens && usage.promptTokens
+    ? `输出 ${usage.completionTokens.toLocaleString()}`
+    : null;
+  const total = `${usage.estimated ? "约 " : ""}${usage.totalTokens.toLocaleString()} tokens`;
+  return completion ? `${total} · ${completion}` : total;
 }
 
 function formatDuration(startedAt: number, completedAt?: number): string {
@@ -155,7 +183,23 @@ function ShortFictionResultPreview({ exec }: { exec: ToolExecution }) {
 }
 
 function isPipelineTool(tool: string): boolean {
-  return tool === "sub_agent" || tool === "short_fiction_run" || tool === "generate_cover";
+  return tool === "sub_agent"
+    || tool === "short_fiction_run"
+    || tool === "generate_cover"
+    || tool === "architect"
+    || tool === "truth"
+    || tool === "role"
+    || tool === "writer"
+    || tool === "auditor"
+    || tool === "reviser"
+    || tool === "exporter"
+    || tool === "importer"
+    || tool === "market"
+    || tool === "cover"
+    || tool === "scheduler"
+    || tool === "write_truth_file"
+    || tool === "rename_entity"
+    || tool === "patch_chapter_text";
 }
 
 // -- Live elapsed timer hook --
@@ -184,29 +228,60 @@ function PipelineExecution({ exec }: { exec: ToolExecution }) {
   }, [exec.status]);
 
   const bookId = exec.args?.bookId as string | undefined;
+  const tokenUsageLabel = formatTokenUsage(exec);
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="rounded-xl border border-border/40 bg-card/60">
-      <CollapsibleTrigger className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl hover:bg-card/80 transition-colors cursor-pointer">
+    <Collapsible open={open} onOpenChange={setOpen} className="rounded-2xl border border-border/45 bg-card/70 shadow-sm shadow-primary/5">
+      <CollapsibleTrigger className="w-full flex items-center justify-between gap-2 px-3 py-3 rounded-2xl hover:bg-card/85 transition-colors cursor-pointer">
         <div className="flex items-center gap-2 min-w-0">
-          <span className="text-sm font-medium text-foreground truncate">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/12 text-primary">
+            <PenLine size={14} />
+          </span>
+          <span className="text-sm font-semibold text-foreground truncate">
             {exec.label}
             {bookId && <span className="text-muted-foreground font-normal"> · {bookId}</span>}
           </span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {tokenUsageLabel && (
+            <span className="hidden rounded-full border border-border/45 bg-background/45 px-2 py-0.5 text-[10px] font-medium text-muted-foreground sm:inline-flex">
+              {tokenUsageLabel}
+            </span>
+          )}
           <span className="text-[10px] text-muted-foreground/60">
             {isActive
               ? formatDuration(exec.startedAt, exec.startedAt + elapsedMs)
               : exec.completedAt ? formatDuration(exec.startedAt, exec.completedAt) : ""}
           </span>
-          <ExecStatusBadge status={exec.status} />
+          <ExecStatusBadge exec={exec} />
           <ChevronDown size={14} className={`text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
         </div>
       </CollapsibleTrigger>
       <ShortFictionResultPreview exec={exec} />
       <CollapsibleContent>
         <div className="px-3 pb-3 pt-1">
+          {tokenUsageLabel && (
+            <div className="mb-2 inline-flex rounded-full border border-border/45 bg-background/45 px-2.5 py-1 text-[11px] font-medium text-muted-foreground sm:hidden">
+              {tokenUsageLabel}
+            </div>
+          )}
+          {exec.stages && exec.stages.length > 0 && (
+            <ol className="mb-3 space-y-1.5 rounded-xl border border-border/35 bg-background/25 p-2.5">
+              {exec.stages.map((stage) => (
+                <li key={stage.label} className="flex items-start gap-2 text-xs text-muted-foreground">
+                  <StageIcon status={stage.status} />
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium text-foreground/80">{stage.label}</div>
+                    {stage.progress && (
+                      <div className="mt-0.5 text-[11px] leading-5 text-muted-foreground/80">
+                        {formatProgress(stage.progress)}
+                      </div>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
           {/* Real-time execution logs */}
           {exec.logs && exec.logs.length > 0 && (
             <ul className="space-y-0.5">
@@ -214,7 +289,7 @@ function PipelineExecution({ exec }: { exec: ToolExecution }) {
                 const isError = log.startsWith("[error]") || /error/i.test(log);
                 const isWarn = log.startsWith("[warning]") || /warning|警告/i.test(log);
                 return (
-                  <li key={i} className={`text-xs font-mono break-words ${isError ? "text-destructive" : isWarn ? "text-yellow-600 dark:text-yellow-400" : "text-muted-foreground"}`}>
+                  <li key={i} className={`rounded-lg px-2 py-1 text-[11px] font-mono leading-5 break-words ${isError ? "bg-destructive/5 text-destructive" : isWarn ? "bg-amber-500/10 text-yellow-700 dark:text-yellow-300" : "bg-background/35 text-muted-foreground"}`}>
                     {log}
                   </li>
                 );
@@ -229,7 +304,7 @@ function PipelineExecution({ exec }: { exec: ToolExecution }) {
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-primary"></span>
                 </span>
-                <span>实时写作流...</span>
+                <span>实时正文生成</span>
               </div>
               <div className="font-serif text-sm leading-relaxed text-foreground/80 whitespace-pre-wrap rounded-lg bg-secondary/10 p-3 border border-border/20 max-h-60 overflow-y-auto">
                 {exec.streamingText}

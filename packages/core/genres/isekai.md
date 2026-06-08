@@ -1,43 +1,25 @@
 ---
-name: Isekai / Portal Fantasy
+name: 异世穿越
 id: isekai
-language: en
-chapterTypes: ["Exploration", "Adaptation", "Setup", "Transition", "Payoff", "Combat"]
-fatigueWords: ["delve", "tapestry", "testament", "intricate", "pivotal", "vibrant", "comprehensive", "nuanced", "embark", "foster", "underscore", "bolstered", "crucial"]
+language: zh
+chapterTypes: ["落地章", "适应章", "身份章", "探索章", "冲突章", "融入章"]
+fatigueWords: ["穿越", "异世界", "系统", "魔法", "勇者", "贵族", "冒险者"]
 numericalSystem: false
 powerScaling: true
 eraResearch: false
-pacingRule: "Establish new world rules by chapter 3. Cultural adaptation and fish-out-of-water moments every 2-3 chapters early. Skip tutorial-town syndrome — no 50 pages hitting rats."
-satisfactionTypes: ["World Rule Discovered", "Cultural Clash Resolved", "Real-World Skill Applied", "New Ability Gained", "Relationship Formed", "Identity Established in New World"]
-auditDimensions: [1,2,3,4,6,7,8,9,10,13,14,15,16,17,18,19,24,25,26]
+pacingRule: "前5章必须完成身份落点、世界规则、第一目标和第一场不可回避的冲突。"
+satisfactionTypes: ["身份反差", "知识降维", "新世界探索", "队友羁绊", "规则破局"]
+auditDimensions: [1, 2, 3, 4, 5, 8, 9, 10, 13, 14, 15, 17, 18, 21, 24, 25, 26]
 ---
 
-## Genre Prohibitions
+## 世界规则
 
-- "Tutorial town" syndrome — 50+ pages of killing rats or low-stakes grinding before the real story starts
-- New world that feels identical to Earth with a fantasy skin
-- MC treating new world's culture as quaint or inferior without narrative consequence
-- No real consequences for cultural misunderstandings — fish-out-of-water must have stakes
-- Pacing too slow in the "culture learning" phase — drip-feed rules through action, not lectures
-- MC's origin world becoming irrelevant after chapter 3 — the contrast is the genre's engine
-- Isekai truck or summoning ritual with zero personality — make the transportation event matter
+异世界必须有独立运行的制度、货币、阶层、信仰和日常生活，不要只当作主角升级背景板。
 
-## World Transition Rules
+现代知识可以有优势，但需要材料、语言、身份、工艺和社会阻力。
 
-- Transportation event (summoning, reincarnation, portal) must be distinct and memorable
-- Brief real-world grounding: who was MC before? What skills, knowledge, relationships do they carry?
-- Arrival scene: disorientation is real — sensory overload, language barriers, physical discomfort
-- First guide/NPC explains world basics through interaction, not monologue
-- By chapter 3, readers must understand the new world's basic operating system
-- MC's real-world knowledge creates both advantages and dangerous blind spots
-- New world must feel real: consistent geography, politics, cultures, economics — not a game lobby
+## 题材禁忌
 
-## Pacing Guidance
+不要让主角刚落地就被所有人无条件接纳；陌生人的信任要通过交易、救助、利益或共同危机建立。
 
-- Opening: transportation event -> brief real-world grounding -> arrival and disorientation -> first guide -> first concrete goal
-- Early chapters: cultural fish-out-of-water drives comedy and drama (every 2-3 chapters)
-- MC bringing real-world skills that apply in surprising ways is a core satisfaction — seed these early
-- Learning the new world's magic/power system should feel like genuine discovery, not tutorial text
-- Relationship building with new world characters grounds the MC emotionally
-- Clash between home culture and new world values creates natural conflict without needing a villain
-- Mid-to-late story: MC's identity shifts from "outsider" to "participant" — track this arc explicitly
+避免照搬游戏设定，除非系统本身是剧情谜团的一部分。

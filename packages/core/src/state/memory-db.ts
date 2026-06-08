@@ -10,9 +10,12 @@
  */
 
 import { createRequire } from "node:module";
+import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
+import { cosineInt8, embedTextInt8 } from "../utils/headroom-cache.js";
+import { headroomLightCompress, INKOS_PROMPT_CACHE_POLICY } from "../utils/prompt-optimizer.js";
 
-const require = createRequire(import.meta.url);
+const nodeRequire = typeof require === "function" ? require : createRequire(import.meta.url);
 
 const FACT_SELECT_COLUMNS = `
   id,
@@ -66,17 +69,45 @@ export interface StoredHook {
   readonly promoted?: boolean;
 }
 
+export interface VectorHit {
+  readonly kind: "fact" | "summary" | "hook";
+  readonly refId: string;
+  readonly text: string;
+  readonly score: number;
+}
+
 export class MemoryDB {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private db: any;
 
   constructor(bookDir: string) {
     // node:sqlite requires Node 22+; require() via createRequire for ESM compat
-    const { DatabaseSync } = require("node:sqlite");
+    const { DatabaseSync } = nodeRequire("node:sqlite");
     const dbPath = join(bookDir, "story", "memory.db");
-    this.db = new DatabaseSync(dbPath);
-    this.db.exec("PRAGMA journal_mode = WAL");
-    this.migrate();
+    mkdirSync(join(bookDir, "story"), { recursive: true });
+    try {
+      this.db = new DatabaseSync(dbPath);
+      this.db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 3000;");
+      this.assertHealthy();
+      this.migrate();
+    } catch (error) {
+      try {
+        this.db?.close();
+      } catch {
+        // Preserve the original SQLite error while preparing a clean index.
+      }
+      quarantineMemoryDb(bookDir, dbPath);
+      this.db = new DatabaseSync(dbPath);
+      this.db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 3000;");
+      this.migrate();
+    }
+  }
+
+  private assertHealthy(): void {
+    const check = this.db.prepare("PRAGMA quick_check").get() as Record<string, unknown> | undefined;
+    if (!check || !Object.values(check).includes("ok")) {
+      throw new Error("memory.db failed SQLite quick_check");
+    }
   }
 
   private migrate(): void {
@@ -119,6 +150,16 @@ export class MemoryDB {
       CREATE INDEX IF NOT EXISTS idx_facts_source ON facts(source_chapter);
       CREATE INDEX IF NOT EXISTS idx_hooks_status ON hooks(status);
       CREATE INDEX IF NOT EXISTS idx_hooks_last_advanced ON hooks(last_advanced_chapter);
+
+      CREATE TABLE IF NOT EXISTS memory_vectors (
+        kind TEXT NOT NULL,
+        ref_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        vector BLOB NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (kind, ref_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_memory_vectors_kind ON memory_vectors(kind);
     `);
 
     this.ensureColumn("hooks", "payoff_timing", "TEXT NOT NULL DEFAULT ''");
@@ -138,15 +179,18 @@ export class MemoryDB {
 
   /** Add a new fact. */
   addFact(fact: Omit<Fact, "id">): number {
+    const compressedObject = headroomLightCompress(fact.object, "setting");
     const stmt = this.db.prepare(
       `INSERT INTO facts (subject, predicate, object, valid_from_chapter, valid_until_chapter, source_chapter)
        VALUES (?, ?, ?, ?, ?, ?)`,
     );
     const result = stmt.run(
-      fact.subject, fact.predicate, fact.object,
+      fact.subject, fact.predicate, compressedObject,
       fact.validFromChapter, fact.validUntilChapter ?? null, fact.sourceChapter,
     );
-    return Number(result.lastInsertRowid);
+    const id = Number(result.lastInsertRowid);
+    this.upsertVector("fact", String(id), [fact.subject, fact.predicate, compressedObject].join(" "));
+    return id;
   }
 
   /** Invalidate a fact (set valid_until). */
@@ -218,6 +262,7 @@ export class MemoryDB {
 
   resetFacts(): void {
     this.db.exec("DELETE FROM facts");
+    this.db.exec("DELETE FROM memory_vectors WHERE kind = 'fact'");
   }
 
   // ---------------------------------------------------------------------------
@@ -226,17 +271,32 @@ export class MemoryDB {
 
   /** Upsert a chapter summary. */
   upsertSummary(summary: StoredSummary): void {
+    const compressed = compressSummaryForIndex(summary);
     this.db.prepare(
       `INSERT OR REPLACE INTO chapter_summaries (chapter, title, characters, events, state_changes, hook_activity, mood, chapter_type)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
-      summary.chapter, summary.title, summary.characters, summary.events,
-      summary.stateChanges, summary.hookActivity, summary.mood, summary.chapterType,
+      compressed.chapter, compressed.title, compressed.characters, compressed.events,
+      compressed.stateChanges, compressed.hookActivity, compressed.mood, compressed.chapterType,
+    );
+    this.upsertVector(
+      "summary",
+      String(compressed.chapter),
+      [
+        compressed.title,
+        compressed.characters,
+        compressed.events,
+        compressed.stateChanges,
+        compressed.hookActivity,
+        compressed.mood,
+        compressed.chapterType,
+      ].join(" "),
     );
   }
 
   replaceSummaries(summaries: ReadonlyArray<StoredSummary>): void {
     this.db.exec("DELETE FROM chapter_summaries");
+    this.db.exec("DELETE FROM memory_vectors WHERE kind = 'summary'");
     for (const summary of summaries) {
       this.upsertSummary(summary);
     }
@@ -310,23 +370,30 @@ export class MemoryDB {
   // ---------------------------------------------------------------------------
 
   upsertHook(hook: StoredHook): void {
+    const compressed = compressHookForIndex(hook);
     this.db.prepare(
       `INSERT OR REPLACE INTO hooks (hook_id, start_chapter, type, status, last_advanced_chapter, expected_payoff, payoff_timing, notes)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
-      hook.hookId,
-      hook.startChapter,
-      hook.type,
-      hook.status,
-      hook.lastAdvancedChapter,
-      hook.expectedPayoff,
-      hook.payoffTiming ?? "",
-      hook.notes,
+      compressed.hookId,
+      compressed.startChapter,
+      compressed.type,
+      compressed.status,
+      compressed.lastAdvancedChapter,
+      compressed.expectedPayoff,
+      compressed.payoffTiming ?? "",
+      compressed.notes,
+    );
+    this.upsertVector(
+      "hook",
+      compressed.hookId,
+      [compressed.hookId, compressed.type, compressed.status, compressed.expectedPayoff, compressed.payoffTiming ?? "", compressed.notes].join(" "),
     );
   }
 
   replaceHooks(hooks: ReadonlyArray<StoredHook>): void {
     this.db.exec("DELETE FROM hooks");
+    this.db.exec("DELETE FROM memory_vectors WHERE kind = 'hook'");
     for (const hook of hooks) {
       this.upsertHook(hook);
     }
@@ -349,6 +416,24 @@ export class MemoryDB {
     ).all() as unknown as ReadonlyArray<StoredHook>;
   }
 
+  searchVectors(query: string, limit: number = INKOS_PROMPT_CACHE_POLICY.ragTopK): ReadonlyArray<VectorHit> {
+    const queryVector = embedTextInt8(query);
+    const rows = this.db.prepare(
+      "SELECT kind, ref_id AS refId, text, vector FROM memory_vectors",
+    ).all() as Array<{ kind: VectorHit["kind"]; refId: string; text: string; vector: Buffer }>;
+
+    return rows
+      .map((row) => ({
+        kind: row.kind,
+        refId: row.refId,
+        text: row.text,
+        score: cosineInt8(queryVector, new Int8Array(row.vector)),
+      }))
+      .filter((row) => row.score >= INKOS_PROMPT_CACHE_POLICY.semanticSimilarityThreshold)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+  }
+
   // ---------------------------------------------------------------------------
   // Lifecycle
   // ---------------------------------------------------------------------------
@@ -356,4 +441,45 @@ export class MemoryDB {
   close(): void {
     this.db.close();
   }
+
+  private upsertVector(kind: VectorHit["kind"], refId: string, text: string): void {
+    const vector = embedTextInt8(text);
+    this.db.prepare(
+      `INSERT OR REPLACE INTO memory_vectors (kind, ref_id, text, vector, updated_at)
+       VALUES (?, ?, ?, ?, datetime('now'))`,
+    ).run(kind, refId, text, Buffer.from(vector.buffer));
+  }
+}
+
+function quarantineMemoryDb(bookDir: string, dbPath: string): void {
+  const backupDir = join(bookDir, "story", ".repair-backups");
+  mkdirSync(backupDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  for (const suffix of ["", "-wal", "-shm"]) {
+    const source = `${dbPath}${suffix}`;
+    if (!existsSync(source)) continue;
+    try {
+      renameSync(source, join(backupDir, `memory.db${suffix}.corrupt-${stamp}.bak`));
+    } catch {
+      // A stale sidecar may be locked; recreating the main index is still attempted.
+    }
+  }
+}
+
+function compressSummaryForIndex(summary: StoredSummary): StoredSummary {
+  return {
+    ...summary,
+    characters: headroomLightCompress(summary.characters, "setting"),
+    events: headroomLightCompress(summary.events, "narrative"),
+    stateChanges: headroomLightCompress(summary.stateChanges, "narrative"),
+    hookActivity: headroomLightCompress(summary.hookActivity, "narrative"),
+  };
+}
+
+function compressHookForIndex(hook: StoredHook): StoredHook {
+  return {
+    ...hook,
+    expectedPayoff: headroomLightCompress(hook.expectedPayoff, "narrative"),
+    notes: headroomLightCompress(hook.notes, "narrative"),
+  };
 }

@@ -1,43 +1,25 @@
 ---
-name: Cozy Fantasy
+name: 治愈日常
 id: cozy
-language: en
-chapterTypes: ["Slice-of-Life", "Community", "Setup", "Transition", "Payoff"]
-fatigueWords: ["delve", "tapestry", "testament", "intricate", "pivotal", "vibrant", "comprehensive", "nuanced", "embark", "foster", "underscore", "bolstered", "crucial"]
+language: zh
+chapterTypes: ["日常章", "关系章", "小目标章", "过渡章", "回收章"]
+fatigueWords: ["温暖", "治愈", "岁月静好", "仿佛", "不禁", "柔软", "烟火气"]
 numericalSystem: false
 powerScaling: false
 eraResearch: false
-pacingRule: "Slow, meditative pacing. Each chapter advances an emotional arc or community bond. Seasonal/cyclical structure works well."
-satisfactionTypes: ["Relationship Deepened", "Community Problem Solved", "Emotional Breakthrough", "Craft Mastered", "Found Family Moment", "Small Wonder Discovered"]
-auditDimensions: [1,2,3,6,7,8,9,10,13,14,15,16,17,18,19,24,25,26]
+pacingRule: "每2-3章兑现一个小目标：关系升温、手艺进步、空间改善、误会化解。"
+satisfactionTypes: ["关系升温", "小愿望兑现", "生活改善", "伤口愈合", "群体接纳"]
+auditDimensions: [1, 2, 3, 6, 7, 8, 9, 10, 13, 14, 15, 16, 17, 18, 19, 24, 25, 26]
 ---
 
-## Genre Prohibitions
+## 题材禁忌
 
-- Genre bait-and-switch — if you promise cozy, never introduce world-ending threats or graphic violence
-- Conflict resolution without work — problems must not solve themselves
-- Manic pixie dream characters who exist only to change the protagonist
-- Nostalgic falseness — romanticizing a "simpler time" without substance
-- Cruel humor — humor must be gentle, never at someone's expense
-- Existential stakes masquerading as low-stakes — keep threats emotional, not apocalyptic
-- Purple prose describing food/nature without advancing character or community arc
+不要把治愈写成无冲突流水账；每章都要有一个小烦恼、小选择或小误会。
 
-## Emotional Arc Rules
+避免连续使用“温暖、柔软、治愈”等抽象词，优先用饭菜、旧物、天气、手艺、空间变化来呈现情绪。
 
-- Stakes are high emotionally but not existentially — characters care, the world doesn't end
-- Conflict types: personal growth, community problems, relationship tension, small dangers, moral dilemmas
-- Community is a character — setting and relationships are as important as the individual protagonist
-- Hope must always be present — even sad moments don't end in despair
-- Found family bonds drive the emotional core
-- Character arcs follow: isolation/grief -> small interactions -> gradual opening -> emotional breakthrough -> integration
-- Comforting sensory details matter: tea, baked goods, warm spaces, seasonal textures
+## 叙事指导
 
-## Pacing Guidance
+主角的改变要落在可见动作上：学会一道菜、修好一个房间、照顾一个人、重新接纳自己。
 
-- Chapter length: 2-3k words with space for reflection
-- Chapter structure: quiet opening -> small event or interaction -> internal response/growth -> gentle transition -> soft ending (not cliffhanger)
-- No cliffhangers — chapters end with peace, hope, or gentle anticipation
-- Seasonal/cyclical structure works well (calendar-based chapter rhythm)
-- Downtime scenes must still plant hooks, advance relationships, or build contrast
-- Slice-of-life texture woven with an emotional throughline — pure plotless chapters risk feeling static
-- Every quiet scene must shift something: a realization, a decision, an intimacy, a small loss
+配角不是单纯围观者，每个常驻角色都应带着自己的小伤口、小欲望和可被回收的生活细节。

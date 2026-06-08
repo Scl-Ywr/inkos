@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AssistantMessage, Model, Api } from "@mariozechner/pi-ai";
 import {
   __resetFixedTemperatureWarnings,
   chatCompletion,
   type LLMClient,
 } from "../llm/provider.js";
+import { clearAllL1Caches, putSemanticCache } from "../utils/headroom-cache.js";
 
 // ── Mock @mariozechner/pi-ai ──────────────────────────────────────────────────
 // We intercept streamSimple so tests don't hit the network.
@@ -139,10 +143,18 @@ async function captureError(task: Promise<unknown>): Promise<Error> {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("chatCompletion via pi-ai", () => {
+  const tempRoots: string[] = [];
+
   beforeEach(() => {
     mockStreamSimple.mockReset();
     mockCompleteSimple.mockReset();
     mockComplete.mockReset();
+  });
+
+  afterEach(async () => {
+    delete process.env.INKOS_DISABLE_NODE_SQLITE;
+    clearAllL1Caches();
+    await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
   it("returns text content from a successful stream", async () => {
@@ -247,6 +259,43 @@ describe("chatCompletion via pi-ai", () => {
     const opts = mockStreamSimple.mock.calls[0]?.[2] as Record<string, unknown>;
     expect(opts.temperature).toBe(0.3);
     expect(opts.maxTokens).toBe(256);
+  });
+
+  it("can skip semantic cache reads for creative requests while still calling the model", async () => {
+    process.env.INKOS_DISABLE_NODE_SQLITE = "1";
+    const projectRoot = await mkdtemp(join(tmpdir(), "inkos-provider-cache-read-"));
+    tempRoots.push(projectRoot);
+    const messages = [
+      { role: "system", content: "固定世界观：同一套宗门模板。" },
+      { role: "user", content: "续写第 2 章。" },
+    ] as const;
+    await putSemanticCache({
+      projectRoot,
+      bookId: "book-cache-read",
+      model: "test-model",
+      service: "openai",
+      variant: JSON.stringify({
+        temperature: 0.7,
+        maxTokens: 512,
+        webSearch: false,
+        extra: {},
+      }),
+    }, messages, {
+      content: "旧章节缓存内容，不应该被创作请求复用。",
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    });
+    mockStreamSimple.mockReturnValue(makeTextStream("fresh chapter content"));
+
+    const result = await chatCompletion(makeClient(), "test-model", messages, {
+      tokenOptimization: {
+        projectRoot,
+        bookId: "book-cache-read",
+        cacheRead: false,
+      },
+    });
+
+    expect(result.content).toBe("fresh chapter content");
+    expect(mockStreamSimple).toHaveBeenCalledOnce();
   });
 
   it("drops non-ByteString headers before calling pi-ai", async () => {
