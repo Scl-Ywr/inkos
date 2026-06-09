@@ -2,6 +2,8 @@ import { PipelineRunner, createLLMClient } from "@actalk/inkos-core";
 import type { Hono } from "hono";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import type { LLMConfig } from "@actalk/inkos-core";
+import { resolveAgentModelSelection } from "./agent-model-resolution.js";
 import type { BookChapterRoutesDeps } from "./book-route-context.js";
 import { findChapterMarkdownFile, parsePositiveIntegerParam } from "./book-route-utils.js";
 
@@ -188,10 +190,27 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
 
       const content = await readFile(join(chaptersDir, match), "utf-8");
       const currentConfig = await loadCurrentProjectConfig();
+      const legacyClient = createLLMClient(currentConfig.llm);
+      const modelSelection = await resolveAgentModelSelection({
+        root,
+        config: currentConfig,
+        legacyClient,
+      });
+      const auditClient = modelSelection.configuredEntry
+        ? createLLMClient({
+            ...currentConfig.llm,
+            service: modelSelection.configuredEntry.service,
+            model: modelSelection.modelId,
+            apiKey: modelSelection.apiKey ?? "",
+            ...(modelSelection.configuredEntry.apiFormat ? { apiFormat: modelSelection.configuredEntry.apiFormat } : {}),
+            ...(modelSelection.configuredEntry.stream !== undefined ? { stream: modelSelection.configuredEntry.stream } : {}),
+            baseUrl: modelSelection.configuredEntry.baseUrl ?? "",
+          } satisfies LLMConfig)
+        : legacyClient;
       const { ContinuityAuditor } = await import("@actalk/inkos-core");
       const auditor = new ContinuityAuditor({
-        client: createLLMClient(currentConfig.llm),
-        model: currentConfig.llm.model,
+        client: auditClient,
+        model: modelSelection.modelId,
         projectRoot: root,
         bookId: id,
       });

@@ -368,6 +368,26 @@ function joinThinking(parts: ReadonlyArray<string | undefined>): string | undefi
   return values.length > 0 ? values.join("\n\n---\n\n") : undefined;
 }
 
+function tokenUsageFromRawMessage(raw: Record<string, unknown>): InteractionMessage["tokenUsage"] {
+  const usage = raw.usage;
+  if (!isObject(usage)) return undefined;
+  const input = typeof usage.input === "number" ? usage.input : undefined;
+  const output = typeof usage.output === "number" ? usage.output : undefined;
+  const total = typeof usage.totalTokens === "number"
+    ? usage.totalTokens
+    : typeof usage.total_tokens === "number"
+      ? usage.total_tokens
+      : (input ?? 0) + (output ?? 0);
+  if (!Number.isFinite(total) || total <= 0) return undefined;
+  return {
+    ...(input && input > 0 ? { promptTokens: input } : {}),
+    ...(output && output > 0 ? { completionTokens: output } : {}),
+    totalTokens: total,
+    source: "final",
+    updatedAt: Date.now(),
+  };
+}
+
 function firstUserMessageTitle(messages: InteractionMessage[]): string | null {
   for (const message of messages) {
     if (message.role !== "user") continue;
@@ -403,11 +423,13 @@ function messageEventToInteractionMessage(
       ? restoredToolExecutions
       : event.legacyDisplay?.toolExecutions as ToolExecution[] | undefined;
     if (!content) return null;
+    const tokenUsage = tokenUsageFromRawMessage(raw);
     return {
       role: "assistant",
       content,
       ...(thinking ? { thinking } : {}),
       ...(toolExecutions?.length ? { toolExecutions } : {}),
+      ...(tokenUsage ? { tokenUsage } : {}),
       timestamp: event.timestamp,
     };
   }

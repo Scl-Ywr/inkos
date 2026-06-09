@@ -38,6 +38,7 @@ function shouldUseRemoteMessages(
   const remoteLast = remoteMessages[remoteMessages.length - 1];
   if (!localLast || !remoteLast) return false;
   if (remoteLast.role !== localLast.role) return false;
+  if (localLast.tokenUsage && !remoteLast.tokenUsage) return false;
   return remoteLast.content.length >= localLast.content.length;
 }
 

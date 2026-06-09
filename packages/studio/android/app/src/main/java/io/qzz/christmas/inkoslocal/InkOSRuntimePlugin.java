@@ -115,6 +115,17 @@ public class InkOSRuntimePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void pingUpdateUrl(PluginCall call) {
+        String url = call.getString("url", "").trim();
+        if (url.isEmpty()) {
+            call.reject("APK URL is required.");
+            return;
+        }
+
+        new Thread(() -> call.resolve(pingApkUrl(url)), "inkos-apk-source-ping").start();
+    }
+
+    @PluginMethod
     public void installDownloadedApk(PluginCall call) {
         String path = call.getString("path", "").trim();
         File apk = path.isEmpty()
@@ -308,6 +319,49 @@ public class InkOSRuntimePlugin extends Plugin {
         result.put("size", totalBytes);
         result.put("sha256", actualSha256);
         return result;
+    }
+
+    private JSObject pingApkUrl(String urlString) {
+        long startedAt = System.currentTimeMillis();
+        JSObject result = new JSObject();
+        HttpURLConnection connection = null;
+        try {
+            URL url = new URL(urlString);
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setInstanceFollowRedirects(true);
+            connection.setRequestMethod("HEAD");
+            connection.setConnectTimeout(5000);
+            connection.setReadTimeout(8000);
+            connection.setRequestProperty("User-Agent", "InkOS-Studio-Android/" + readAppVersionName());
+            int code = connection.getResponseCode();
+            if (code == HttpURLConnection.HTTP_BAD_METHOD) {
+                connection.disconnect();
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setInstanceFollowRedirects(true);
+                connection.setConnectTimeout(5000);
+                connection.setReadTimeout(8000);
+                connection.setRequestProperty("User-Agent", "InkOS-Studio-Android/" + readAppVersionName());
+                connection.setRequestProperty("Range", "bytes=0-0");
+                code = connection.getResponseCode();
+                try (InputStream input = connection.getInputStream()) {
+                    input.read();
+                }
+            }
+            long latencyMs = Math.max(1L, System.currentTimeMillis() - startedAt);
+            result.put("ok", code >= 200 && code < 400);
+            result.put("statusCode", code);
+            result.put("latencyMs", latencyMs);
+            return result;
+        } catch (Exception error) {
+            long latencyMs = Math.max(1L, System.currentTimeMillis() - startedAt);
+            result.put("ok", false);
+            result.put("statusCode", 0);
+            result.put("latencyMs", latencyMs);
+            result.put("error", error.getMessage());
+            return result;
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
     }
 
     private String sanitizeApkFileName(String value) {

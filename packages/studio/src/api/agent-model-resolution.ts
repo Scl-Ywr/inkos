@@ -24,6 +24,7 @@ interface LegacyLLMClientSelection {
 
 export interface AgentModelSelection {
   readonly model: AgentSessionConfig["model"];
+  readonly modelId: string;
   readonly apiKey?: string;
   readonly configuredEntry?: ServiceConfigEntry;
 }
@@ -44,8 +45,10 @@ export async function resolveAgentModelSelection(args: {
 }): Promise<AgentModelSelection> {
   const { root, config, reqService, reqModel, legacyClient } = args;
   let resolvedModel: AgentSessionConfig["model"] | undefined;
+  let resolvedModelId: string | undefined;
   let resolvedApiKey: string | undefined;
   let explicitConfiguredEntry: ServiceConfigEntry | undefined;
+  let resolvedConfiguredEntry: ServiceConfigEntry | undefined;
 
   if (reqService && reqModel) {
     try {
@@ -58,7 +61,9 @@ export async function resolveAgentModelSelection(args: {
         explicitConfiguredEntry?.apiFormat,
       );
       resolvedModel = resolved.model;
+      resolvedModelId = reqModel;
       resolvedApiKey = resolved.apiKey;
+      resolvedConfiguredEntry = explicitConfiguredEntry;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (/API key/i.test(message)) {
@@ -83,7 +88,9 @@ export async function resolveAgentModelSelection(args: {
           firstService.apiFormat,
         );
         resolvedModel = resolved.model;
+        resolvedModelId = defaultModel;
         resolvedApiKey = resolved.apiKey;
+        resolvedConfiguredEntry = firstService;
       } catch {
         // Fall through to stored secrets.
       }
@@ -107,7 +114,9 @@ export async function resolveAgentModelSelection(args: {
           configuredEntry?.apiFormat,
         );
         resolvedModel = resolved.model;
+        resolvedModelId = textModels[0].id;
         resolvedApiKey = resolved.apiKey;
+        resolvedConfiguredEntry = configuredEntry;
         break;
       } catch {
         // Try next configured service.
@@ -119,14 +128,16 @@ export async function resolveAgentModelSelection(args: {
     resolvedModel = legacyClient._piModel
       ? legacyClient._piModel
       : { provider: config.llm.provider ?? "anthropic", modelId: config.llm.model };
+    resolvedModelId = config.llm.model;
     resolvedApiKey = legacyClient._apiKey;
   }
 
   return {
     model: resolvedModel,
+    modelId: resolvedModelId ?? config.llm.model,
     apiKey: resolvedApiKey,
     configuredEntry: reqService
       ? explicitConfiguredEntry ?? await resolveConfiguredServiceEntry(root, reqService)
-      : undefined,
+      : resolvedConfiguredEntry,
   };
 }

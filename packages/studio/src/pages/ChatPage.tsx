@@ -20,6 +20,7 @@ import { ChatMessage } from "../components/chat/ChatMessage";
 import { QuickActions } from "../components/chat/QuickActions";
 import { ToolExecutionSteps } from "../components/chat/ToolExecutionSteps";
 import { mobileTextInputHandlers } from "../lib/mobile-input";
+import { subscribeServiceConfigChanged } from "../lib/service-config-events";
 import {
   BotMessageSquare,
   ArrowUp,
@@ -189,6 +190,21 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     void fetchBankModels();
     void fetchCustomModels();
   }, [fetchBankModels, fetchCustomModels]);
+  const refreshServiceConfig = useCallback(async () => {
+    setServiceConfigLoaded(false);
+    try {
+      const payload = await fetchJson<ServiceConfigPayload>("/services/config");
+      setConfiguredModelSelection({
+        service: payload.service ?? null,
+        model: payload.defaultModel ?? null,
+      });
+    } catch {
+      setConfiguredModelSelection(null);
+    } finally {
+      setServiceConfigLoaded(true);
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -211,6 +227,18 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
       cancelled = true;
     };
   }, []);
+  useEffect(() => {
+    return subscribeServiceConfigChanged(() => {
+      void (async () => {
+        await useServiceStore.getState().refreshServices();
+        await Promise.all([
+          useServiceStore.getState().fetchBankModels(),
+          useServiceStore.getState().fetchCustomModels(),
+          refreshServiceConfig(),
+        ]);
+      })();
+    });
+  }, [refreshServiceConfig]);
 
   const modelPickerStatus = useMemo(() => {
     if (servicesLoading || services.length === 0) return "loading" as const;

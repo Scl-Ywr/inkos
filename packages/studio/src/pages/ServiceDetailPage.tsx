@@ -6,6 +6,7 @@ import { ServiceQuickLinks } from "../components/ServiceQuickLinks";
 import { StudioSelect } from "../components/StudioSelect";
 import { mobileTextInputHandlers } from "../lib/mobile-input";
 import { appConfirm } from "../lib/app-dialog";
+import { publishServiceConfigChanged } from "../lib/service-config-events";
 import {
   deleteServiceConfig,
   matchServiceConfigEntryForDetail,
@@ -621,6 +622,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
       await deleteServiceConfig(effectiveServiceId);
       clearStoreModels(effectiveServiceId);
       await refreshServices();
+      publishServiceConfigChanged();
       nav.toServices();
     } catch (e) {
       setStatus({ state: "error", message: e instanceof Error ? e.message : "删除失败" });
@@ -665,6 +667,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
         if (result.status.state === "error") return;
       }
       await refreshServices();
+      publishServiceConfigChanged();
       setStatus({ state: "saved" });
     } catch (e) {
       setStatus({ state: "error", message: e instanceof Error ? e.message : "保存失败" });

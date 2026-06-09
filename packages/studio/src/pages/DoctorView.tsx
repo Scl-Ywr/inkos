@@ -1,10 +1,10 @@
 import { useApi } from "../hooks/use-api";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { Stethoscope, CheckCircle2, XCircle, Loader2, RefreshCw, Download, ShieldCheck, PackageCheck } from "lucide-react";
-import { downloadUpdateApk, installDownloadedApk, openInstallPermissionSettings } from "../lib/android-runtime-plugin";
+import { downloadUpdateApk, installDownloadedApk, openInstallPermissionSettings, pingUpdateUrl } from "../lib/android-runtime-plugin";
 import { isNativeRuntime } from "../lib/mobile-runtime";
 
 interface DoctorChecks {
@@ -22,6 +22,7 @@ interface RuntimeUpdateManifest {
   readonly versionCode: number;
   readonly minVersionCode: number;
   readonly apkUrl: string;
+  readonly apkMirrorUrls?: string[];
   readonly apkSha256: string;
   readonly size: number;
   readonly notes: string[];
@@ -72,6 +73,70 @@ function UpdateMeta({ label, value }: { label: string; value: string }) {
   );
 }
 
+interface UpdateDownloadSource {
+  readonly id: string;
+  readonly label: string;
+  readonly url: string;
+  readonly primary?: boolean;
+}
+
+interface UpdateSourcePing {
+  readonly ok: boolean;
+  readonly statusCode: number;
+  readonly latencyMs: number;
+  readonly error?: string;
+}
+
+const GITHUB_DOWNLOAD_MIRRORS: ReadonlyArray<{ id: string; label: string; prefix: string }> = [
+  { id: "ghproxy-net", label: "ghproxy.net", prefix: "https://ghproxy.net/" },
+  { id: "ghfast-top", label: "ghfast.top", prefix: "https://ghfast.top/" },
+  { id: "mirror-ghproxy", label: "mirror.ghproxy.com", prefix: "https://mirror.ghproxy.com/" },
+  { id: "gh-proxy-com", label: "gh-proxy.com", prefix: "https://gh-proxy.com/" },
+  { id: "githubproxy-cc", label: "githubproxy.cc", prefix: "https://githubproxy.cc/" },
+  { id: "gh-llkk", label: "gh.llkk.cc", prefix: "https://gh.llkk.cc/" },
+  { id: "gh-ddlc", label: "gh.ddlc.top", prefix: "https://gh.ddlc.top/" },
+  { id: "ghproxy-cfd", label: "ghproxy.cfd", prefix: "https://ghproxy.cfd/" },
+  { id: "gh-proxy-net", label: "gh-proxy.net", prefix: "https://gh-proxy.net/" },
+  { id: "ghproxy-1888866", label: "ghproxy.1888866.xyz", prefix: "https://ghproxy.1888866.xyz/" },
+];
+
+function buildUpdateDownloadSources(update: RuntimeUpdateManifest | null, t: TFunction): UpdateDownloadSource[] {
+  if (!update?.apkUrl) return [];
+  const originalUrl = update.apkUrl.trim();
+  const sources: UpdateDownloadSource[] = [
+    { id: "github", label: t("doctor.updateOfficialSource"), url: originalUrl, primary: true },
+  ];
+  const pushSource = (source: UpdateDownloadSource) => {
+    if (!source.url || sources.some((item) => item.url === source.url)) return;
+    sources.push(source);
+  };
+
+  for (const [index, url] of (update.apkMirrorUrls ?? []).entries()) {
+    pushSource({ id: `manifest-mirror-${index}`, label: `${t("doctor.updateMirrorSource")} ${index + 1}`, url });
+  }
+  if (/^https:\/\/github\.com\//i.test(originalUrl)) {
+    for (const mirror of GITHUB_DOWNLOAD_MIRRORS) {
+      pushSource({
+        id: mirror.id,
+        label: mirror.label,
+        url: `${mirror.prefix}${originalUrl}`,
+      });
+    }
+  }
+  return sources;
+}
+
+function selectFastestSource(
+  sources: ReadonlyArray<UpdateDownloadSource>,
+  pings: Readonly<Record<string, UpdateSourcePing>>,
+): UpdateDownloadSource | null {
+  const reachable = sources
+    .map((source) => ({ source, ping: pings[source.id] }))
+    .filter((item): item is { source: UpdateDownloadSource; ping: UpdateSourcePing } => Boolean(item.ping?.ok));
+  reachable.sort((a, b) => a.ping.latencyMs - b.ping.latencyMs);
+  return reachable[0]?.source ?? sources[0] ?? null;
+}
+
 function UpdatePanel({ theme, t }: { theme: Theme; t: TFunction }) {
   const c = useColors(theme);
   const native = isNativeRuntime();
@@ -80,26 +145,94 @@ function UpdatePanel({ theme, t }: { theme: Theme; t: TFunction }) {
   const [actionStatus, setActionStatus] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [needsPermission, setNeedsPermission] = useState(false);
+  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
+  const [sourcePings, setSourcePings] = useState<Record<string, UpdateSourcePing>>({});
+  const [pingingSources, setPingingSources] = useState(false);
   const update = data?.update ?? null;
   const available = Boolean(data?.available && update);
   const currentLabel = data?.current.versionCode
     ? `${data.current.versionName || "-"} (${data.current.versionCode})`
     : "-";
   const latestLabel = update ? `${update.versionName} (${update.versionCode})` : "-";
+  const downloadSources = useMemo(() => buildUpdateDownloadSources(update, t), [t, update]);
+  const selectedSource = downloadSources.find((source) => source.id === selectedSourceId)
+    ?? selectFastestSource(downloadSources, sourcePings);
+  const sourceSignature = downloadSources.map((source) => `${source.id}:${source.url}`).join("|");
 
-  const handleDownload = async () => {
-    if (!update) return;
+  const pingSources = async () => {
+    if (!native || downloadSources.length === 0) return;
+    setPingingSources(true);
+    setActionError(null);
+    try {
+      const results = await Promise.all(downloadSources.map(async (source) => {
+        try {
+          const ping = await pingUpdateUrl(source.url);
+          return [source.id, ping] as const;
+        } catch (pingError) {
+          return [source.id, {
+            ok: false,
+            statusCode: 0,
+            latencyMs: 0,
+            error: pingError instanceof Error ? pingError.message : String(pingError),
+          }] as const;
+        }
+      }));
+      const nextPings = Object.fromEntries(results);
+      setSourcePings(nextPings);
+      const fastest = selectFastestSource(downloadSources, nextPings);
+      setSelectedSourceId(fastest?.id ?? null);
+    } finally {
+      setPingingSources(false);
+    }
+  };
+
+  useEffect(() => {
+    setSourcePings({});
+    setDownloadedPath(null);
+    setSelectedSourceId(downloadSources[0]?.id ?? null);
+    if (!available || !native || downloadSources.length === 0) return;
+    let cancelled = false;
+    setPingingSources(true);
+    setActionError(null);
+    Promise.all(downloadSources.map(async (source) => {
+      try {
+        const ping = await pingUpdateUrl(source.url);
+        return [source.id, ping] as const;
+      } catch (pingError) {
+        return [source.id, {
+          ok: false,
+          statusCode: 0,
+          latencyMs: 0,
+          error: pingError instanceof Error ? pingError.message : String(pingError),
+        }] as const;
+      }
+    })).then((results) => {
+      if (cancelled) return;
+      const nextPings = Object.fromEntries(results);
+      setSourcePings(nextPings);
+      const fastest = selectFastestSource(downloadSources, nextPings);
+      setSelectedSourceId(fastest?.id ?? null);
+    }).finally(() => {
+      if (!cancelled) setPingingSources(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [available, native, sourceSignature]);
+
+  const handleDownload = async (source: UpdateDownloadSource | null = selectedSource) => {
+    if (!update || !source) return;
     setActionError(null);
     setNeedsPermission(false);
-    setActionStatus(t("doctor.updateDownloading"));
+    setActionStatus(`${source.label}: ${t("doctor.updateDownloading")}`);
     try {
       const result = await downloadUpdateApk({
-        url: update.apkUrl,
+        url: source.url,
         sha256: update.apkSha256,
         fileName: `inkos-studio-${update.versionName}.apk`,
       });
       setDownloadedPath(result.path);
-      setActionStatus(t("doctor.updateDownloaded"));
+      setActionStatus(`${source.label}: ${t("doctor.updateDownloaded")}`);
     } catch (downloadError) {
       setActionStatus(null);
       setActionError(downloadError instanceof Error ? downloadError.message : String(downloadError));
@@ -172,15 +305,66 @@ function UpdatePanel({ theme, t }: { theme: Theme; t: TFunction }) {
         </div>
       ) : null}
 
+      {available && (
+        <div className="mt-5">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <span className="text-xs font-semibold uppercase text-muted-foreground">{t("doctor.updateSources")}</span>
+            <span className="truncate text-xs text-muted-foreground">{t("doctor.updateChecksumHint")}</span>
+          </div>
+          <div className="mb-3 flex flex-wrap gap-2">
+            <button
+              disabled={!native || pingingSources}
+              onClick={() => void pingSources()}
+              className={`inline-flex h-9 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${c.btnSecondary}`}
+            >
+              <RefreshCw size={15} className={pingingSources ? "animate-spin" : ""} />
+              {pingingSources ? t("doctor.updatePinging") : t("doctor.updatePingSources")}
+            </button>
+            <button
+              disabled={!native || !selectedSource}
+              onClick={() => void handleDownload()}
+              className={`inline-flex h-9 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${c.btnPrimary}`}
+            >
+              <Download size={15} />
+              {t("doctor.updateDownloadFastest")}
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+            {downloadSources.map((source) => (
+              <button
+                key={source.id}
+                disabled={!native}
+                onClick={() => {
+                  setSelectedSourceId(source.id);
+                  void handleDownload(source);
+                }}
+                className={`inline-flex h-10 min-w-0 items-center justify-center gap-2 rounded-md border px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${
+                  selectedSource?.id === source.id
+                    ? "border-primary bg-primary/10 text-primary"
+                    : `border-border/60 ${source.primary ? c.btnPrimary : c.btnSecondary}`
+                }`}
+                title={source.url}
+              >
+                <Download size={15} className="shrink-0" />
+                <span className="min-w-0">
+                  <span className="block truncate">{source.label}</span>
+                  <span className="block truncate text-[10px] opacity-70">
+                    {pingingSources && !sourcePings[source.id]
+                      ? t("doctor.updatePinging")
+                      : sourcePings[source.id]?.ok
+                        ? `${sourcePings[source.id].latencyMs}ms`
+                        : sourcePings[source.id]
+                          ? t("doctor.updateSourceFailed")
+                          : t("doctor.updateNotPinged")}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="mt-5 flex flex-wrap gap-2">
-        <button
-          disabled={!native || !available}
-          onClick={() => void handleDownload()}
-          className={`inline-flex h-9 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${c.btnPrimary}`}
-        >
-          <Download size={15} />
-          {t("doctor.updateDownload")}
-        </button>
         <button
           disabled={!native || !downloadedPath}
           onClick={() => void handleInstall()}

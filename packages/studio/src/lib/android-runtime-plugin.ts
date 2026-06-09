@@ -22,6 +22,14 @@ interface InkOSRuntimePlugin {
     size: number;
     sha256: string;
   }>;
+  pingUpdateUrl(options: {
+    url: string;
+  }): Promise<{
+    ok: boolean;
+    statusCode: number;
+    latencyMs: number;
+    error?: string;
+  }>;
   installDownloadedApk(options: {
     path: string;
   }): Promise<{
@@ -106,6 +114,18 @@ export async function downloadUpdateApk(options: {
     sha256: options.sha256,
     fileName: options.fileName,
   });
+}
+
+export async function pingUpdateUrl(url: string): Promise<{
+  readonly ok: boolean;
+  readonly statusCode: number;
+  readonly latencyMs: number;
+  readonly error?: string;
+}> {
+  if (!isNativeRuntime()) {
+    throw new Error("APK update source checks are only available in the Android app.");
+  }
+  return await InkOSRuntime.pingUpdateUrl({ url });
 }
 
 export async function installDownloadedApk(path: string): Promise<{

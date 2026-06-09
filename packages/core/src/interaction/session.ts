@@ -19,6 +19,17 @@ export const PipelineStageSchema = z.object({
 
 export type PipelineStage = z.infer<typeof PipelineStageSchema>;
 
+export const TokenUsageSnapshotSchema = z.object({
+  promptTokens: z.number().nonnegative().optional(),
+  completionTokens: z.number().nonnegative().optional(),
+  totalTokens: z.number().nonnegative(),
+  estimated: z.boolean().optional(),
+  source: z.enum(["stream", "final", "tool"]).optional(),
+  updatedAt: z.number().int().nonnegative().optional(),
+});
+
+export type TokenUsageSnapshot = z.infer<typeof TokenUsageSnapshotSchema>;
+
 export const ToolExecutionSchema = z.object({
   id: z.string(),
   tool: z.string(),
@@ -30,6 +41,7 @@ export const ToolExecutionSchema = z.object({
   details: z.unknown().optional(),
   error: z.string().optional(),
   stages: z.array(PipelineStageSchema).optional(),
+  tokenUsage: TokenUsageSnapshotSchema.optional(),
   startedAt: z.number(),
   completedAt: z.number().optional(),
 });
@@ -41,6 +53,7 @@ export const InteractionMessageSchema = z.object({
   content: z.string().min(1),
   thinking: z.string().optional(),
   toolExecutions: z.array(ToolExecutionSchema).optional(),
+  tokenUsage: TokenUsageSnapshotSchema.optional(),
   timestamp: z.number().int().nonnegative(),
 });
 

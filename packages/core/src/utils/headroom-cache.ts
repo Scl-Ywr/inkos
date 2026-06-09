@@ -382,46 +382,42 @@ export async function optimizeMessagesForTokenPipelineAsync(
     readonly minCompressChars?: number;
   },
 ): Promise<TokenOptimizationReport> {
-  const base = optimizeMessagesForTokenPipeline(messages, options);
-  if (options?.compress === false || !options?.model) return base;
-
-  const official = await compressWithOfficialHeadroom(base.messages, { model: options.model });
-  if (!official) {
+  if (options?.compress !== false && options?.model) {
+    const official = await compressWithOfficialHeadroom(messages, { model: options.model });
+    if (official) {
+      const originalChars = messages.reduce((sum, message) => sum + message.content.length, 0);
+      const optimizedChars = official.messages.reduce((sum, message) => sum + message.content.length, 0);
+      const estimatedTokensSaved = official.tokensSaved > 0
+        ? official.tokensSaved
+        : estimateTokenSavingsFromTexts(
+            messages.map((message) => message.content).join("\n"),
+            official.messages.map((message) => message.content).join("\n"),
+          );
+      const officialEvents: TokenOptimizationEvent[] = [{
+        kind: "headroom-official",
+        label: `官方 Headroom：${official.transformsApplied.join(", ") || "optimize"}`,
+        originalChars,
+        optimizedChars,
+        estimatedTokensSaved,
+        at: Date.now(),
+      }];
+      recordPipelineEvents(officialEvents);
+      if (optimizedChars < originalChars) recordCompression(originalChars, optimizedChars, estimatedTokensSaved);
+      return {
+        messages: official.messages,
+        events: officialEvents,
+        originalChars,
+        optimizedChars,
+        estimatedTokensSaved,
+      };
+    }
     recordTokenOptimizationEvent({
       kind: "headroom-fallback",
       label: "官方 Headroom 不可用，使用本地 light 压缩",
-      originalChars: base.originalChars,
-      optimizedChars: base.optimizedChars,
-      estimatedTokensSaved: base.estimatedTokensSaved,
     });
-    return base;
   }
 
-  const originalChars = messages.reduce((sum, message) => sum + message.content.length, 0);
-  const optimizedChars = official.messages.reduce((sum, message) => sum + message.content.length, 0);
-  const estimatedTokensSaved = official.tokensSaved > 0
-    ? official.tokensSaved
-    : estimateTokenSavingsFromTexts(
-        messages.map((message) => message.content).join("\n"),
-        official.messages.map((message) => message.content).join("\n"),
-      );
-  const officialEvents: TokenOptimizationEvent[] = [{
-    kind: "headroom-official",
-    label: `官方 Headroom CacheAligner/CCR：${official.transformsApplied.join(", ") || "optimize"}`,
-    originalChars,
-    optimizedChars,
-    estimatedTokensSaved,
-    at: Date.now(),
-  }];
-  recordPipelineEvents(officialEvents);
-  if (optimizedChars < originalChars) recordCompression(originalChars, optimizedChars, estimatedTokensSaved);
-  return {
-    messages: official.messages,
-    events: [...base.events, ...officialEvents],
-    originalChars,
-    optimizedChars,
-    estimatedTokensSaved,
-  };
+  return optimizeMessagesForTokenPipeline(messages, options);
 }
 
 export function ensureSemanticCacheStorage(projectRoot: string): SemanticCacheStorageStatus {

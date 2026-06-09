@@ -80,33 +80,7 @@ export async function compressWithOfficialHeadroom(
         retries: 0,
         tokenBudget: options.tokenBudget,
         stack: `inkos-${options.mode ?? "generic"}`,
-        config: {
-          cacheAligner: {
-            enabled: true,
-            normalizeWhitespace: true,
-            collapseBlankLines: true,
-          },
-          ccr: {
-            enabled: true,
-            injectRetrievalMarker: true,
-            injectTool: true,
-            injectSystemInstructions: true,
-          },
-          smartCrusher: {
-            enabled: true,
-          },
-          cacheOptimizer: {
-            enabled: true,
-            enableSemanticCache: true,
-            semanticCacheSimilarity: 0.82,
-          },
-          rollingWindow: {
-            enabled: true,
-            keepSystem: true,
-            keepLastTurns: 4,
-          },
-        },
-      } as any,
+      },
     ) as {
       messages?: Array<{ role?: string; content?: string }>;
       tokensBefore?: number;
@@ -129,9 +103,9 @@ export async function compressWithOfficialHeadroom(
         && typeof message.content === "string",
       )
       .map((message) => ({ role: message.role, content: message.content }));
-    if (compressedMessages.length !== messages.length) {
+    if (compressedMessages.length === 0) {
       officialHeadroomStatus.lastCompressionOk = false;
-      officialHeadroomStatus.lastError = "Headroom returned a different message count.";
+      officialHeadroomStatus.lastError = "Headroom returned no usable messages.";
       return null;
     }
 
