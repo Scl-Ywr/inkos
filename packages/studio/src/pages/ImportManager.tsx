@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useI18n } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { StudioSelect } from "../components/StudioSelect";
+import { mobileTextInputHandlers } from "../lib/mobile-input";
 import { FileInput, BookCopy, Feather } from "lucide-react";
 
 interface BookSummary {
@@ -39,16 +40,43 @@ export function ImportManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TF
   const [ffMode, setFfMode] = useState("canon");
   const [ffGenre, setFfGenre] = useState("other");
   const [ffLang, setFfLang] = useState(lang);
+  const chTextRef = useRef<HTMLTextAreaElement>(null);
+  const chSplitRegexRef = useRef<HTMLInputElement>(null);
+  const ffTitleRef = useRef<HTMLInputElement>(null);
+  const ffTextRef = useRef<HTMLTextAreaElement>(null);
+
+  const readChapterImportInput = () => {
+    const nextText = chTextRef.current?.value ?? chText;
+    const nextSplitRegex = chSplitRegexRef.current?.value ?? chSplitRegex;
+    setChText(nextText);
+    setChSplitRegex(nextSplitRegex);
+    return {
+      text: nextText,
+      splitRegex: nextSplitRegex,
+    };
+  };
+
+  const readFanficInput = () => {
+    const nextTitle = ffTitleRef.current?.value ?? ffTitle;
+    const nextText = ffTextRef.current?.value ?? ffText;
+    setFfTitle(nextTitle);
+    setFfText(nextText);
+    return {
+      title: nextTitle,
+      text: nextText,
+    };
+  };
 
   const handleImportChapters = async () => {
-    if (!chText.trim() || !chBookId) return;
+    const input = readChapterImportInput();
+    if (!input.text.trim() || !chBookId) return;
     setLoading(true);
     setStatus("");
     try {
       const data = await fetchJson<{ importedCount?: number }>(`/books/${chBookId}/import/chapters`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: chText, splitRegex: chSplitRegex || undefined }),
+        body: JSON.stringify({ text: input.text, splitRegex: input.splitRegex || undefined }),
       });
       setStatus(`Imported ${data.importedCount} chapters`);
     } catch (e) {
@@ -71,7 +99,8 @@ export function ImportManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TF
   };
 
   const handleFanficInit = async () => {
-    if (!ffTitle.trim() || !ffText.trim()) return;
+    const input = readFanficInput();
+    if (!input.title.trim() || !input.text.trim()) return;
     setLoading(true);
     setStatus("");
     try {
@@ -79,7 +108,7 @@ export function ImportManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TF
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: ffTitle, sourceText: ffText, mode: ffMode,
+          title: input.title, sourceText: input.text, mode: ffMode,
           genre: ffGenre, language: ffLang,
         }),
       });
@@ -96,6 +125,10 @@ export function ImportManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TF
     { id: "fanfic", label: t("import.fanfic"), icon: <Feather size={14} /> },
   ];
   const bookOptions = booksData?.books.map((b) => ({ value: b.id, label: b.title })) ?? [];
+  const chSplitRegexHandlers = mobileTextInputHandlers(setChSplitRegex);
+  const chTextHandlers = mobileTextInputHandlers(setChText);
+  const ffTitleHandlers = mobileTextInputHandlers(setFfTitle);
+  const ffTextHandlers = mobileTextInputHandlers(setFfText);
 
   return (
     <div className="space-y-8">
@@ -137,15 +170,16 @@ export function ImportManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TF
               triggerClassName="bg-secondary/30 shadow-none"
             />
             <input
-              type="text" value={chSplitRegex} onChange={(e) => setChSplitRegex(e.target.value)}
+              ref={chSplitRegexRef}
+              type="text" defaultValue={chSplitRegex} {...chSplitRegexHandlers}
               placeholder={t("import.splitRegex")}
               className="w-full px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm font-mono"
             />
-            <textarea value={chText} onChange={(e) => setChText(e.target.value)} rows={10}
+            <textarea ref={chTextRef} defaultValue={chText} {...chTextHandlers} rows={10}
               placeholder={t("import.pasteChapters")}
               className="w-full px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm resize-none font-mono"
             />
-            <button onClick={handleImportChapters} disabled={loading || !chBookId || !chText.trim()}
+            <button onClick={handleImportChapters} disabled={loading || !chBookId}
               className={`px-4 py-2 text-sm rounded-lg ${c.btnPrimary} disabled:opacity-30`}>
               {loading ? t("import.importing") : t("import.chapters")}
             </button>
@@ -177,7 +211,7 @@ export function ImportManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TF
 
         {tab === "fanfic" && (
           <>
-            <input type="text" value={ffTitle} onChange={(e) => setFfTitle(e.target.value)}
+            <input ref={ffTitleRef} type="text" defaultValue={ffTitle} {...ffTitleHandlers}
               placeholder={t("import.fanficTitle")}
               className="w-full px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm"
             />
@@ -214,11 +248,11 @@ export function ImportManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TF
                 triggerClassName="bg-secondary/30 shadow-none"
               />
             </div>
-            <textarea value={ffText} onChange={(e) => setFfText(e.target.value)} rows={10}
+            <textarea ref={ffTextRef} defaultValue={ffText} {...ffTextHandlers} rows={10}
               placeholder={t("import.pasteMaterial")}
               className="w-full px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm resize-none font-mono"
             />
-            <button onClick={handleFanficInit} disabled={loading || !ffTitle.trim() || !ffText.trim()}
+            <button onClick={handleFanficInit} disabled={loading}
               className={`px-4 py-2 text-sm rounded-lg ${c.btnPrimary} disabled:opacity-30`}>
               {loading ? t("import.creating") : t("import.fanfic")}
             </button>

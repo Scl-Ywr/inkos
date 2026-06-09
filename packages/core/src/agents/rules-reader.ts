@@ -5,7 +5,11 @@ import { parseGenreProfile, type ParsedGenreProfile } from "../models/genre-prof
 import { parseBookRules, tryParseBookRulesFrontmatter, type ParsedBookRules } from "../models/book-rules.js";
 import { BookConfigSchema } from "../models/book.js";
 
-const BUILTIN_GENRES_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../genres");
+const androidBuiltinGenresDir = process.env.INKOS_BUILTIN_GENRES_DIR?.trim();
+const BUILTIN_GENRES_DIR =
+  androidBuiltinGenresDir && androidBuiltinGenresDir.length > 0
+    ? androidBuiltinGenresDir
+    : join(dirname(fileURLToPath(import.meta.url)), "../../genres");
 
 async function tryReadFile(path: string): Promise<string | null> {
   try {

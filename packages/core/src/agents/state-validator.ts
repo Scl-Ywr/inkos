@@ -5,9 +5,16 @@ export interface ValidationWarning {
   readonly description: string;
 }
 
+export interface ValidationTokenUsage {
+  readonly promptTokens: number;
+  readonly completionTokens: number;
+  readonly totalTokens: number;
+}
+
 export interface ValidationResult {
   readonly warnings: ReadonlyArray<ValidationWarning>;
   readonly passed: boolean;
+  readonly tokenUsage?: ValidationTokenUsage;
 }
 
 export interface StateValidationAuthorityContext {
@@ -108,7 +115,10 @@ ${chapterContent.slice(0, 6000)}`;
         { temperature: 0.1 },
       );
 
-      return this.parseResult(response.content);
+      return {
+        ...this.parseResult(response.content),
+        tokenUsage: response.usage,
+      };
     } catch (error) {
       this.log?.warn(`State validation failed: ${error}`);
       throw error;

@@ -1,43 +1,25 @@
 ---
-name: LitRPG
+name: 游戏系统
 id: litrpg
-language: en
-chapterTypes: ["Progression", "Setup", "Transition", "Payoff", "Combat"]
-fatigueWords: ["delve", "tapestry", "testament", "intricate", "pivotal", "vibrant", "comprehensive", "nuanced", "embark", "foster", "underscore", "bolstered", "crucial"]
+language: zh
+chapterTypes: ["任务章", "副本章", "加点章", "掉落章", "组队章", "版本章"]
+fatigueWords: ["面板", "属性", "技能", "任务", "副本", "掉落", "经验值"]
 numericalSystem: true
 powerScaling: true
 eraResearch: false
-pacingRule: "Every 1-3 chapters early: level-up or stat gain. Mid-story every 5-10 chapters. Late story: tier transitions spaced far apart."
-satisfactionTypes: ["Level Up", "Skill Unlock", "Loot Drop", "Boss Kill", "Tier Breakthrough", "System Secret Revealed"]
-auditDimensions: [1,2,3,4,5,6,7,8,9,10,13,14,15,16,17,18,19,24,25,26]
+pacingRule: "每章至少有一个系统变量变化，但关键胜负必须来自选择，而不是纯数值碾压。"
+satisfactionTypes: ["技能组合", "任务奖励", "副本首通", "隐藏机制", "面板成长"]
+auditDimensions: [1, 2, 3, 4, 5, 8, 9, 10, 12, 14, 15, 17, 18, 20, 24, 25, 26]
 ---
 
-## Genre Prohibitions
+## 系统规则
 
-- System rules changing arbitrarily after being established — readers track every number
-- Unexplained power jumps — growth must follow established system logic
-- "Blue Box Madness" — stat dumps every chapter or pages-long stat sheets
-- Instant mastery — acquiring a skill and immediately excelling at it
-- Overpowered MC from the start — removes all tension
-- System message overload interrupting action scenes
-- Female characters reduced to "perfect girlfriend" or "sickly daughter" tropes
+面板数字要服务剧情：属性变化带来行动方式变化，技能升级带来新的战术选择。
 
-## System Design Rules
+隐藏任务、称号、掉落必须提前埋线，不能只在需要时突然出现。
 
-- Once stats, skills, and system rules are established, they cannot be contradicted
-- Stat blocks punctuate achievement moments, not routine actions
-- Derivative stats (HP, Mana) must depend logically on primary stats
-- Skill unlocks must feel earned — tied to risk, sacrifice, or problem-solving
-- Same-type resource absorption must show diminishing returns, not flat gains
-- System UI (blue boxes) appears after action/revelation, never mid-combat
-- Give the system a consistent voice/personality — formal, archaic, playful, or clinical
+## 题材禁忌
 
-## Pacing Guidance
+不要用大段面板淹没正文；面板只展示本章需要决策的部分。
 
-- Chapter length sweet spot: 2.8k-3.5k words depending on stat density
-- Chapter structure: Hook/recap -> Action/exploration -> System interaction/stat gain -> Cliffhanger
-- Early chapters: frequent level-ups to hook readers (every 1-3 chapters)
-- Mid-story: harder gains, every 5-10 chapters; narrative tension rises
-- Late story: tier/rank transitions are rare and climactic
-- Test pacing: Book 3 MC decisively defeats Book 1 version, but challenges never feel trivial
-- Describe stats in narration first (audiobook-friendly), then include stat sheet for detail readers
+失败也要有收益：情报、代价、仇恨、冷却、材料损耗或队伍关系变化。

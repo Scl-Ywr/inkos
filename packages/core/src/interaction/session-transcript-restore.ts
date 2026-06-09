@@ -315,9 +315,18 @@ export function committedMessageEvents(events: TranscriptEvent[]): MessageEvent[
       .filter((event) => event.type === "request_committed")
       .map((event) => event.requestId),
   );
+  const deleted = new Set(
+    events
+      .filter((event) => event.type === "message_deleted")
+      .map((event) => event.targetUuid),
+  );
 
   return events
-    .filter((event): event is MessageEvent => event.type === "message" && committed.has(event.requestId))
+    .filter((event): event is MessageEvent =>
+      event.type === "message" &&
+      committed.has(event.requestId) &&
+      !deleted.has(event.uuid),
+    )
     .sort((a, b) => a.seq - b.seq);
 }
 

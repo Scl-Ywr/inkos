@@ -58,6 +58,11 @@ export const MessageEventSchema = BaseEventSchema.extend({
   message: z.unknown(),
 });
 
+export const MessageDeletedEventSchema = BaseEventSchema.extend({
+  type: z.literal("message_deleted"),
+  targetUuid: z.string().min(1),
+});
+
 export const TranscriptEventSchema = z.discriminatedUnion("type", [
   SessionCreatedEventSchema,
   SessionMetadataUpdatedEventSchema,
@@ -65,6 +70,7 @@ export const TranscriptEventSchema = z.discriminatedUnion("type", [
   RequestCommittedEventSchema,
   RequestFailedEventSchema,
   MessageEventSchema,
+  MessageDeletedEventSchema,
 ]);
 
 export type SessionCreatedEvent = z.infer<typeof SessionCreatedEventSchema>;
@@ -73,4 +79,5 @@ export type RequestStartedEvent = z.infer<typeof RequestStartedEventSchema>;
 export type RequestCommittedEvent = z.infer<typeof RequestCommittedEventSchema>;
 export type RequestFailedEvent = z.infer<typeof RequestFailedEventSchema>;
 export type MessageEvent = z.infer<typeof MessageEventSchema>;
+export type MessageDeletedEvent = z.infer<typeof MessageDeletedEventSchema>;
 export type TranscriptEvent = z.infer<typeof TranscriptEventSchema>;

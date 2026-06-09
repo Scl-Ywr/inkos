@@ -307,6 +307,10 @@ export function detectCrossChapterRepetition(
 
   const violations: PostWriteViolation[] = [];
   const isEnglish = language === "en";
+  const wholeRepeat = detectWholeChapterRepeat(currentContent, recentChaptersContent, language);
+  if (wholeRepeat) {
+    violations.push(wholeRepeat);
+  }
 
   if (isEnglish) {
     // Extract 3-word phrases from current chapter
@@ -360,6 +364,80 @@ export function detectCrossChapterRepetition(
   }
 
   return violations;
+}
+
+function detectWholeChapterRepeat(
+  currentContent: string,
+  recentChaptersContent: string,
+  language: "zh" | "en",
+): PostWriteViolation | null {
+  const current = normalizeForWholeChapterSimilarity(currentContent, language);
+  if (current.length < 600) return null;
+  const recentBlocks = splitRecentChapterBlocks(recentChaptersContent)
+    .map((block) => normalizeForWholeChapterSimilarity(block, language))
+    .filter((block) => block.length >= 600);
+
+  let best = 0;
+  for (const block of recentBlocks) {
+    const shorter = Math.min(current.length, block.length);
+    const longer = Math.max(current.length, block.length);
+    if (shorter / longer < 0.45) continue;
+    const containment = block.includes(current) || current.includes(block) ? shorter / longer : 0;
+    const dice = diceNgramSimilarity(current, block, language === "en" ? 4 : 6);
+    best = Math.max(best, containment, dice);
+  }
+
+  if (best < 0.86) return null;
+  return {
+    rule: language === "en" ? "Whole-chapter duplicate" : "整章重复",
+    severity: "error",
+    description: language === "en"
+      ? `Current draft is too similar to a recent chapter (similarity ${best.toFixed(2)}).`
+      : `当前草稿与近期章节高度相似（相似度 ${best.toFixed(2)}），疑似复用了上一章完整生成结果。`,
+    suggestion: language === "en"
+      ? "Regenerate with a new chapter goal; use compressed context as reference only, not as reusable output."
+      : "重新生成本章；压缩上下文只能作为参考，不能复用旧章节成品。",
+  };
+}
+
+function splitRecentChapterBlocks(input: string): string[] {
+  const bySeparator = input
+    .split(/\n\s*-{3,}\s*\n/g)
+    .map((block) => block.trim())
+    .filter(Boolean);
+  return bySeparator.length > 1 ? bySeparator : [input];
+}
+
+function normalizeForWholeChapterSimilarity(input: string, language: "zh" | "en"): string {
+  const withoutMetadata = input
+    .replace(/^#.*$/gm, "")
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/\bPRE_WRITE_CHECK\b[\s\S]*?(?=\n#{1,3}\s|\n第\s*\d+\s*章|\nChapter\s+\d+|$)/gi, "");
+  return language === "en"
+    ? withoutMetadata.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
+    : withoutMetadata.replace(/[^\u4e00-\u9fffA-Za-z0-9]/g, "");
+}
+
+function diceNgramSimilarity(a: string, b: string, n: number): number {
+  if (a.length < n || b.length < n) return 0;
+  const counts = new Map<string, number>();
+  for (let i = 0; i <= a.length - n; i += 1) {
+    const gram = a.slice(i, i + n);
+    counts.set(gram, (counts.get(gram) ?? 0) + 1);
+  }
+  let overlap = 0;
+  let bCount = 0;
+  for (let i = 0; i <= b.length - n; i += 1) {
+    bCount += 1;
+    const gram = b.slice(i, i + n);
+    const count = counts.get(gram) ?? 0;
+    if (count > 0) {
+      overlap += 1;
+      counts.set(gram, count - 1);
+    }
+  }
+  const aCount = Math.max(0, a.length - n + 1);
+  return aCount + bCount === 0 ? 0 : (2 * overlap) / (aCount + bCount);
 }
 
 export function detectParagraphLengthDrift(
@@ -643,7 +721,7 @@ export function detectDuplicateTitle(
     }
 
     // Near-duplicate: one is substring of the other, or only differs by punctuation/numbers
-    const stripPunct = (s: string) => s.replace(/[^\p{L}\p{N}]/gu, "");
+    const stripPunct = (s: string) => s.replace(/[^0-9a-zA-Z\u3400-\u9fff]/g, "");
     if (stripPunct(normalized) === stripPunct(existingNorm)) {
       violations.push({
         rule: "near-duplicate-title",

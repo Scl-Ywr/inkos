@@ -1,14 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { BookCreationDraft } from "@actalk/inkos-core";
 import { BookPlus, CheckCircle2, RotateCcw, Sparkles } from "lucide-react";
-import { fetchJson, useApi } from "../hooks/use-api";
+import { buildApiUrl, fetchJson, useApi } from "../hooks/use-api";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { StudioSelect } from "../components/StudioSelect";
+import { mobileTextInputHandlers } from "../lib/mobile-input";
 import {
+  getBookCreateAssistantInput,
   clearBookCreateSessionId,
   getBookCreateSessionId,
+  setBookCreateAssistantInput,
   setBookCreateSessionId,
 } from "./chat-page-state";
 
@@ -482,13 +485,19 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
 
   const [draft, setDraft] = useState<BookCreationDraft | undefined>();
   const [form, setForm] = useState<BookCreateFormState>(() => defaultBookCreateForm(projectLang));
-  const [input, setInput] = useState("");
+  const [input, setInputState] = useState(() => getBookCreateAssistantInput());
   const [loadingDraft, setLoadingDraft] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [bookCreateSessionId, setBookCreateSessionIdState] = useState<string | null>(null);
+  const titleRef = useRef<HTMLInputElement>(null);
+  const genreRef = useRef<HTMLInputElement>(null);
+  const targetChaptersRef = useRef<HTMLInputElement>(null);
+  const chapterWordCountRef = useRef<HTMLInputElement>(null);
+  const briefRef = useRef<HTMLTextAreaElement>(null);
+  const assistantInputRef = useRef<HTMLTextAreaElement>(null);
 
   const summaryRows = useMemo(
     () => (draft ? buildCreationDraftSummary(draft, projectLang) : []),
@@ -511,6 +520,43 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
   const updateForm = (patch: Partial<BookCreateFormState>) => {
     setForm((current) => ({ ...current, ...patch }));
   };
+  const formTextHandlers = (key: keyof BookCreateFormState) =>
+    mobileTextInputHandlers((value) => updateForm({ [key]: value }));
+
+  const writeFormToDom = (nextForm: BookCreateFormState): void => {
+    if (titleRef.current) titleRef.current.value = nextForm.title;
+    if (genreRef.current) genreRef.current.value = nextForm.genre;
+    if (targetChaptersRef.current) targetChaptersRef.current.value = nextForm.targetChapters;
+    if (chapterWordCountRef.current) chapterWordCountRef.current.value = nextForm.chapterWordCount;
+    if (briefRef.current) briefRef.current.value = nextForm.brief;
+  };
+
+  const readFormFromDom = (): BookCreateFormState => {
+    const nextForm = {
+      ...form,
+      title: titleRef.current?.value ?? form.title,
+      genre: genreRef.current?.value ?? form.genre,
+      targetChapters: targetChaptersRef.current?.value ?? form.targetChapters,
+      chapterWordCount: chapterWordCountRef.current?.value ?? form.chapterWordCount,
+      brief: briefRef.current?.value ?? form.brief,
+    };
+    setForm(nextForm);
+    return nextForm;
+  };
+
+  const setAssistantInput = (value: string): void => {
+    setInputState(value);
+    setBookCreateAssistantInput(value);
+    if (assistantInputRef.current && assistantInputRef.current.value !== value) {
+      assistantInputRef.current.value = value;
+    }
+  };
+
+  const readAssistantInput = (): string => {
+    const nextInput = assistantInputRef.current?.value ?? input;
+    setAssistantInput(nextInput);
+    return nextInput;
+  };
 
   const applyDraftToForm = () => {
     if (!draft) {
@@ -524,14 +570,18 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
       draft.volumeOutline,
     ].filter((part): part is string => Boolean(part?.trim())).join("\n\n");
     const platformValues = platformChoices.map((option) => option.value);
-    setForm((current) => ({
-      title: draft.title?.trim() || current.title,
-      genre: draft.genre?.trim() || current.genre,
-      platform: pickValidValue(draft.platform ?? current.platform, platformValues),
-      targetChapters: draft.targetChapters ? String(draft.targetChapters) : current.targetChapters,
-      chapterWordCount: draft.chapterWordCount ? String(draft.chapterWordCount) : current.chapterWordCount,
-      brief: draftBrief || current.brief,
-    }));
+    setForm((current) => {
+      const nextForm = {
+        title: draft.title?.trim() || current.title,
+        genre: draft.genre?.trim() || current.genre,
+        platform: pickValidValue(draft.platform ?? current.platform, platformValues),
+        targetChapters: draft.targetChapters ? String(draft.targetChapters) : current.targetChapters,
+        chapterWordCount: draft.chapterWordCount ? String(draft.chapterWordCount) : current.chapterWordCount,
+        brief: draftBrief || current.brief,
+      };
+      writeFormToDom(nextForm);
+      return nextForm;
+    });
   };
 
   const refreshDraft = async (): Promise<BookCreationDraft | undefined> => {
@@ -588,7 +638,12 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
       setBookCreateSessionIdState(sessionId);
     }
 
-    const response = await fetch("/api/v1/agent", {
+    const agentUrl = buildApiUrl("/agent");
+    if (!agentUrl) {
+      throw new Error(projectLang === "zh" ? "API 地址无效。" : "Invalid API URL.");
+    }
+
+    const response = await fetch(agentUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -623,7 +678,7 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
   };
 
   const handleDraftSubmit = async () => {
-    const instruction = resolveDraftInstruction(input, Boolean(draft));
+    const instruction = resolveDraftInstruction(readAssistantInput(), Boolean(draft));
     if (!instruction) {
       return;
     }
@@ -640,7 +695,7 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
         nav.toBook(createdBookId);
         return;
       }
-      setInput("");
+      setAssistantInput("");
       setStatus(data.response ?? null);
       setDraft(data.session?.creationDraft);
     } catch (cause) {
@@ -651,7 +706,8 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
   };
 
   const handleFormCreate = async () => {
-    if (!canSubmitForm) {
+    const latestForm = readFormFromDom();
+    if (!isBookCreateFormReady(latestForm)) {
       return;
     }
 
@@ -659,7 +715,7 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
     setError(null);
     setStatus(copy.creationStatus);
     try {
-      const payload = buildBookCreatePayload(form, projectLang);
+      const payload = buildBookCreatePayload(latestForm, projectLang);
       const data = await fetchJson<{ status?: string; bookId?: string }>("/books/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -709,7 +765,7 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
       const data = await runAgentInstruction("/discard");
       setStatus(data.response ?? null);
       setDraft(undefined);
-      setInput("");
+      setAssistantInput("");
       await refreshDraft().catch(() => undefined);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -756,8 +812,9 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
             <label className="space-y-2">
               <span className="text-xs font-medium text-muted-foreground">{copy.titleLabel}</span>
               <input
-                value={form.title}
-                onChange={(event) => updateForm({ title: event.target.value })}
+                ref={titleRef}
+                defaultValue={form.title}
+                {...formTextHandlers("title")}
                 className={`w-full ${c.input} rounded-md px-3 py-2.5 focus:outline-none text-sm`}
                 placeholder={copy.titlePlaceholder}
               />
@@ -765,8 +822,9 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
             <label className="space-y-2">
               <span className="text-xs font-medium text-muted-foreground">{copy.genreLabel}</span>
               <input
-                value={form.genre}
-                onChange={(event) => updateForm({ genre: event.target.value })}
+                ref={genreRef}
+                defaultValue={form.genre}
+                {...formTextHandlers("genre")}
                 className={`w-full ${c.input} rounded-md px-3 py-2.5 focus:outline-none text-sm`}
                 placeholder={copy.genrePlaceholder}
               />
@@ -786,20 +844,22 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
             <label className="space-y-2">
               <span className="text-xs font-medium text-muted-foreground">{copy.targetChaptersLabel}</span>
               <input
+                ref={targetChaptersRef}
                 type="number"
                 min={1}
-                value={form.targetChapters}
-                onChange={(event) => updateForm({ targetChapters: event.target.value })}
+                defaultValue={form.targetChapters}
+                {...formTextHandlers("targetChapters")}
                 className={`w-full ${c.input} rounded-md px-3 py-2.5 focus:outline-none text-sm`}
               />
             </label>
             <label className="space-y-2">
               <span className="text-xs font-medium text-muted-foreground">{copy.chapterWordCountLabel}</span>
               <input
+                ref={chapterWordCountRef}
                 type="number"
                 min={1000}
-                value={form.chapterWordCount}
-                onChange={(event) => updateForm({ chapterWordCount: event.target.value })}
+                defaultValue={form.chapterWordCount}
+                {...formTextHandlers("chapterWordCount")}
                 className={`w-full ${c.input} rounded-md px-3 py-2.5 focus:outline-none text-sm`}
               />
             </label>
@@ -808,8 +868,9 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
           <label className="space-y-2 block">
             <span className="text-xs font-medium text-muted-foreground">{copy.briefLabel}</span>
             <textarea
-              value={form.brief}
-              onChange={(event) => updateForm({ brief: event.target.value })}
+              ref={briefRef}
+              defaultValue={form.brief}
+              {...formTextHandlers("brief")}
               rows={9}
               className={`w-full ${c.input} rounded-md px-3 py-3 focus:outline-none text-sm leading-7 resize-y`}
               placeholder={copy.briefPlaceholder}
@@ -847,8 +908,11 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
             </div>
 
             <textarea
+              ref={assistantInputRef}
               value={input}
-              onChange={(event) => setInput(event.target.value)}
+              {...mobileTextInputHandlers(setAssistantInput)}
+              onInput={(event) => setAssistantInput(event.currentTarget.value)}
+              onCompositionEnd={(event) => setAssistantInput(event.currentTarget.value)}
               rows={7}
               className={`w-full ${c.input} rounded-md px-3 py-3 focus:outline-none text-sm leading-7 resize-y`}
               placeholder={draft ? copy.promptPlaceholderFollowup : copy.promptPlaceholder}

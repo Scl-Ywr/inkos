@@ -1,12 +1,14 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
+import { buildApiUrl } from "../lib/api-url";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useServiceStore } from "../store/service";
-import type { SSEMessage } from "../hooks/use-sse";
+import type { ActiveOperation, SSEMessage } from "../hooks/use-sse";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { deriveActiveBookIds, shouldRefetchBookCollections } from "../hooks/use-book-activity";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { appAlert } from "../lib/app-dialog";
 import {
   Plus,
   BookOpen,
@@ -22,6 +24,7 @@ import {
   Settings,
   Download,
   FileInput,
+  History,
 } from "lucide-react";
 
 interface BookSummary {
@@ -51,9 +54,31 @@ interface TaskLogEntry {
 
 interface CurrentTask {
   readonly bookId: string | null;
+  readonly sessionId?: string | null;
   readonly label: string;
   readonly status: "running" | "complete" | "error";
   readonly timestamp: number;
+}
+
+export interface OperationHistoryItem {
+  readonly key: string;
+  readonly type: string;
+  readonly bookId: string;
+  readonly status: "completed" | "error" | "cancelled";
+  readonly label: string;
+  readonly message: string;
+  readonly startedAt: number;
+  readonly updatedAt: number;
+  readonly completedAt: number;
+  readonly durationMs: number;
+  readonly chapter?: number;
+  readonly sessionId?: string;
+  readonly error?: string;
+}
+
+interface DashboardSseState {
+  readonly messages: ReadonlyArray<SSEMessage>;
+  readonly activeOperations?: ReadonlyArray<ActiveOperation>;
 }
 
 const TASK_LABELS: Record<string, string> = {
@@ -80,6 +105,11 @@ const TASK_LABELS: Record<string, string> = {
 function getMessageBookId(message: SSEMessage): string | null {
   const data = message.data as { bookId?: unknown } | null;
   return typeof data?.bookId === "string" ? data.bookId : null;
+}
+
+function getMessageSessionId(message: SSEMessage): string | null {
+  const data = message.data as { sessionId?: unknown } | null;
+  return typeof data?.sessionId === "string" ? data.sessionId : null;
 }
 
 function normalizeLogEvent(message: SSEMessage): TaskLogEntry | null {
@@ -133,6 +163,7 @@ function getCurrentTask(messages: ReadonlyArray<SSEMessage>): CurrentTask | null
     if (!label) continue;
     return {
       bookId: getMessageBookId(message),
+      sessionId: getMessageSessionId(message),
       label,
       status: message.event.endsWith(":error")
         ? "error"
@@ -155,9 +186,43 @@ function getCurrentTask(messages: ReadonlyArray<SSEMessage>): CurrentTask | null
   if (!operation) return null;
   return {
     bookId: operation.bookId ?? null,
+    sessionId: "sessionId" in operation && typeof operation.sessionId === "string" ? operation.sessionId : null,
     label: operation.type === "agent" ? "Agent 正在执行" : "任务正在执行",
     status: "running",
     timestamp: restored?.timestamp ?? Date.now(),
+  };
+}
+
+function isWritingOperation(operation: ActiveOperation): boolean {
+  return operation.type === "write"
+    || operation.type === "draft"
+    || operation.type === "rewrite"
+    || operation.type === "revise"
+    || operation.type === "audit"
+    || operation.type === "agent";
+}
+
+function deriveBackendActiveBookIds(operations: ReadonlyArray<ActiveOperation> | undefined): ReadonlySet<string> {
+  const active = new Set<string>();
+  for (const operation of operations ?? []) {
+    if (operation.bookId && operation.bookId !== "project" && isWritingOperation(operation)) {
+      active.add(operation.bookId);
+    }
+  }
+  return active;
+}
+
+function getCurrentTaskFromOperations(operations: ReadonlyArray<ActiveOperation> | undefined): CurrentTask | null {
+  const operation = [...(operations ?? [])]
+    .filter((item) => item.status !== "complete" && item.status !== "error")
+    .sort((a, b) => (b.updatedAt ?? b.startedAt ?? 0) - (a.updatedAt ?? a.startedAt ?? 0))[0];
+  if (!operation) return null;
+  return {
+    bookId: operation.bookId && operation.bookId !== "project" ? operation.bookId : null,
+    sessionId: operation.sessionId ?? null,
+    label: operation.label ?? (operation.type === "agent" ? "AI 对话正在执行" : "任务正在执行"),
+    status: "running",
+    timestamp: operation.updatedAt ?? operation.startedAt ?? Date.now(),
   };
 }
 
@@ -189,6 +254,64 @@ function getRecentTaskLogs(messages: ReadonlyArray<SSEMessage>, bookId?: string)
     .slice(-6);
 }
 
+function shouldRefetchOperationHistory(message: SSEMessage): boolean {
+  return message.event === "operations:history"
+    || message.event.endsWith(":complete")
+    || message.event.endsWith(":error");
+}
+
+function formatDuration(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
+}
+
+function historyStatusView(status: OperationHistoryItem["status"]): {
+  readonly label: string;
+  readonly icon: typeof CheckCircle2;
+  readonly className: string;
+} {
+  if (status === "completed") {
+    return { label: "完成", icon: CheckCircle2, className: "text-emerald-500 bg-emerald-500/10 border-emerald-500/20" };
+  }
+  if (status === "cancelled") {
+    return { label: "已停止", icon: AlertCircle, className: "text-amber-500 bg-amber-500/10 border-amber-500/20" };
+  }
+  return { label: "失败", icon: AlertCircle, className: "text-destructive bg-destructive/10 border-destructive/20" };
+}
+
+export function selectLatestProgressEvent(
+  messages: ReadonlyArray<SSEMessage>,
+  filter?: { readonly bookId?: string | null; readonly sessionId?: string | null },
+): SSEMessage | undefined {
+  const hasFilter = Boolean(filter?.bookId || filter?.sessionId);
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.event !== "llm:progress" || !message.data || typeof message.data !== "object") continue;
+    if (!hasFilter) return message;
+
+    const data = message.data as { bookId?: unknown; sessionId?: unknown };
+    if (filter?.sessionId && data.sessionId === filter.sessionId) return message;
+    if (filter?.bookId && data.bookId === filter.bookId) return message;
+  }
+  return undefined;
+}
+
+function useLiveNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [active]);
+
+  return now;
+}
+
 function TaskExecutionLog({
   title,
   subtitle,
@@ -202,7 +325,13 @@ function TaskExecutionLog({
   readonly progressEvent?: SSEMessage;
   readonly compact?: boolean;
 }) {
-  const progress = progressEvent?.data as { elapsedMs?: number; totalChars?: number } | null;
+  const progress = progressEvent?.data as { elapsedMs?: number; totalChars?: number; status?: string } | null;
+  const isLiveProgress = Boolean(progress && progress.status !== "done");
+  const now = useLiveNow(isLiveProgress);
+  const elapsedMs = progress
+    ? Math.max(0, progress.elapsedMs ?? 0)
+      + (isLiveProgress && progressEvent ? Math.max(0, now - progressEvent.timestamp) : 0)
+    : 0;
 
   if (entries.length === 0 && !progressEvent) {
     return null;
@@ -224,7 +353,7 @@ function TaskExecutionLog({
           <div className="soft-pill flex w-full items-center justify-between gap-3 rounded-full px-3 py-2 text-xs font-bold text-primary sm:w-auto">
             <span className="flex items-center gap-1.5">
               <Clock size={12} />
-              {Math.round((progress.elapsedMs ?? 0) / 1000)}s
+              {Math.floor(elapsedMs / 1000)}s
             </span>
             <span className="h-3 w-px bg-primary/20" />
             <span className="flex items-center gap-1.5">
@@ -255,6 +384,60 @@ function TaskExecutionLog({
         </div>
       )}
     </div>
+  );
+}
+
+export function RecentTaskHistory({ items }: { readonly items: ReadonlyArray<OperationHistoryItem> }) {
+  if (items.length === 0) return null;
+
+  return (
+    <section className="glass-panel rounded-[2rem] p-4 sm:p-6">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-secondary text-primary">
+            <History size={16} />
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-bold text-foreground">最近任务</div>
+            <div className="mt-0.5 text-xs text-muted-foreground">完成、失败和停止记录</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {items.map((item) => {
+          const statusView = historyStatusView(item.status);
+          const StatusIcon = statusView.icon;
+          return (
+            <div
+              key={`${item.key}-${item.completedAt}`}
+              className="rounded-2xl border border-border/45 bg-background/35 px-3 py-3"
+            >
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <span className="truncate text-sm font-semibold text-foreground">{item.label}</span>
+                    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-bold ${statusView.className}`}>
+                      <StatusIcon size={11} />
+                      {statusView.label}
+                    </span>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    <span className="truncate">{item.bookId === "project" ? "项目任务" : item.bookId}</span>
+                    {typeof item.chapter === "number" && <span>第 {item.chapter} 章</span>}
+                    <span>{new Date(item.completedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
+                    <span>{formatDuration(item.durationMs)}</span>
+                  </div>
+                </div>
+                <div className="max-w-full text-xs leading-5 text-muted-foreground sm:max-w-sm sm:text-right">
+                  {item.error || item.message}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -311,7 +494,7 @@ function BookMenu({ bookId, bookTitle, nav, t, onDelete, onOpenChange }: {
             {t("book.settings")}
           </button>
           <a
-            href={`/api/v1/books/${bookId}/export?format=txt`}
+            href={buildApiUrl(`/books/${bookId}/export?format=txt`) ?? "#"}
             download
             onClick={() => setOpen(false)}
             className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-foreground hover:bg-secondary/50 transition-colors cursor-pointer"
@@ -343,18 +526,33 @@ function BookMenu({ bookId, bookTitle, nav, t, onDelete, onOpenChange }: {
   );
 }
 
-export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: ReadonlyArray<SSEMessage> }; theme: Theme; t: TFunction }) {
+export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: DashboardSseState; theme: Theme; t: TFunction }) {
   const c = useColors(theme);
   const [menuOpenBookId, setMenuOpenBookId] = useState<string | null>(null);
   const { data, loading, error, refetch } = useApi<{ books: ReadonlyArray<BookSummary> }>("/books");
-  const writingBooks = useMemo(() => deriveActiveBookIds(sse.messages), [sse.messages]);
+  const { data: operationHistoryData, refetch: refetchOperationHistory } = useApi<{
+    operations: ReadonlyArray<OperationHistoryItem>;
+  }>("/operations/history?limit=6");
+  const writingBooks = useMemo(() => {
+    const active = new Set(deriveActiveBookIds(sse.messages));
+    for (const bookId of deriveBackendActiveBookIds(sse.activeOperations)) {
+      active.add(bookId);
+    }
+    return active;
+  }, [sse.activeOperations, sse.messages]);
   const serviceStoreServices = useServiceStore((s) => s.services);
   const fetchServices = useServiceStore((s) => s.fetchServices);
   useEffect(() => { void fetchServices(); }, [fetchServices]);
   const hasServices = serviceStoreServices.some((s) => s.connected);
 
-  const progressEvent = sse.messages.filter((m) => m.event === "llm:progress").slice(-1)[0];
-  const currentTask = useMemo(() => getCurrentTask(sse.messages), [sse.messages]);
+  const currentTask = useMemo(
+    () => getCurrentTaskFromOperations(sse.activeOperations) ?? getCurrentTask(sse.messages),
+    [sse.activeOperations, sse.messages],
+  );
+  const progressEvent = useMemo(
+    () => selectLatestProgressEvent(sse.messages, currentTask ?? undefined),
+    [currentTask, sse.messages],
+  );
   const currentTaskLogs = useMemo(() => getRecentTaskLogs(sse.messages), [sse.messages]);
 
   useEffect(() => {
@@ -363,7 +561,10 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
     if (shouldRefetchBookCollections(recent)) {
       refetch();
     }
-  }, [refetch, sse.messages]);
+    if (shouldRefetchOperationHistory(recent)) {
+      refetchOperationHistory();
+    }
+  }, [refetch, refetchOperationHistory, sse.messages]);
 
   if (loading) return (
     <div className="flex flex-col items-center justify-center py-32 space-y-4">
@@ -467,6 +668,12 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
         {data.books.map((book, index) => {
           const isWriting = writingBooks.has(book.id);
           const bookTaskLogs = isWriting ? getRecentTaskLogs(sse.messages, book.id) : [];
+          const bookProgressEvent = isWriting
+            ? selectLatestProgressEvent(sse.messages, {
+                bookId: book.id,
+                sessionId: currentTask?.bookId === book.id ? currentTask.sessionId : null,
+              })
+            : undefined;
           const staggerClass = `stagger-${Math.min(index + 1, 5)}`;
           return (
             <div
@@ -526,7 +733,7 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
                   <button
                     onClick={async () => {
                       try { await postApi(`/books/${book.id}/write-next`); }
-                      catch (e) { alert(e instanceof Error ? e.message : "Write failed"); }
+                      catch (e) { await appAlert({ title: "写作启动失败", message: e instanceof Error ? e.message : "Write failed", tone: "danger" }); }
                     }}
                     disabled={isWriting}
                     className={`flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-bold transition-all shadow-sm sm:flex-none sm:px-6 sm:py-3 ${
@@ -572,7 +779,7 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
                     title="当前任务执行日志"
                     subtitle={currentTask?.bookId === book.id ? currentTask.label : "正在执行写作任务"}
                     entries={bookTaskLogs}
-                    progressEvent={progressEvent}
+                    progressEvent={bookProgressEvent}
                   />
                 </div>
               )}
@@ -599,6 +806,8 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
           />
         </div>
       )}
+
+      <RecentTaskHistory items={operationHistoryData?.operations ?? []} />
 
       <style>{`
         @keyframes progress {

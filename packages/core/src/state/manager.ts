@@ -32,28 +32,92 @@ export class StateManager {
     language: "zh" | "en",
     authorIntent?: string,
   ): Promise<void> {
+    const chaptersDir = join(bookDir, "chapters");
     const storyDir = join(bookDir, "story");
+    const draftsDir = join(storyDir, "drafts");
     const runtimeDir = join(storyDir, "runtime");
+    const stateDir = join(storyDir, "state");
+    const snapshotsDir = join(storyDir, "snapshots");
     const outlineDir = join(storyDir, "outline");
     const rolesMajorDir = join(storyDir, "roles", "主要角色");
     const rolesMinorDir = join(storyDir, "roles", "次要角色");
 
+    await mkdir(bookDir, { recursive: true });
+    await mkdir(chaptersDir, { recursive: true });
     await mkdir(storyDir, { recursive: true });
+    await mkdir(draftsDir, { recursive: true });
     await mkdir(runtimeDir, { recursive: true });
+    await mkdir(stateDir, { recursive: true });
+    await mkdir(snapshotsDir, { recursive: true });
     await mkdir(outlineDir, { recursive: true });
     await mkdir(rolesMajorDir, { recursive: true });
     await mkdir(rolesMinorDir, { recursive: true });
 
-    await this.writeIfMissing(
-      join(storyDir, "author_intent.md"),
-      authorIntent?.trim()
-        ? authorIntent.trimEnd() + "\n"
-        : StateManager.defaultAuthorIntent(language),
-    );
+    const keepText = language === "zh"
+      ? "InkOS 本地数据目录占位文件，用于确保 Android 文件管理器可见，请保留。\n"
+      : "InkOS local data directory placeholder, kept so Android file managers can show this folder.\n";
+
+    await Promise.all([
+      this.writeIfMissing(join(chaptersDir, ".keep"), ""),
+      this.writeIfMissing(join(chaptersDir, "_keep.txt"), keepText),
+      this.writeIfMissing(join(draftsDir, ".keep"), ""),
+      this.writeIfMissing(join(draftsDir, "_keep.txt"), keepText),
+      this.writeIfMissing(join(runtimeDir, ".keep"), ""),
+      this.writeIfMissing(join(runtimeDir, "_keep.txt"), keepText),
+      this.writeIfMissing(join(stateDir, ".keep"), ""),
+      this.writeIfMissing(join(stateDir, "_keep.txt"), keepText),
+      this.writeIfMissing(join(outlineDir, ".keep"), ""),
+      this.writeIfMissing(join(outlineDir, "_keep.txt"), keepText),
+      this.writeIfMissing(join(chaptersDir, "index.json"), "[]\n"),
+    ]);
+
+    if (authorIntent?.trim()) {
+      await writeFile(join(storyDir, "author_intent.md"), authorIntent.trimEnd() + "\n", "utf-8");
+    } else {
+      await this.writeIfMissing(
+        join(storyDir, "author_intent.md"),
+        StateManager.defaultAuthorIntent(language),
+      );
+    }
 
     await this.writeIfMissing(
       join(storyDir, "current_focus.md"),
       StateManager.defaultCurrentFocus(language),
+    );
+
+    await this.writeIfMissing(
+      join(storyDir, "current_state.md"),
+      language === "zh" ? "# 当前状态\n\n（等待章节写作后更新。）\n" : "# Current State\n\n(Updated after chapter writing.)\n",
+    );
+    await this.writeIfMissing(
+      join(storyDir, "pending_hooks.md"),
+      language === "zh" ? "# 待回收伏笔\n\n（暂无。）\n" : "# Pending Hooks\n\n(None yet.)\n",
+    );
+    await this.writeIfMissing(
+      join(storyDir, "particle_ledger.md"),
+      language === "zh"
+        ? "# 资源账本\n\n| 名称 | 类型 | 数量/状态 | 最近变化 | 依据章节 |\n|------|------|-----------|----------|----------|\n"
+        : "# Particle Ledger\n\n| Name | Type | Amount/State | Latest Change | Source Chapter |\n| --- | --- | --- | --- | --- |\n",
+    );
+    await this.writeIfMissing(
+      join(storyDir, "chapter_summaries.md"),
+      language === "zh"
+        ? "# 章节摘要\n\n| 章节 | 事件摘要 | 角色变化 | 伏笔推进 | 情绪落点 |\n|------|----------|----------|----------|----------|\n"
+        : "# Chapter Summaries\n\n| Chapter | Event Summary | Character Change | Hook Movement | Emotional Landing |\n| --- | --- | --- | --- | --- |\n",
+    );
+    await this.writeIfMissing(
+      join(storyDir, "subplot_board.md"),
+      language === "zh"
+        ? "# 支线进度\n\n| 支线 | 状态 | 最近推进 | 下一步 | 风险 |\n|------|------|----------|--------|------|\n"
+        : "# Subplot Board\n\n| Subplot | Status | Latest Movement | Next Step | Risk |\n| --- | --- | --- | --- | --- |\n",
+    );
+    await this.writeIfMissing(
+      join(storyDir, "emotional_arcs.md"),
+      language === "zh" ? "# 情绪弧线\n\n（暂无。）\n" : "# Emotional Arcs\n\n(None yet.)\n",
+    );
+    await this.writeIfMissing(
+      join(storyDir, "character_matrix.md"),
+      language === "zh" ? "# 角色矩阵\n\n角色文件位于 `story/roles/`。\n" : "# Character Matrix\n\nRole files live in `story/roles/`.\n",
     );
 
     // Ensure style_guide includes writing methodology even without reference text
@@ -438,6 +502,9 @@ export class StateManager {
       }
       if (!restoredStructuredState) {
         await rm(stateDir, { recursive: true, force: true });
+        await mkdir(stateDir, { recursive: true });
+        await this.writeIfMissing(join(stateDir, ".keep"), "");
+        await this.writeIfMissing(join(stateDir, "_keep.txt"), "InkOS local state folder placeholder.\n");
       }
 
       return true;

@@ -5,6 +5,45 @@ export interface ToolCall {
   readonly arguments: Record<string, unknown>;
 }
 
+export interface TokenUsageSnapshot {
+  readonly promptTokens?: number;
+  readonly completionTokens?: number;
+  readonly totalTokens: number;
+  readonly estimated?: boolean;
+  readonly source?: "stream" | "final" | "tool";
+  readonly updatedAt?: number;
+  readonly streamCallTokens?: number;
+  readonly streamAccumulatedTokens?: number;
+  readonly streamLastStatus?: string;
+  readonly tokenSavings?: {
+    readonly cacheSkippedCalls: number;
+    readonly semanticL1Hits: number;
+    readonly semanticL2Hits: number;
+    readonly semanticMisses: number;
+    readonly ccrBlocksCompressed: number;
+    readonly originalChars: number;
+    readonly optimizedChars: number;
+    readonly estimatedTokensSaved: number;
+    readonly pipeline?: ReadonlyArray<{
+      readonly kind: string;
+      readonly label: string;
+      readonly originalChars?: number;
+      readonly optimizedChars?: number;
+      readonly estimatedTokensSaved?: number;
+      readonly similarity?: number;
+      readonly at: number;
+    }>;
+    readonly lastEvent?: {
+      readonly kind: string;
+      readonly originalChars?: number;
+      readonly optimizedChars?: number;
+      readonly estimatedTokensSaved?: number;
+      readonly similarity?: number;
+      readonly at: number;
+    };
+  };
+}
+
 export interface PipelineStage {
   label: string;
   status: "pending" | "active" | "completed";
@@ -13,6 +52,7 @@ export interface PipelineStage {
     elapsedMs: number;
     totalChars: number;
     chineseChars: number;
+    estimatedTokens?: number;
   };
 }
 
@@ -27,6 +67,7 @@ export interface ToolExecution {
   details?: unknown;
   error?: string;
   stages?: PipelineStage[];
+  tokenUsage?: TokenUsageSnapshot;
   logs?: string[];
   streamingText?: string;
   startedAt: number;
@@ -48,6 +89,7 @@ export interface Message {
   readonly timestamp: number;
   readonly toolCall?: ToolCall;
   readonly toolExecutions?: ToolExecution[];
+  readonly tokenUsage?: TokenUsageSnapshot;
   readonly parts?: MessagePart[];              // chronological parts for interleaved rendering
 }
 
@@ -56,6 +98,7 @@ export interface SessionMessage {
   readonly content: string;
   readonly thinking?: string;
   readonly toolExecutions?: ReadonlyArray<ToolExecution>;
+  readonly tokenUsage?: TokenUsageSnapshot;
   readonly timestamp: number;
 }
 
@@ -74,7 +117,10 @@ export interface AgentResponse {
   readonly details?: {
     readonly draftRaw?: string;
     readonly toolCall?: ToolCall;
+    readonly toolExecutions?: ReadonlyArray<ToolExecution>;
   };
+  readonly tokenUsage?: TokenUsageSnapshot;
+  readonly tokenSavings?: TokenUsageSnapshot["tokenSavings"];
   readonly session?: {
     readonly sessionId?: string;
     readonly bookId?: string | null;
@@ -110,7 +156,9 @@ export interface SessionRuntime {
   readonly bookId: string | null;
   readonly title: string | null;
   readonly messages: ReadonlyArray<Message>;
+  readonly deletedMessageKeys: ReadonlyArray<string>;
   readonly stream: EventSource | null;
+  readonly abortController: AbortController | null;
   readonly isStreaming: boolean;
   readonly lastError: string | null;
   // 仅前端存在、尚未持久化到磁盘的草稿会话。发送第一条消息时才调 POST /sessions 把它落盘。
@@ -143,9 +191,16 @@ export interface MessageActions {
   setInput: (text: string) => void;
   addUserMessage: (sessionId: string, content: string) => void;
   appendStreamChunk: (sessionId: string, text: string, streamTs: number) => void;
-  finalizeStream: (sessionId: string, streamTs: number, content: string, toolCall?: ToolCall) => void;
+  finalizeStream: (
+    sessionId: string,
+    streamTs: number,
+    content: string,
+    toolCall?: ToolCall,
+    tokenUsage?: TokenUsageSnapshot,
+  ) => void;
   replaceStreamWithError: (sessionId: string, streamTs: number, errorMsg: string) => void;
   addErrorMessage: (sessionId: string, errorMsg: string) => void;
+  deleteMessage: (sessionId: string, messageIndex: number) => Promise<void>;
   loadSessionMessages: (sessionId: string, msgs: ReadonlyArray<SessionMessage>) => void;
   loadSessionList: (bookId: string | null) => Promise<ReadonlyArray<SessionSummary>>;
   createSession: (bookId: string | null) => Promise<string>;
@@ -154,7 +209,8 @@ export interface MessageActions {
   deleteSession: (sessionId: string) => Promise<void>;
   loadSessionDetail: (sessionId: string) => Promise<void>;
   sendMessage: (sessionId: string, text: string, activeBookId?: string) => Promise<void>;
-  setSelectedModel: (model: string, service: string) => void;
+  cancelMessage: (sessionId: string) => Promise<void>;
+  setSelectedModel: (model: string | null, service: string | null) => void;
 }
 
 export interface CreateActions {

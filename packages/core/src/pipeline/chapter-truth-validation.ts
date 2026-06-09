@@ -1,5 +1,10 @@
 import type { AuditIssue, AuditResult } from "../agents/continuity.js";
-import type { StateValidationAuthorityContext, ValidationResult, StateValidatorAgent } from "../agents/state-validator.js";
+import type {
+  StateValidationAuthorityContext,
+  ValidationResult,
+  ValidationTokenUsage,
+  StateValidatorAgent,
+} from "../agents/state-validator.js";
 import type { WriteChapterOutput, WriterAgent } from "../agents/writer.js";
 import type { BookConfig } from "../models/book.js";
 import type { ContextPackage, RuleStack } from "../models/input-governance.js";
@@ -40,6 +45,7 @@ export async function validateChapterTruthPersistence(params: {
   readonly degradedIssues: ReadonlyArray<AuditIssue>;
   readonly persistenceOutput: WriteChapterOutput;
   readonly auditResult: AuditResult;
+  readonly tokenUsage?: ValidationTokenUsage;
 }> {
   let validation: ValidationResult;
   let chapterStatus: "state-degraded" | null = null;
@@ -99,6 +105,7 @@ export async function validateChapterTruthPersistence(params: {
   }
 
   if (!validation.passed) {
+    const initialValidationUsage = validation.tokenUsage;
     const recovery = await retrySettlementAfterValidationFailure({
       writer: params.writer,
       validator: params.validator,
@@ -118,10 +125,17 @@ export async function validateChapterTruthPersistence(params: {
 
     if (recovery.kind === "recovered") {
       persistenceOutput = recovery.output;
-      validation = recovery.validation;
+      validation = {
+        ...recovery.validation,
+        tokenUsage: addValidationUsage(initialValidationUsage, recovery.tokenUsage),
+      };
     } else {
       chapterStatus = "state-degraded";
       degradedIssues = recovery.issues;
+      validation = {
+        ...validation,
+        tokenUsage: addValidationUsage(validation.tokenUsage, recovery.tokenUsage),
+      };
       persistenceOutput = buildStateDegradedPersistenceOutput({
         output: persistenceOutput,
         oldState: params.previousTruth.oldState,
@@ -141,5 +155,19 @@ export async function validateChapterTruthPersistence(params: {
     degradedIssues,
     persistenceOutput,
     auditResult,
+    ...(validation.tokenUsage ? { tokenUsage: validation.tokenUsage } : {}),
+  };
+}
+
+function addValidationUsage(
+  left?: ValidationTokenUsage,
+  right?: ValidationTokenUsage,
+): ValidationTokenUsage | undefined {
+  if (!left) return right;
+  if (!right) return left;
+  return {
+    promptTokens: left.promptTokens + right.promptTokens,
+    completionTokens: left.completionTokens + right.completionTokens,
+    totalTokens: left.totalTokens + right.totalTokens,
   };
 }

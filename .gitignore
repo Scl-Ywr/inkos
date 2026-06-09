@@ -78,6 +78,9 @@ web_modules/
 # inkos local data (secrets, sessions)
 .inkos/
 
+# Android embedded Node generated assets
+packages/studio/android/app/src/main/assets/inkos-node/app/server.cjs
+
 # User book data (local only, not tracked in git)
 books/
 
@@ -150,3 +153,26 @@ dist
 # npm publish temp/backup files
 *.publish-backup
 package.json.tmp-*
+
+# Local analysis/index artifacts
+.codegraph/
+graphify-out/
+**/graphify-out/
+.graphify_*.json
+
+# Local runtime/toolchain caches
+.conda-envs/
+.codex-stash-test/
+.tmp-android-runtime-test/
+.vscode/
+nodejs-mobile-v18.20.4-android/
+ndk-r27-extract/
+android-ndk-r27-windows.zip
+mumu-full-crash-log.txt
+
+# Android generated/runtime artifacts
+packages/studio/android/.gradle/
+packages/studio/android/app/build/
+packages/studio/android/app/libnode/
+packages/studio/android/app/src/main/jniLibs/
+packages/studio/android/app/src/main/assets/inkos-node/

@@ -54,6 +54,25 @@ export interface PlanChapterOutput {
 
 const MEMO_RETRY_LIMIT = 3;
 
+function correctMemoFrontmatterChapter(raw: string, expectedChapter: number): string | undefined {
+  const trimmed = raw.trim();
+  const match = trimmed.match(/^(---\s*\n)([\s\S]*?)(\n---\s*\n[\s\S]*)$/);
+  if (!match) return undefined;
+
+  const frontmatter = match[2]!;
+  if (!/^\s*chapter\s*:/m.test(frontmatter)) return undefined;
+
+  const correctedFrontmatter = frontmatter.replace(
+    /^\s*chapter\s*:\s*.+$/m,
+    `chapter: ${expectedChapter}`,
+  );
+  return `${match[1]}${correctedFrontmatter}${match[3]}`;
+}
+
+function isChapterMismatch(error: PlannerParseError): boolean {
+  return /^chapter mismatch: expected \d+, got \d+$/.test(error.message);
+}
+
 /**
  * Phase 3 planner.
  *
@@ -255,9 +274,28 @@ export class PlannerAgent extends BaseAgent {
         if (!(error instanceof PlannerParseError)) {
           throw error;
         }
+
+        if (isChapterMismatch(error)) {
+          const corrected = correctMemoFrontmatterChapter(response.content, input.chapterNumber);
+          if (corrected) {
+            try {
+              const memo = parseMemo(corrected, input.chapterNumber, input.isGoldenOpening);
+              this.log?.warn(
+                `[planner] memo chapter frontmatter corrected after model mismatch: ${error.message}`,
+              );
+              return memo;
+            } catch {
+              // Keep the original parse error for the retry feedback below.
+            }
+          }
+        }
+
         lastError = error;
         this.log?.warn(`[planner] memo parse failed (attempt ${attempt + 1}/${MEMO_RETRY_LIMIT}): ${error.message}`);
-        currentUserMessage = `${userMessage}\n\n${retryFeedbackHeader}\n${error.message}\n${retryFeedbackTrailer}`;
+        const chapterReminder = language === "en"
+          ? `The YAML frontmatter chapter field MUST be exactly ${input.chapterNumber}; do not reuse a previous/example chapter number.`
+          : `YAML frontmatter 的 chapter 字段必须精确写 ${input.chapterNumber}，不要沿用上一章或示例章号。`;
+        currentUserMessage = `${userMessage}\n\n${retryFeedbackHeader}\n${error.message}\n${chapterReminder}\n${retryFeedbackTrailer}`;
       }
     }
 

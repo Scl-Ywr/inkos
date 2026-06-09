@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">InkOS Studio</string>
+    <string name="title_activity_main">InkOS Studio</string>
+    <string name="package_name">io.qzz.christmas.inkos</string>
+    <string name="custom_url_scheme">io.qzz.christmas.inkos</string>
+</resources>

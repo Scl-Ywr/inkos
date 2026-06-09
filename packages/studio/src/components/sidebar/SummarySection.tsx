@@ -17,7 +17,8 @@ const SIDEBAR_MD_CLASS =
 const bookSummaryCache = new Map<string, BookSummary | null>();
 
 function parseStoryBible(content: string): BookSummary {
-  const sections = content.split(/^##\s+/m);
+  const normalized = content.replace(/^---[\s\S]*?---\s*/m, "").trim();
+  const sections = normalized.split(/^##\s+/m);
   let world = "";
   let protagonist = "";
   let cast = "";
@@ -30,6 +31,15 @@ function parseStoryBible(content: string): BookSummary {
     } else if (/^0?3[_\s]|配角|supporting|cast/i.test(section)) {
       cast = section.replace(/^[^\n]+\n/, "").trim().split("\n\n")[0] ?? "";
     }
+  }
+
+  if (!world) {
+    world = normalized
+      .split(/\n{2,}/)
+      .map((part) => part.trim())
+      .filter((part) => part && !/^#/.test(part))
+      .slice(0, 2)
+      .join("\n\n");
   }
 
   return { world, protagonist, cast };
@@ -52,14 +62,23 @@ export function SummarySection({ bookId }: SummarySectionProps) {
       setBookSummary(null);
     }
 
-    fetchJson<{ content: string | null }>(`/books/${bookId}/truth/story_bible.md`)
+    fetchJson<{ content: string | null }>(`/books/${bookId}/truth/outline/story_frame.md`)
       .then((data) => {
         if (ignore) return;
         const nextSummary = data.content ? parseStoryBible(data.content) : null;
         bookSummaryCache.set(bookId, nextSummary);
         setBookSummary(nextSummary);
       })
-      .catch(() => {});
+      .catch(() => {
+        fetchJson<{ content: string | null }>(`/books/${bookId}/truth/story_bible.md`)
+          .then((data) => {
+            if (ignore) return;
+            const nextSummary = data.content ? parseStoryBible(data.content) : null;
+            bookSummaryCache.set(bookId, nextSummary);
+            setBookSummary(nextSummary);
+          })
+          .catch(() => {});
+      });
 
     return () => {
       ignore = true;

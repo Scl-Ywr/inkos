@@ -147,9 +147,7 @@ export function parseWriterOutput(
     preWriteCheck: extract("PRE_WRITE_CHECK"),
     postSettlement: extract("POST_SETTLEMENT"),
     updatedState: extract("UPDATED_STATE") || defaultStatePlaceholder(countingMode),
-    updatedLedger: genreProfile.numericalSystem
-      ? (extract("UPDATED_LEDGER") || defaultLedgerPlaceholder(countingMode))
-      : "",
+    updatedLedger: extract("UPDATED_LEDGER") || defaultLedgerPlaceholder(countingMode),
     updatedHooks: extract("UPDATED_HOOKS") || defaultHooksPlaceholder(countingMode),
     chapterSummary: extract("CHAPTER_SUMMARY"),
     updatedSubplots: extract("UPDATED_SUBPLOTS"),

@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,13 +32,44 @@ function tarForceLocalArgs(): string[] {
   }
 }
 
-async function packPackage(packageDir: string, packDir: string) {
-  const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
-  execFileSync(npmCmd, ["pack", "--pack-destination", packDir], {
-    cwd: packageDir,
-    env: process.env,
-    encoding: "utf-8",
+function cleanNpmPackEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase().startsWith("npm_config_")) {
+      delete env[key];
+    }
+  }
+  env.npm_config_loglevel = "silent";
+  return env;
+}
+
+function npmPackCommand(): { readonly command: string; readonly prefixArgs: string[]; readonly shell: boolean } {
+  const npmExecPath = process.env.npm_execpath;
+  if (npmExecPath && /[\\/]npm[\\/]bin[\\/]npm-cli\.js$/i.test(npmExecPath)) {
+    return { command: process.execPath, prefixArgs: [npmExecPath], shell: false };
+  }
+
+  const nodeDir = dirname(process.execPath);
+  const bundledNpmCli = join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js");
+  if (existsSync(bundledNpmCli)) {
+    return { command: process.execPath, prefixArgs: [bundledNpmCli], shell: false };
+  }
+
+  return {
+    command: process.platform === "win32" ? "npm.cmd" : "npm",
+    prefixArgs: [],
     shell: process.platform === "win32",
+  };
+}
+
+async function packPackage(packageDir: string, packDir: string) {
+  const npm = npmPackCommand();
+  execFileSync(npm.command, [...npm.prefixArgs, "pack", "--silent", "--pack-destination", packDir], {
+    cwd: packageDir,
+    env: cleanNpmPackEnv(),
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+    shell: npm.shell,
   });
 
   const tgzFiles = (await readdir(packDir)).filter((name) => name.endsWith(".tgz"));

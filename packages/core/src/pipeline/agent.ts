@@ -136,6 +136,17 @@ const TOOLS: ReadonlyArray<ToolDefinition> = [
     },
   },
   {
+    name: "headroom_retrieve",
+    description: "按 Prompt 中的 headroom:ccr 句柄反查压缩块原文。只在需要细节时调用，不要把全量原文长期塞回上下文。",
+    parameters: {
+      type: "object",
+      properties: {
+        handle: { type: "string", description: "Prompt 注释中的 CCR handle，例如 story-bible-a1b2c3..." },
+      },
+      required: ["handle"],
+    },
+  },
+  {
     name: "list_books",
     description: "列出所有书籍。",
     parameters: {
@@ -222,6 +233,7 @@ const TOOLS: ReadonlyArray<ToolDefinition> = [
 const READ_ONLY_AGENT_TOOLS = new Set([
   "get_book_status",
   "read_truth_files",
+  "headroom_retrieve",
   "list_books",
   "web_fetch",
 ]);
@@ -259,6 +271,7 @@ export async function runAgentLoop(
 | list_books | 列出所有书 |
 | get_book_status | 查看书的章数、字数、审计状态 |
 | read_truth_files | 读取长期记忆（状态卡、资源账本、伏笔池）和设定（世界观、卷纲、本书规则） |
+| headroom_retrieve | 按 headroom:ccr 句柄读取压缩块原文细节 |
 | create_book | 建书，生成世界观、卷纲、本书规则（自动加载题材 genre profile） |
 | plan_chapter | 先生成 chapter intent，确认本章目标/冲突/优先级 |
 | compose_chapter | 再生成 runtime context/rule stack，确认实际输入 |
@@ -322,7 +335,12 @@ export async function runAgentLoop(
   let lastAssistantMessage = "";
 
   for (let turn = 0; turn < maxTurns; turn++) {
-    const result = await chatWithTools(config.client, config.model, messages, TOOLS, { maxTokens: 12_288 });
+    const result = await chatWithTools(config.client, config.model, messages, TOOLS, {
+      maxTokens: 12_288,
+      tokenOptimization: {
+        projectRoot: config.projectRoot,
+      },
+    });
 
     // Push assistant message to history
     messages.push({
@@ -625,6 +643,15 @@ export async function executeAgentTool(
     case "read_truth_files": {
       const result = await pipeline.readTruthFiles(args.bookId as string);
       return JSON.stringify(result);
+    }
+
+    case "headroom_retrieve": {
+      const { headroomRetrieve } = await import("../utils/headroom-cache.js");
+      const content = await headroomRetrieve(config.projectRoot, args.handle as string);
+      return JSON.stringify({
+        handle: args.handle,
+        content,
+      });
     }
 
     case "list_books": {

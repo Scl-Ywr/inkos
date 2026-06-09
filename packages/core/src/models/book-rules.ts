@@ -52,14 +52,16 @@ export interface ParsedBookRules {
  * treating it as a legitimate (default-empty) rules source.
  *
  * Markers (must match buildBookRulesShim() in architect.ts):
- *   - 本书规则（兼容指针——已废弃） / Book Rules (compat pointer — deprecated)
- *   - 本文件仅为外部读取保留 / This file is kept for external readers only
+ *   - 本书规则（兼容指针——已废弃） / 本书规则（兼容入口 / 只读指针）
+ *   - 本文件仅为外部读取保留 / 本文件用于兼容旧入口和外部读取
  */
 export function isBookRulesShim(raw: string): boolean {
   return (
     /本书规则（兼容指针——已废弃）/.test(raw)
+    || /本书规则（兼容入口 \/ 只读指针）/.test(raw)
     || /Book Rules \(compat pointer — deprecated\)/.test(raw)
     || /本文件仅为外部读取保留/.test(raw)
+    || /本文件用于兼容旧入口和外部读取/.test(raw)
     || /This file is kept for external readers only/.test(raw)
   );
 }

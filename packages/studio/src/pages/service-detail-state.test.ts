@@ -2,9 +2,47 @@ import { describe, expect, it, vi } from "vitest";
 import {
   deleteServiceConfig,
   matchServiceConfigEntryForDetail,
+  probeServiceForDetail,
   rehydrateServiceConnectionStatus,
   saveServiceConfig,
 } from "./service-detail-state";
+
+describe("probeServiceForDetail", () => {
+  it("can request compatibility diagnostics during manual connection tests", async () => {
+    const fetchJsonImpl = vi.fn(async () => ({
+      ok: true,
+      models: [{ id: "agnes-2.0-flash" }],
+      compatibility: {
+        ok: true,
+        level: "warn",
+        summary: "ok",
+        checks: [],
+      },
+    }));
+
+    await probeServiceForDetail("custom:TokenPlan", {
+      apiKey: "sk-live",
+      baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+      apiFormat: "chat",
+      stream: true,
+      model: "agnes-2.0-flash",
+      diagnose: true,
+    }, { fetchJsonImpl: fetchJsonImpl as never });
+
+    expect(fetchJsonImpl).toHaveBeenCalledWith("/services/custom%3ATokenPlan/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        apiKey: "sk-live",
+        baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+        apiFormat: "chat",
+        stream: true,
+        model: "agnes-2.0-flash",
+        diagnose: true,
+      }),
+    });
+  });
+});
 
 describe("rehydrateServiceConnectionStatus", () => {
   it("loads saved key without probing models on page load", async () => {

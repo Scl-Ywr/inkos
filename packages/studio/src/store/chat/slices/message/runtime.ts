@@ -8,6 +8,11 @@ import type {
   ToolExecution,
 } from "../../types";
 import { localizeKnownRuntimeMessage } from "../../../../lib/error-copy";
+import {
+  extractToolDetails as extractToolDetailsFromResult,
+  extractToolError as extractToolErrorFromResult,
+  summarizeToolResult,
+} from "../../../../lib/tool-result";
 
 const NULL_BOOK_KEY = "__null__";
 
@@ -43,40 +48,18 @@ export function resolveToolLabel(tool: string, agent?: string): string {
 }
 
 export function summarizeResult(result: unknown): string {
-  if (typeof result === "string") return result.slice(0, 2000);
-  if (result && typeof result === "object") {
-    const record = result as Record<string, unknown>;
-    if (typeof record.content === "string") return record.content.slice(0, 2000);
-    if (Array.isArray(record.content)) {
-      const text = record.content
-        .map((part) => {
-          const item = part as { type?: unknown; text?: unknown };
-          return item.type === "text" && typeof item.text === "string" ? item.text : "";
-        })
-        .filter(Boolean)
-        .join("\n");
-      if (text.trim()) return text.slice(0, 2000);
-    }
-  }
-  return String(result).slice(0, 2000);
+  return summarizeToolResult(result, { maxLength: 2000 });
 }
 
 export function extractToolDetails(result: unknown): unknown {
-  if (!result || typeof result !== "object") return undefined;
-  return (result as Record<string, unknown>).details;
+  return extractToolDetailsFromResult(result);
 }
 
 export function extractToolError(result: unknown): string {
-  if (typeof result === "string") return localizeKnownRuntimeMessage(result).slice(0, 500);
-  if (result && typeof result === "object") {
-    const record = result as Record<string, unknown>;
-    if (typeof record.content === "string") return localizeKnownRuntimeMessage(record.content).slice(0, 500);
-    if (record.content && Array.isArray(record.content)) {
-      const textPart = record.content.find((content: any) => content.type === "text");
-      if (textPart) return localizeKnownRuntimeMessage((textPart as any).text ?? "").slice(0, 500);
-    }
-  }
-  return localizeKnownRuntimeMessage(String(result)).slice(0, 500);
+  return extractToolErrorFromResult(result, {
+    maxLength: 500,
+    localize: localizeKnownRuntimeMessage,
+  });
 }
 
 export function getOrCreateStream(
@@ -147,6 +130,7 @@ export function createSessionRuntime(input: {
   bookId: string | null;
   title: string | null;
   messages?: ReadonlyArray<Message>;
+  deletedMessageKeys?: ReadonlyArray<string>;
   isDraft?: boolean;
 }): SessionRuntime {
   return {
@@ -154,11 +138,52 @@ export function createSessionRuntime(input: {
     bookId: input.bookId,
     title: input.title,
     messages: input.messages ?? [],
+    deletedMessageKeys: input.deletedMessageKeys ?? [],
     stream: null,
+    abortController: null,
     isStreaming: false,
     lastError: null,
     isDraft: input.isDraft ?? false,
   };
+}
+
+export function messageDeletionKey(message: Pick<Message, "role" | "content" | "timestamp">): string {
+  return [
+    message.role,
+    String(message.timestamp),
+    message.content.trim().slice(0, 240),
+  ].join("\u001f");
+}
+
+export function filterDeletedMessages(
+  messages: ReadonlyArray<Message>,
+  deletedMessageKeys: ReadonlyArray<string>,
+): ReadonlyArray<Message> {
+  if (deletedMessageKeys.length === 0) return messages;
+  const deleted = new Set(deletedMessageKeys);
+
+  const parsedDeletedKeys = deletedMessageKeys.map(key => {
+    const parts = key.split("\u001f");
+    return {
+      role: parts[0],
+      timestamp: Number(parts[1]),
+      content: parts[2] || "",
+    };
+  });
+
+  return messages.filter((message) => {
+    const exactKey = messageDeletionKey(message);
+    if (deleted.has(exactKey)) return false;
+
+    // Backend timestamps can differ from local frontend timestamps significantly (e.g. streaming time)
+    const msgContent = message.content.trim().slice(0, 240);
+    for (const dKey of parsedDeletedKeys) {
+      if (dKey.role === message.role && dKey.content === msgContent) {
+        return false; // Match by role and content only to handle timestamp mismatches
+      }
+    }
+    return true;
+  });
 }
 
 export function deserializeMessages(
@@ -167,7 +192,7 @@ export function deserializeMessages(
   return msgs
     .filter((message) => message.role === "user" || message.role === "assistant")
     .map((message) => {
-      const toolExecutions = (message as any).toolExecutions as ToolExecution[] | undefined;
+      const toolExecutions = message.toolExecutions ? [...message.toolExecutions] : undefined;
       const parts: MessagePart[] = [];
       if (message.thinking) parts.push({ type: "thinking", content: message.thinking, streaming: false });
       if (toolExecutions) {
@@ -181,6 +206,7 @@ export function deserializeMessages(
         content: message.content,
         thinking: message.thinking,
         toolExecutions,
+        tokenUsage: message.tokenUsage,
         timestamp: message.timestamp,
         parts: parts.length > 0 ? parts : undefined,
       };

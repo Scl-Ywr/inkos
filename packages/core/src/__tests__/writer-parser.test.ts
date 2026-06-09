@@ -82,6 +82,15 @@ describe("WriterAgent parseOutput", () => {
     expect(result.updatedHooks).toContain("H001");
   });
 
+  it("preserves UPDATED_LEDGER for non-numerical genres", () => {
+    const result = callParseOutput(1, fullOutput, {
+      ...defaultGenreProfile,
+      numericalSystem: false,
+    });
+
+    expect(result.updatedLedger).toContain("深渊果实");
+  });
+
   it("calculates wordCount with the shared counting helper", () => {
     const result = callParseOutput(1, fullOutput);
     const expectedContent =

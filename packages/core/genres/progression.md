@@ -1,41 +1,25 @@
 ---
-name: Progression Fantasy
+name: 成长升级
 id: progression
-language: en
-chapterTypes: ["Training", "Breakthrough", "Setup", "Transition", "Payoff"]
-fatigueWords: ["delve", "tapestry", "testament", "intricate", "pivotal", "vibrant", "comprehensive", "nuanced", "embark", "foster", "underscore", "bolstered", "crucial"]
+language: zh
+chapterTypes: ["训练章", "瓶颈章", "突破章", "竞赛章", "导师章", "复盘章"]
+fatigueWords: ["努力", "天赋", "极限", "突破", "训练", "成长", "变强"]
 numericalSystem: false
 powerScaling: true
 eraResearch: false
-pacingRule: "Tier advancement every 2-4 chapters early, every 8-15 mid-story, every 20+ late-story. Each tier must feel fundamentally different."
-satisfactionTypes: ["Tier Breakthrough", "Technique Mastery", "Rival Surpassed", "Mentor Transcended", "Power Combination Discovered", "Impossible Challenge Overcome"]
-auditDimensions: [1,2,3,4,6,7,8,9,10,13,14,15,16,17,18,19,24,25,26]
+pacingRule: "每3章给出一次可感知进步：技术、心态、资源、关系或排名变化。"
+satisfactionTypes: ["刻苦回报", "瓶颈突破", "排名提升", "导师认可", "旧敌重逢"]
+auditDimensions: [1, 2, 3, 4, 5, 8, 9, 10, 12, 14, 15, 17, 18, 21, 24, 25, 26]
 ---
 
-## Genre Prohibitions
+## 成长规则
 
-- Power loss without extraordinary justification — progress loss drives readers away faster than anything
-- Instant power-ups from found items or bloodline awakenings without buildup
-- Training montages only — readers want detailed training scenes showing struggle and epiphany
-- Arbitrary advancement blocks that feel like artificial gates rather than organic difficulty
-- Tier progression that contradicts established power hierarchy
-- Characters at different tiers competing directly without explanation
+成长必须可拆解：目标、训练方法、短板、反馈、修正、验证。
 
-## Power System Rules
+主角进步越快，越需要对应代价：伤病、孤立、误解、资源消耗、心理压力。
 
-- Progress must be quantifiable — even without explicit numbers, use measurable tiers (Stage 3 cultivator, Master swordsman)
-- Clear power tiers with meaningful differences between each (Color, Metal, Letter, or custom)
-- Each tier should represent meaningful power difference — not just cosmetic upgrades
-- Earned growth only — power gains connect to effort, sacrifice, or problem-solving
-- Book-to-book comparison: Book 3 MC decisively defeats Book 1 version
-- Mix training montages (covering weeks) with 1-2 detailed breakthrough scenes per tier
-- Physical transformations can signal tier transitions: eye color, aura, physical presence
+## 题材禁忌
 
-## Pacing Guidance
+不要把训练写成口号堆叠；训练场景要有具体动作、失败细节和反馈机制。
 
-- Chapter structure: Training/learning -> Application/testing -> Breakthrough trigger -> Advancement or cliffhanger
-- Maintain tension as MC grows: introduce enemies/challenges that scale differently or present new threat types
-- Internal struggle must escalate with power — new power unlocks pride, responsibility, temptation, enemies
-- Strongest threats need not be physical: political, magical, spiritual, temporal
-- Early: MC is underdog among peers. Mid: MC formidable but others advance too. Late: MC among strongest but faces tier-transcending threats
-- Rivalry with a peer who also progresses keeps tension alive across the full arc
+不要让对手只负责证明主角强，对手也要成长、调整和反击。

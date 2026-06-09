@@ -145,6 +145,7 @@ export {
   listBookSessions,
   renameBookSession,
   deleteBookSession,
+  deleteBookSessionMessage,
   migrateBookSession,
   createAndPersistBookSession,
   SessionAlreadyMigratedError,
@@ -152,6 +153,7 @@ export {
 export {
   appendManualSessionMessages,
   appendTranscriptEvent,
+  compactDeletedTranscriptMessages,
   sessionsDir,
   readTranscriptEvents,
   nextTranscriptSeq,
@@ -191,7 +193,7 @@ export {
   processProjectInteractionInput,
   processProjectInteractionRequest,
 } from "./interaction/project-control.js";
-export { createInteractionToolsFromDeps } from "./interaction/project-tools.js";
+export { createInteractionToolsFromDeps, type FileAuditAction, type FileAuditEvent } from "./interaction/project-tools.js";
 export { buildExportArtifact, writeExportArtifact } from "./interaction/export-artifact.js";
 export {
   normalizeTruthFileName,
@@ -256,7 +258,7 @@ export {
 export * from "./agent/index.js";
 
 // LLM
-export { createLLMClient, chatCompletion, chatWithTools, createStreamMonitor, PartialResponseError, type LLMClient, type LLMResponse, type LLMMessage, type ToolDefinition, type ToolCall, type AgentMessage, type ChatWithToolsResult, type StreamProgress, type OnStreamProgress } from "./llm/provider.js";
+export { createLLMClient, chatCompletion, chatWithTools, createStreamMonitor, PartialResponseError, type LLMClient, type LLMResponse, type LLMMessage, type ToolDefinition, type ToolCall, type AgentMessage, type ChatWithToolsResult, type StreamProgress, type OnStreamProgress, type TokenOptimizationOptions } from "./llm/provider.js";
 export {
   SERVICE_PRESETS,
   SERVICE_TO_PI_PROVIDER,
@@ -317,7 +319,7 @@ export { fetchUrl, searchWeb } from "./utils/web-search.js";
 export { filterHooks, filterSummaries, filterSubplots, filterEmotionalArcs, filterCharacterMatrix } from "./utils/context-filter.js";
 export { extractPOVFromOutline, filterMatrixByPOV, filterHooksByPOV } from "./utils/pov-filter.js";
 export { ConsolidatorAgent } from "./agents/consolidator.js";
-export { MemoryDB, type Fact, type StoredSummary } from "./state/memory-db.js";
+export { MemoryDB, type Fact, type StoredSummary, type StoredHook, type VectorHit } from "./state/memory-db.js";
 export { StateValidatorAgent } from "./agents/state-validator.js";
 export { loadRuntimeStateSnapshot, buildRuntimeStateArtifacts, saveRuntimeStateSnapshot, loadNarrativeMemorySeed, loadSnapshotCurrentStateFacts, type RuntimeStateArtifacts, type NarrativeMemorySeed } from "./state/runtime-state-store.js";
 export { splitChapters, type SplitChapter } from "./utils/chapter-splitter.js";
@@ -337,6 +339,36 @@ export {
 } from "./utils/hook-governance.js";
 export { arbitrateRuntimeStateDeltaHooks, type HookArbiterDecision } from "./utils/hook-arbiter.js";
 export { analyzeHookHealth } from "./utils/hook-health.js";
+export {
+  applyOfficialOptimizationConfig,
+  clearAllL1Caches,
+  clearIdleL1Caches,
+  ensureSemanticCacheStorage,
+  getEmbeddingDiagnostics,
+  installPresetSceneTemplates,
+  headroomRetrieve,
+  getHeadroomSavingsTelemetry,
+  getSemanticCacheStats,
+  getTokenDiagnostics,
+  maintainSemanticCache,
+  diffHeadroomSavingsTelemetry,
+  recordTokenCompressionSavings,
+  recordTokenOptimizationEvent,
+  type EmbeddingDiagnostics,
+  type HeadroomSavingsTelemetry,
+  type OfficialOptimizationRuntimeConfig,
+  type SemanticCacheMaintenanceResult,
+  type SemanticCacheStats,
+  type TokenDiagnostics,
+  type TokenOptimizationEvent,
+} from "./utils/headroom-cache.js";
+export {
+  INKOS_PROMPT_CACHE_POLICY,
+  headroomLightCompress,
+  normalizePromptForCache,
+  optimizePromptBlock,
+  type HeadroomLightMode,
+} from "./utils/prompt-optimizer.js";
 
 // Pipeline
 export { PipelineRunner, type PipelineConfig, type ChapterPipelineResult, type DraftResult, type PlanChapterResult, type ComposeChapterResult, type ReviseResult, type TruthFiles, type BookStatusInfo, type ImportChaptersInput, type ImportChaptersResult, type TokenUsageSummary } from "./pipeline/runner.js";

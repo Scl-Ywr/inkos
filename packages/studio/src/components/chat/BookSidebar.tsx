@@ -4,6 +4,7 @@ import type { TFunction } from "../../hooks/use-i18n";
 import type { SSEMessage } from "../../hooks/use-sse";
 import { useChatStore } from "../../store/chat";
 import { fetchJson } from "../../hooks/use-api";
+import { mobileTextInputHandlers } from "../../lib/mobile-input";
 import { PanelRightClose, PanelRightOpen, ArrowLeft, Loader2, Pencil, Save, X } from "lucide-react";
 import { LazyStreamdown } from "../ai-elements/lazy-streamdown";
 import { ProgressSection } from "../sidebar/ProgressSection";
@@ -27,14 +28,63 @@ export interface BookSidebarProps {
 
 const FOUNDATION_LABELS: Record<string, string> = {
   "story_bible.md": "世界观设定",
+  "outline/story_frame.md": "世界观设定",
   "volume_outline.md": "卷纲规划",
+  "outline/volume_map.md": "卷纲规划",
   "book_rules.md": "叙事规则",
   "current_state.md": "状态卡",
   "pending_hooks.md": "伏笔池",
+  "particle_ledger.md": "资源账本",
+  "chapter_summaries.md": "章节摘要",
   "subplot_board.md": "支线进度",
   "emotional_arcs.md": "感情线",
   "character_matrix.md": "角色矩阵",
 };
+
+function isCompatPointerContent(content: string): boolean {
+  return /兼容指针|兼容入口|已废弃|compat pointer|deprecated|authoritative source/iu.test(content);
+}
+
+function presentArtifactContent(file: string | null, content: string | null): string | null {
+  if (content === null || !file || !isCompatPointerContent(content)) return content;
+
+  if (file === "book_rules.md") {
+    return [
+      "# 叙事规则索引",
+      "",
+      "本书使用新版结构，叙事规则的权威内容已经合并到 `outline/story_frame.md` 文件顶部的 YAML 配置区。",
+      "",
+      "请在核心文件中打开“世界观设定”查看完整设定与规则。这个入口只用于兼容旧书和外部读取。",
+    ].join("\n");
+  }
+
+  if (file === "character_matrix.md") {
+    const roleLines = content
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter((line) => /^-\s+roles\//.test(line));
+    return [
+      "# 角色矩阵索引",
+      "",
+      "本书使用新版角色图谱，角色矩阵已经拆分为 `roles/` 下的一人一卡文件。侧栏“角色”会直接读取这些角色卡，并按当前章节相关性显示。",
+      "",
+      roleLines.length > 0 ? "## 角色文件" : "",
+      ...roleLines,
+    ].filter(Boolean).join("\n");
+  }
+
+  if (file === "story_bible.md") {
+    return [
+      "# 世界观设定索引",
+      "",
+      "本书使用新版结构，世界观权威内容位于 `outline/story_frame.md`，卷纲位于 `outline/volume_map.md`，角色档案位于 `roles/`。",
+      "",
+      "请优先打开核心文件中的“世界观设定”和“卷纲规划”。",
+    ].join("\n");
+  }
+
+  return content.replace(/已废弃/g, "兼容入口").replace(/deprecated/gi, "compat entry");
+}
 
 function ArtifactView({ bookId }: { readonly bookId: string }) {
   const artifactFile = useChatStore((s) => s.artifactFile);
@@ -45,6 +95,7 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
+  const editRef = useRef<HTMLTextAreaElement>(null);
 
   const isChapter = artifactChapter !== null;
   const target = useMemo<ArtifactContentTarget | null>(
@@ -94,25 +145,27 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
   }, [content]);
 
   const handleSave = useCallback(async () => {
+    const nextContent = editRef.current?.value ?? editContent;
+    setEditContent(nextContent);
     setSaving(true);
     try {
       if (isChapter) {
         await fetchJson(`/books/${bookId}/chapters/${artifactChapter}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content: editContent }),
+          body: JSON.stringify({ content: nextContent }),
         });
       } else if (artifactFile) {
         await fetchJson(`/books/${bookId}/truth/${artifactFile}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content: editContent }),
+          body: JSON.stringify({ content: nextContent }),
         });
       }
       if (target) {
-        setCachedArtifactContent(bookId, target, editContent);
+        setCachedArtifactContent(bookId, target, nextContent);
       }
-      setContent(editContent);
+      setContent(nextContent);
       setEditing(false);
     } catch {
       // keep editing state on error
@@ -131,7 +184,7 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
           <ArrowLeft size={14} />
         </button>
         <span className="text-sm font-medium truncate flex-1">{label}</span>
-        {!loading && content !== null && !editing && (
+        {!loading && content !== null && !editing && !isCompatPointerContent(content) && (
           <button
             onClick={handleEdit}
             className="w-6 h-6 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
@@ -166,13 +219,14 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
           <p className="text-xs text-muted-foreground/50 italic px-4 py-3">文件不存在</p>
         ) : editing ? (
           <textarea
-            value={editContent}
-            onChange={(e) => setEditContent(e.target.value)}
+            ref={editRef}
+            defaultValue={editContent}
+            {...mobileTextInputHandlers(setEditContent)}
             className="w-full h-full min-h-[300px] bg-transparent text-sm leading-7 px-4 py-3 resize-none outline-none border-0 font-mono"
           />
         ) : (
-          <div className="px-4 py-3 text-sm leading-7">
-            <LazyStreamdown mode="static" pluginSet="cjk">{content}</LazyStreamdown>
+          <div className="artifact-markdown px-4 py-3 text-sm leading-7">
+            <LazyStreamdown mode="static" pluginSet="cjk">{presentArtifactContent(artifactFile, content) ?? ""}</LazyStreamdown>
           </div>
         )}
       </div>
@@ -287,7 +341,7 @@ export function BookSidebarToggle({ bookId, theme, t, sse }: BookSidebarProps) {
     <>
       <button
         onClick={() => setOpen(true)}
-        className="fixed right-3 top-[4.25rem] z-20 flex h-11 w-11 items-center justify-center rounded-2xl border border-border/50 bg-card/95 text-muted-foreground shadow-lg shadow-primary/10 backdrop-blur transition-colors hover:text-foreground lg:hidden"
+        className="fixed right-3 top-[7rem] z-20 flex h-10 w-10 items-center justify-center rounded-2xl border border-border/50 bg-card/90 text-muted-foreground shadow-lg shadow-primary/10 backdrop-blur transition-colors hover:text-foreground lg:hidden"
         aria-label="打开书籍信息"
       >
         <PanelRightOpen size={18} />

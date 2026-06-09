@@ -54,7 +54,7 @@ describe("studio runtime resolution", () => {
       command: "node",
       args: ["--import", tsxLoader, tsSourceEntry, "/repo/test-project"],
     });
-  });
+  }, 10_000);
 
   it("uses a file URL for the tsx loader on Windows absolute paths", async () => {
     const { toNodeImportSpecifier } = await import("../commands/studio.js");

@@ -2,6 +2,7 @@ import type { AuditIssue } from "../agents/continuity.js";
 import type {
   ValidationResult,
   ValidationWarning,
+  ValidationTokenUsage,
 } from "../agents/state-validator.js";
 import type { StateValidatorAgent } from "../agents/state-validator.js";
 import type { WriteChapterOutput } from "../agents/writer.js";
@@ -38,11 +39,26 @@ export type SettlementRetryResult =
     readonly kind: "recovered";
     readonly output: WriteChapterOutput;
     readonly validation: ValidationResult;
+    readonly tokenUsage?: ValidationTokenUsage;
   }
   | {
     readonly kind: "degraded";
     readonly issues: ReadonlyArray<AuditIssue>;
+    readonly tokenUsage?: ValidationTokenUsage;
   };
+
+function addValidationUsage(
+  left?: ValidationTokenUsage,
+  right?: ValidationTokenUsage,
+): ValidationTokenUsage | undefined {
+  if (!left) return right;
+  if (!right) return left;
+  return {
+    promptTokens: left.promptTokens + right.promptTokens,
+    completionTokens: left.completionTokens + right.completionTokens,
+    totalTokens: left.totalTokens + right.totalTokens,
+  };
+}
 
 export async function retrySettlementAfterValidationFailure(
   params: SettlementRetryParams,
@@ -93,17 +109,21 @@ export async function retrySettlementAfterValidationFailure(
     }
   }
 
+  const tokenUsage = addValidationUsage(retryOutput.tokenUsage, retryValidation.tokenUsage);
+
   if (retryValidation.passed) {
     return {
       kind: "recovered",
       output: retryOutput,
       validation: retryValidation,
+      ...(tokenUsage ? { tokenUsage } : {}),
     };
   }
 
   return {
     kind: "degraded",
     issues: buildStateDegradedIssues(retryValidation.warnings, params.language),
+    ...(tokenUsage ? { tokenUsage } : {}),
   };
 }
 

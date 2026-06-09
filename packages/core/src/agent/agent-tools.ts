@@ -5,7 +5,11 @@ import { type ReviseMode } from "../agents/reviser.js";
 import { readFile, writeFile, readdir, stat } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { StateManager } from "../state/manager.js";
-import { assertSafeTruthFileName, createInteractionToolsFromDeps } from "../interaction/project-tools.js";
+import {
+  assertSafeTruthFileName,
+  createInteractionToolsFromDeps,
+  type FileAuditEvent,
+} from "../interaction/project-tools.js";
 import { writeExportArtifact } from "../interaction/export-artifact.js";
 import { assertSafeBookId, deriveBookIdFromTitle } from "../utils/book-id.js";
 import { safeChildPath } from "../utils/path-safety.js";
@@ -22,12 +26,46 @@ function textResult<T = undefined>(text: string, details?: T): AgentToolResult<T
   return { content: [{ type: "text", text }], details: details as T };
 }
 
+interface AgentToolAuditHooks {
+  readonly onFileAudit?: (event: FileAuditEvent) => void;
+}
+
+function normalizeAuditPath(path: string): string {
+  return path.replace(/\\/g, "/");
+}
+
+function projectAuditPath(projectRoot: string, absolutePath: string): string {
+  const rel = absolutePath.startsWith(projectRoot)
+    ? absolutePath.slice(projectRoot.length).replace(/^[/\\]+/, "")
+    : absolutePath;
+  return normalizeAuditPath(rel);
+}
+
+function emitFileAudit(hooks: AgentToolAuditHooks | undefined, event: FileAuditEvent): void {
+  try {
+    hooks?.onFileAudit?.({
+      ...event,
+      path: normalizeAuditPath(event.path),
+    });
+  } catch {
+    // File auditing is observability only; never fail the tool because logging failed.
+  }
+}
+
 /**
  * Resolve a user-supplied relative path against the books root and guard
  * against path-traversal (../ etc.).
  */
 function safeBooksPath(booksRoot: string, relativePath: string): string {
-  return safeChildPath(booksRoot, relativePath);
+  return safeChildPath(booksRoot, normalizeBooksRelativePath(relativePath));
+}
+
+function normalizeBooksRelativePath(relativePath: string): string {
+  const normalized = relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (/^books\//i.test(normalized)) {
+    return normalized.slice("books/".length);
+  }
+  return relativePath;
 }
 
 function resolveToolBookId(
@@ -46,9 +84,13 @@ function resolveToolBookId(
   return safeBookId;
 }
 
-function createDeterministicInteractionTools(pipeline: PipelineRunner, projectRoot: string) {
+function createDeterministicInteractionTools(
+  pipeline: PipelineRunner,
+  projectRoot: string,
+  auditHooks?: AgentToolAuditHooks,
+) {
   const state = new StateManager(projectRoot);
-  return createInteractionToolsFromDeps(pipeline, state);
+  return createInteractionToolsFromDeps(pipeline, state, auditHooks);
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +171,7 @@ export function createSubAgentTool(
   pipeline: PipelineRunner,
   activeBookId: string | null,
   projectRoot?: string,
+  auditHooks?: AgentToolAuditHooks,
 ): AgentTool<typeof SubAgentParams> {
   return {
     name: "sub_agent",
@@ -182,6 +225,15 @@ export function createSubAgentTool(
               : deriveBookIdFromTitle(resolvedTitle) || `book-${Date.now().toString(36)}`;
             const now = new Date().toISOString();
             progress(`Starting architect for book "${id}"...`);
+            if (projectRoot) {
+              emitFileAudit(auditHooks, {
+                action: "create",
+                bookId: id,
+                tool: "sub_agent.architect",
+                path: `books/${id}/`,
+                detail: "架构师创建书籍目录与核心文件",
+              });
+            }
             await pipeline.initBook(
               {
                 id,
@@ -198,6 +250,15 @@ export function createSubAgentTool(
               { externalContext: instruction },
             );
             progress(`Architect finished — book "${id}" foundation created.`);
+            if (projectRoot) {
+              emitFileAudit(auditHooks, {
+                action: "write",
+                bookId: id,
+                tool: "sub_agent.architect",
+                path: `books/${id}/story/`,
+                detail: "写入世界观、角色、规则、伏笔等 foundation 文件",
+              });
+            }
             return textResult(
               `Book "${resolvedTitle}" (${id}) initialised successfully. Foundation files are ready.`,
               { kind: "book_created", bookId: id, title: resolvedTitle },
@@ -207,8 +268,24 @@ export function createSubAgentTool(
           case "writer": {
             const targetBookId = resolveToolBookId("writer", bookId, activeBookId);
             progress(`Writing next chapter for "${targetBookId}"...`);
+            emitFileAudit(auditHooks, {
+              action: "read",
+              bookId: targetBookId,
+              tool: "sub_agent.writer",
+              path: `books/${targetBookId}/story/`,
+              detail: "读取世界观、角色、伏笔和上下文",
+            });
             const result = await pipeline.writeNextChapter(targetBookId, chapterWordCount);
             progress(`Writer finished chapter for "${targetBookId}".`);
+            emitFileAudit(auditHooks, {
+              action: "write",
+              bookId: targetBookId,
+              tool: "sub_agent.writer",
+              path: typeof (result as any).chapterNumber === "number"
+                ? `books/${targetBookId}/chapters/${String((result as any).chapterNumber).padStart(4, "0")}-*.md`
+                : `books/${targetBookId}/chapters/*.md`,
+              detail: "写入章节正文并更新运行时记忆",
+            });
             return textResult(
               `Chapter written for "${targetBookId}". ` +
               `Word count: ${(result as any).wordCount ?? "unknown"}.`,
@@ -226,6 +303,13 @@ export function createSubAgentTool(
           case "auditor": {
             const targetBookId = resolveToolBookId("auditor", bookId, activeBookId);
             progress(`Auditing chapter ${chapterNumber ?? "latest"} for "${targetBookId}"...`);
+            emitFileAudit(auditHooks, {
+              action: "read",
+              bookId: targetBookId,
+              tool: "sub_agent.auditor",
+              path: `books/${targetBookId}/chapters/`,
+              detail: `读取第 ${chapterNumber ?? "最新"} 章用于审计`,
+            });
             const audit = await pipeline.auditDraft(targetBookId, chapterNumber);
             progress(`Audit complete for "${targetBookId}".`);
             const issueLines = (audit.issues ?? [])
@@ -241,8 +325,22 @@ export function createSubAgentTool(
             const targetBookId = resolveToolBookId("reviser", bookId, activeBookId);
             const resolvedMode: ReviseMode = (mode as ReviseMode) ?? "spot-fix";
             progress(`Revising "${targetBookId}" chapter ${chapterNumber ?? "latest"} in ${resolvedMode} mode...`);
+            emitFileAudit(auditHooks, {
+              action: "read",
+              bookId: targetBookId,
+              tool: "sub_agent.reviser",
+              path: `books/${targetBookId}/chapters/`,
+              detail: `读取第 ${chapterNumber ?? "最新"} 章用于修订`,
+            });
             await pipeline.reviseDraft(targetBookId, chapterNumber, resolvedMode);
             progress(`Revision complete for "${targetBookId}".`);
+            emitFileAudit(auditHooks, {
+              action: "modify",
+              bookId: targetBookId,
+              tool: "sub_agent.reviser",
+              path: `books/${targetBookId}/chapters/`,
+              detail: `修订章节：${resolvedMode}`,
+            });
             return textResult(`Revision (${resolvedMode}) complete for "${targetBookId}" chapter ${chapterNumber ?? "latest"}.`);
           }
 
@@ -259,6 +357,13 @@ export function createSubAgentTool(
             const result = await writeExportArtifact(state, targetBookId, {
               format: inferredFormat,
               approvedOnly: exportApprovedOnly,
+            });
+            emitFileAudit(auditHooks, {
+              action: "write",
+              bookId: targetBookId,
+              tool: "sub_agent.exporter",
+              path: result.outputPath,
+              detail: `导出 ${result.chaptersExported} 章为 ${result.format}`,
             });
             return textResult(
               `Exported "${targetBookId}": ${result.chaptersExported} chapters, ${result.totalWords} words → ${result.outputPath}`,
@@ -321,6 +426,7 @@ type ShortFictionRunParamsType = Static<typeof ShortFictionRunParams>;
 export function createShortFictionRunTool(
   pipeline: PipelineRunner,
   projectRoot: string,
+  auditHooks?: AgentToolAuditHooks,
 ): AgentTool<typeof ShortFictionRunParams> {
   return {
     name: "short_fiction_run",
@@ -337,6 +443,12 @@ export function createShortFictionRunTool(
       onUpdate?: AgentToolUpdateCallback,
     ): Promise<AgentToolResult<unknown>> {
       const progress = (message: string) => onUpdate?.(textResult(message));
+      emitFileAudit(auditHooks, {
+        action: "create",
+        tool: "short_fiction_run",
+        path: "shorts/",
+        detail: "创建短篇项目目录并准备写作流水线",
+      });
       const result = await runShortFictionProduction({
         projectRoot,
         direction: params.direction,
@@ -359,6 +471,18 @@ export function createShortFictionRunTool(
         coverSize: params.coverSize,
         coverApiKeyEnv: params.coverApiKeyEnv,
         onProgress: progress,
+      });
+      emitFileAudit(auditHooks, {
+        action: "write",
+        tool: "short_fiction_run",
+        path: projectAuditPath(projectRoot, result.finalMarkdownPath),
+        detail: "写入短篇正文成稿",
+      });
+      emitFileAudit(auditHooks, {
+        action: "write",
+        tool: "short_fiction_run",
+        path: projectAuditPath(projectRoot, result.salesPackagePath),
+        detail: "写入短篇包装、简介和卖点",
       });
 
       return textResult(
@@ -436,6 +560,7 @@ type GenerateCoverParamsType = Static<typeof GenerateCoverParams>;
 
 export function createGenerateCoverTool(
   projectRoot: string,
+  auditHooks?: AgentToolAuditHooks,
 ): AgentTool<typeof GenerateCoverParams> {
   return {
     name: "generate_cover",
@@ -451,6 +576,12 @@ export function createGenerateCoverTool(
       onUpdate?: AgentToolUpdateCallback,
     ): Promise<AgentToolResult<unknown>> {
       onUpdate?.(textResult("Generating cover image..."));
+      emitFileAudit(auditHooks, {
+        action: "write",
+        tool: "generate_cover",
+        path: params.outputDir ? normalizeAuditPath(params.outputDir) : "covers/",
+        detail: "准备封面提示词与图片输出目录",
+      });
       const result = await generateShortFictionCover({
         projectRoot,
         title: params.title,
@@ -463,6 +594,18 @@ export function createGenerateCoverTool(
         coverModel: params.coverModel,
         coverSize: params.coverSize,
         coverApiKeyEnv: params.coverApiKeyEnv,
+      });
+      emitFileAudit(auditHooks, {
+        action: "write",
+        tool: "generate_cover",
+        path: projectAuditPath(projectRoot, result.coverPromptPath),
+        detail: "写入封面提示词",
+      });
+      emitFileAudit(auditHooks, {
+        action: "write",
+        tool: "generate_cover",
+        path: projectAuditPath(projectRoot, result.coverImagePath),
+        detail: "写入封面图片",
       });
       return textResult(
         [
@@ -490,8 +633,9 @@ export function createWriteTruthFileTool(
   pipeline: PipelineRunner,
   projectRoot: string,
   activeBookId: string | null,
+  auditHooks?: AgentToolAuditHooks,
 ): AgentTool<typeof WriteTruthFileParams> {
-  const tools = createDeterministicInteractionTools(pipeline, projectRoot);
+  const tools = createDeterministicInteractionTools(pipeline, projectRoot, auditHooks);
   return {
     name: "write_truth_file",
     description: "Replace a truth/control file under story/ using deterministic project tools.",
@@ -520,8 +664,9 @@ export function createRenameEntityTool(
   pipeline: PipelineRunner,
   projectRoot: string,
   activeBookId: string | null,
+  auditHooks?: AgentToolAuditHooks,
 ): AgentTool<typeof RenameEntityParams> {
-  const tools = createDeterministicInteractionTools(pipeline, projectRoot);
+  const tools = createDeterministicInteractionTools(pipeline, projectRoot, auditHooks);
   return {
     name: "rename_entity",
     description: "Rename an entity across truth files and chapters using deterministic edit control.",
@@ -549,8 +694,9 @@ export function createPatchChapterTextTool(
   pipeline: PipelineRunner,
   projectRoot: string,
   activeBookId: string | null,
+  auditHooks?: AgentToolAuditHooks,
 ): AgentTool<typeof PatchChapterTextParams> {
-  const tools = createDeterministicInteractionTools(pipeline, projectRoot);
+  const tools = createDeterministicInteractionTools(pipeline, projectRoot, auditHooks);
   return {
     name: "patch_chapter_text",
     description: "Apply a deterministic local text patch to a chapter and mark it for review.",
@@ -594,6 +740,7 @@ function resolveReadPath(booksRoot: string, requestedPath: string, options: Read
 export function createReadTool(
   projectRoot: string,
   options: ReadToolOptions = {},
+  auditHooks?: AgentToolAuditHooks,
 ): AgentTool<typeof ReadParams> {
   const booksRoot = join(projectRoot, "books");
   const description = options.allowSystemPaths
@@ -611,6 +758,12 @@ export function createReadTool(
     ): Promise<AgentToolResult<undefined>> {
       try {
         const filePath = resolveReadPath(booksRoot, params.path, options);
+        emitFileAudit(auditHooks, {
+          action: "read",
+          tool: "read",
+          path: projectAuditPath(projectRoot, filePath),
+          detail: "读取文件内容",
+        });
         let content = await readFile(filePath, "utf-8");
         if (content.length > 10_000) {
           content = content.slice(0, 10_000) + "\n\n... [truncated at 10 000 chars]";
@@ -633,7 +786,10 @@ const EditParams = Type.Object({
   new_string: Type.String({ description: "Replacement string" }),
 });
 
-export function createEditTool(projectRoot: string): AgentTool<typeof EditParams> {
+export function createEditTool(
+  projectRoot: string,
+  auditHooks?: AgentToolAuditHooks,
+): AgentTool<typeof EditParams> {
   const booksRoot = join(projectRoot, "books");
 
   return {
@@ -651,6 +807,12 @@ export function createEditTool(projectRoot: string): AgentTool<typeof EditParams
     ): Promise<AgentToolResult<undefined>> {
       try {
         const filePath = safeBooksPath(booksRoot, params.path);
+        emitFileAudit(auditHooks, {
+          action: "read",
+          tool: "edit",
+          path: projectAuditPath(projectRoot, filePath),
+          detail: "读取待编辑文件",
+        });
         const content = await readFile(filePath, "utf-8");
         const idx = content.indexOf(params.old_string);
         if (idx === -1) {
@@ -661,6 +823,12 @@ export function createEditTool(projectRoot: string): AgentTool<typeof EditParams
         }
         const updated = content.slice(0, idx) + params.new_string + content.slice(idx + params.old_string.length);
         await writeFile(filePath, updated, "utf-8");
+        emitFileAudit(auditHooks, {
+          action: "modify",
+          tool: "edit",
+          path: projectAuditPath(projectRoot, filePath),
+          detail: "完成精确文本替换",
+        });
         return textResult(`File "${params.path}" updated successfully.`);
       } catch (err: any) {
         return textResult(`Failed to edit "${params.path}": ${err?.message ?? String(err)}`);
@@ -678,7 +846,10 @@ const WriteFileParams = Type.Object({
   content: Type.String({ description: "Full file content to write" }),
 });
 
-export function createWriteFileTool(projectRoot: string): AgentTool<typeof WriteFileParams> {
+export function createWriteFileTool(
+  projectRoot: string,
+  auditHooks?: AgentToolAuditHooks,
+): AgentTool<typeof WriteFileParams> {
   const booksRoot = join(projectRoot, "books");
 
   return {
@@ -700,6 +871,12 @@ export function createWriteFileTool(projectRoot: string): AgentTool<typeof Write
         const { mkdir } = await import("node:fs/promises");
         await mkdir(parentDir, { recursive: true });
         await writeFile(filePath, params.content, "utf-8");
+        emitFileAudit(auditHooks, {
+          action: "write",
+          tool: "write",
+          path: projectAuditPath(projectRoot, filePath),
+          detail: "写入文件内容",
+        });
         return textResult(`File "${params.path}" written successfully.`);
       } catch (err: any) {
         return textResult(`Failed to write "${params.path}": ${err?.message ?? String(err)}`);
@@ -717,7 +894,10 @@ const GrepParams = Type.Object({
   pattern: Type.String({ description: "Search pattern (plain text or regex)" }),
 });
 
-export function createGrepTool(projectRoot: string): AgentTool<typeof GrepParams> {
+export function createGrepTool(
+  projectRoot: string,
+  auditHooks?: AgentToolAuditHooks,
+): AgentTool<typeof GrepParams> {
   const booksRoot = join(projectRoot, "books");
 
   return {
@@ -732,6 +912,13 @@ export function createGrepTool(projectRoot: string): AgentTool<typeof GrepParams
     ): Promise<AgentToolResult<undefined>> {
       try {
         const bookDir = safeBooksPath(booksRoot, params.bookId);
+        emitFileAudit(auditHooks, {
+          action: "list",
+          bookId: params.bookId,
+          tool: "grep",
+          path: projectAuditPath(projectRoot, bookDir),
+          detail: `搜索文本：${params.pattern}`,
+        });
         const regex = new RegExp(params.pattern, "gi");
         const results: string[] = [];
 
@@ -748,6 +935,13 @@ export function createGrepTool(projectRoot: string): AgentTool<typeof GrepParams
             if (entryStat.isDirectory()) {
               await searchDir(fullPath, `${prefix}${entry}/`);
             } else if (entry.endsWith(".md") || entry.endsWith(".txt") || entry.endsWith(".json")) {
+              emitFileAudit(auditHooks, {
+                action: "read",
+                bookId: params.bookId,
+                tool: "grep",
+                path: projectAuditPath(projectRoot, fullPath),
+                detail: "搜索时读取文件",
+              });
               const content = await readFile(fullPath, "utf-8");
               const lines = content.split("\n");
               for (let i = 0; i < lines.length; i++) {
@@ -792,7 +986,10 @@ const LsParams = Type.Object({
   ),
 });
 
-export function createLsTool(projectRoot: string): AgentTool<typeof LsParams> {
+export function createLsTool(
+  projectRoot: string,
+  auditHooks?: AgentToolAuditHooks,
+): AgentTool<typeof LsParams> {
   const booksRoot = join(projectRoot, "books");
 
   return {
@@ -808,6 +1005,13 @@ export function createLsTool(projectRoot: string): AgentTool<typeof LsParams> {
         const base = safeBooksPath(booksRoot, params.bookId);
         const target = params.subdir ? safeBooksPath(base, params.subdir) : base;
 
+        emitFileAudit(auditHooks, {
+          action: "list",
+          bookId: params.bookId,
+          tool: "ls",
+          path: projectAuditPath(projectRoot, target),
+          detail: "列出目录内容",
+        });
         const entries = await readdir(target);
         const details: string[] = [];
 

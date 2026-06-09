@@ -314,6 +314,70 @@ describe("PipelineRunner", () => {
     vi.restoreAllMocks();
   });
 
+  it("aggregates real token usage across chapter writing, review, persistence analysis, and state validation", async () => {
+    const { root, runner, bookId } = await createRunnerFixture({
+      inputGovernanceMode: "legacy",
+    });
+    const draftBody = "初".repeat(3100);
+    const revisedBody = "修".repeat(3100);
+
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
+      createWriterOutput({
+        content: draftBody,
+        wordCount: draftBody.length,
+        tokenUsage: { promptTokens: 1, completionTokens: 2, totalTokens: 3 },
+      }),
+    );
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
+      .mockResolvedValueOnce(
+        createAuditResult({
+          passed: false,
+          issues: [CRITICAL_ISSUE],
+          summary: "needs revision",
+          overallScore: 40,
+          tokenUsage: { promptTokens: 4, completionTokens: 5, totalTokens: 9 },
+        }),
+      )
+      .mockResolvedValueOnce(
+        createAuditResult({
+          passed: true,
+          issues: [],
+          summary: "clean",
+          overallScore: 95,
+          tokenUsage: { promptTokens: 8, completionTokens: 9, totalTokens: 17 },
+        }),
+      );
+    vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue(
+      createReviseOutput({
+        revisedContent: revisedBody,
+        wordCount: revisedBody.length,
+        tokenUsage: { promptTokens: 6, completionTokens: 7, totalTokens: 13 },
+      }),
+    );
+    vi.spyOn(ChapterAnalyzerAgent.prototype, "analyzeChapter").mockResolvedValue(
+      createAnalyzedOutput({
+        content: revisedBody,
+        wordCount: revisedBody.length,
+        tokenUsage: { promptTokens: 10, completionTokens: 11, totalTokens: 21 },
+      }),
+    );
+    vi.spyOn(StateValidatorAgent.prototype, "validate").mockResolvedValue({
+      warnings: [],
+      passed: true,
+      tokenUsage: { promptTokens: 12, completionTokens: 13, totalTokens: 25 },
+    });
+
+    const result = await runner.writeNextChapter(bookId);
+
+    expect(result.tokenUsage).toEqual({
+      promptTokens: 41,
+      completionTokens: 47,
+      totalTokens: 88,
+    });
+
+    await rm(root, { recursive: true, force: true });
+  });
+
   it("does not reuse override clients when credential sources differ", () => {
     const previousKeyA = process.env.TEST_KEY_A;
     const previousKeyB = process.env.TEST_KEY_B;

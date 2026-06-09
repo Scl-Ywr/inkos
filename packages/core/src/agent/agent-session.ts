@@ -16,6 +16,7 @@ import {
   createShortFictionRunTool,
   createGenerateCoverTool,
 } from "./agent-tools.js";
+import type { FileAuditEvent } from "../interaction/project-tools.js";
 import { createBookContextTransform } from "./context-transform.js";
 import {
   appendTranscriptEvents,
@@ -52,15 +53,44 @@ export interface AgentSessionConfig {
   allowSystemFileRead?: boolean;
   /** Optional listener for streaming events (for SSE forwarding). */
   onEvent?: (event: AgentEvent) => void;
+  /** Optional listener for real file IO performed by tools. */
+  onFileAudit?: (event: FileAuditEvent) => void;
+  /** Abort signal owned by Studio active-operation cancellation. */
+  signal?: AbortSignal;
 }
 
 export interface AgentSessionResult {
   /** Extracted text from the final assistant message. */
   responseText: string;
+  /** Token usage reported by the final assistant message, when available. */
+  tokenUsage?: {
+    readonly promptTokens: number;
+    readonly completionTokens: number;
+    readonly totalTokens: number;
+  };
   /** Full raw Agent conversation history. */
   messages: AgentMessage[];
   /** Upstream model error surfaced by pi-agent-core, if the final assistant turn failed. */
   errorMessage?: string;
+}
+
+type GetModelProvider = Parameters<typeof getModel>[0];
+type GetModelId = Parameters<typeof getModel>[1];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isTextContentBlock(value: unknown): value is { readonly type: "text"; readonly text: string } {
+  return isRecord(value) && value.type === "text" && typeof value.text === "string";
+}
+
+function isThinkingContentBlock(value: unknown): value is { readonly type: "thinking"; readonly thinking?: string } {
+  return isRecord(value) && value.type === "thinking";
+}
+
+function contentBlocks(value: unknown): ReadonlyArray<unknown> {
+  return Array.isArray(value) ? value : [];
 }
 
 // ---------------------------------------------------------------------------
@@ -76,6 +106,7 @@ interface CachedAgent {
   modelIdentity: string;
   apiKey: string | undefined;
   allowSystemFileRead: boolean;
+  hasFileAudit: boolean;
   lastCommittedSeq: number;
   lastActive: number;
 }
@@ -114,6 +145,13 @@ function ensureCleanupTimer(): void {
 // Helpers
 // ---------------------------------------------------------------------------
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const reason = signal.reason;
+  if (reason instanceof Error) throw reason;
+  throw new Error(typeof reason === "string" && reason.trim() ? reason : "用户已停止当前生成。");
+}
+
 function resolveModel(spec: AgentSessionConfig["model"]): Model<Api> {
   if (!spec) {
     throw new Error("Model is required but was undefined. Check LLM configuration.");
@@ -126,7 +164,7 @@ function resolveModel(spec: AgentSessionConfig["model"]): Model<Api> {
   if (!provider || !modelId) {
     throw new Error(`Invalid model spec: provider=${provider}, modelId=${modelId}`);
   }
-  return getModel(provider as any, modelId as any);
+  return getModel(provider as GetModelProvider, modelId as GetModelId);
 }
 
 function envFlagEnabled(value: string | undefined, defaultValue: boolean): boolean {
@@ -391,10 +429,20 @@ function convertAgentMessagesForModel(messages: AgentMessage[], model: Model<Api
  * Extract thinking/reasoning text from an AssistantMessage's content array.
  */
 function extractThinkingFromAssistant(msg: AssistantMessage): string {
-  return msg.content
-    .filter((c: any) => c.type === "thinking")
-    .map((c: any) => c.thinking ?? "")
+  return contentBlocks(msg.content)
+    .filter(isThinkingContentBlock)
+    .map((block) => block.thinking ?? "")
     .join("");
+}
+
+function extractTokenUsageFromAssistant(msg: AssistantMessage | null | undefined): AgentSessionResult["tokenUsage"] {
+  const usage = msg?.usage;
+  if (!usage) return undefined;
+  const promptTokens = Math.max(0, usage.input ?? 0);
+  const completionTokens = Math.max(0, usage.output ?? 0);
+  const totalTokens = Math.max(0, usage.totalTokens ?? promptTokens + completionTokens);
+  if (totalTokens <= 0) return undefined;
+  return { promptTokens, completionTokens, totalTokens };
 }
 
 /**
@@ -435,15 +483,15 @@ function agentMessagesToPlain(
   for (const msg of messages) {
     if (!msg || typeof msg !== "object" || !("role" in msg)) continue;
 
-    const m = msg as { role: string; [k: string]: any };
+    const m = msg as { role: string; content?: unknown };
 
     if (m.role === "user") {
       const content = typeof m.content === "string"
         ? m.content
         : Array.isArray(m.content)
           ? m.content
-              .filter((c: any) => c.type === "text")
-              .map((c: any) => c.text)
+              .filter(isTextContentBlock)
+              .map((block) => block.text)
               .join("")
           : "";
       if (content) out.push({ role: "user", content });
@@ -470,10 +518,12 @@ function createAgentToolsForMode(params: {
   readonly bookId: string | null;
   readonly projectRoot: string;
   readonly allowSystemFileRead: boolean;
+  readonly onFileAudit?: (event: FileAuditEvent) => void;
 }) {
-  const subAgentTool = createSubAgentTool(params.pipeline, params.bookId, params.projectRoot);
-  const shortFictionTool = createShortFictionRunTool(params.pipeline, params.projectRoot);
-  const generateCoverTool = createGenerateCoverTool(params.projectRoot);
+  const auditHooks = { onFileAudit: params.onFileAudit };
+  const subAgentTool = createSubAgentTool(params.pipeline, params.bookId, params.projectRoot, auditHooks);
+  const shortFictionTool = createShortFictionRunTool(params.pipeline, params.projectRoot, auditHooks);
+  const generateCoverTool = createGenerateCoverTool(params.projectRoot, auditHooks);
   if (!params.bookId) {
     return [subAgentTool, shortFictionTool, generateCoverTool];
   }
@@ -482,12 +532,12 @@ function createAgentToolsForMode(params: {
     subAgentTool,
     shortFictionTool,
     generateCoverTool,
-    createReadTool(params.projectRoot, { allowSystemPaths: params.allowSystemFileRead }),
-    createWriteTruthFileTool(params.pipeline, params.projectRoot, params.bookId),
-    createRenameEntityTool(params.pipeline, params.projectRoot, params.bookId),
-    createPatchChapterTextTool(params.pipeline, params.projectRoot, params.bookId),
-    createGrepTool(params.projectRoot),
-    createLsTool(params.projectRoot),
+    createReadTool(params.projectRoot, { allowSystemPaths: params.allowSystemFileRead }, auditHooks),
+    createWriteTruthFileTool(params.pipeline, params.projectRoot, params.bookId, auditHooks),
+    createRenameEntityTool(params.pipeline, params.projectRoot, params.bookId, auditHooks),
+    createPatchChapterTextTool(params.pipeline, params.projectRoot, params.bookId, auditHooks),
+    createGrepTool(params.projectRoot, auditHooks),
+    createLsTool(params.projectRoot, auditHooks),
   ];
 }
 
@@ -514,6 +564,7 @@ async function runAgentSessionUnlocked(
   initialMessages?: Array<{ role: string; content: string }>,
 ): Promise<AgentSessionResult> {
   const { sessionId, language, pipeline, projectRoot, onEvent } = config;
+  throwIfAborted(config.signal);
   // Normalize at the entry point so downstream comparisons, closures, and
   // fs paths never see `undefined`. The type is already `string | null`, but
   // some callers may bypass the type system (e.g. `activeBookId ?? null` gets
@@ -523,6 +574,7 @@ async function runAgentSessionUnlocked(
   const model = resolveModel(config.model);
   const requestedModelIdentity = agentModelIdentity(model);
   const allowSystemFileRead = config.allowSystemFileRead ?? envFlagEnabled(process.env.INKOS_AGENT_ALLOW_SYSTEM_READ, false);
+  const hasFileAudit = Boolean(config.onFileAudit);
   const cacheKey = agentCacheKey(projectRoot, sessionId);
 
   // ----- Resolve or create Agent -----
@@ -541,6 +593,7 @@ async function runAgentSessionUnlocked(
     const languageChanged = cached.language !== language;
     const apiKeyChanged = cached.apiKey !== config.apiKey;
     const readPermissionChanged = cached.allowSystemFileRead !== allowSystemFileRead;
+    const auditChanged = cached.hasFileAudit !== hasFileAudit;
     const transcriptChanged = cached.lastCommittedSeq !== currentCommittedSeq;
 
     if (
@@ -550,6 +603,7 @@ async function runAgentSessionUnlocked(
       languageChanged ||
       apiKeyChanged ||
       readPermissionChanged ||
+      auditChanged ||
       transcriptChanged
     ) {
       agentCache.delete(cacheKey);
@@ -571,7 +625,13 @@ async function runAgentSessionUnlocked(
       initialState: {
         model,
         systemPrompt: buildAgentSystemPrompt(bookId, language),
-        tools: createAgentToolsForMode({ pipeline, bookId, projectRoot, allowSystemFileRead }),
+        tools: createAgentToolsForMode({
+          pipeline,
+          bookId,
+          projectRoot,
+          allowSystemFileRead,
+          onFileAudit: config.onFileAudit,
+        }),
         messages: initialAgentMessages,
       },
       transformContext: createBookContextTransform(bookId, projectRoot),
@@ -592,6 +652,7 @@ async function runAgentSessionUnlocked(
       modelIdentity: requestedModelIdentity,
       apiKey: config.apiKey,
       allowSystemFileRead,
+      hasFileAudit,
       lastCommittedSeq: currentCommittedSeq ?? await latestCommittedSeq(projectRoot, sessionId),
       lastActive: Date.now(),
     };
@@ -656,6 +717,7 @@ async function runAgentSessionUnlocked(
 
   // ----- Subscribe to events (transcript persistence + SSE forwarding) -----
   const unsubscribe = agent.subscribe(async (event: AgentEvent) => {
+    throwIfAborted(config.signal);
     await persistAgentEvent(event);
     onEvent?.(event);
   });
@@ -665,7 +727,9 @@ async function runAgentSessionUnlocked(
   let errorMessage: string | undefined;
 
   try {
+    throwIfAborted(config.signal);
     await agent.prompt(userMessage);
+    throwIfAborted(config.signal);
 
     finalAssistant = lastAssistantMessage(agent.state.messages);
     errorMessage = assistantErrorMessage(finalAssistant);
@@ -713,9 +777,11 @@ async function runAgentSessionUnlocked(
   finalAssistant ??= lastAssistantMessage(allMessages);
   const responseText = finalAssistant ? extractTextFromAssistant(finalAssistant) : "";
   errorMessage ??= assistantErrorMessage(finalAssistant);
+  const tokenUsage = extractTokenUsageFromAssistant(finalAssistant);
 
   return {
     responseText,
+    ...(tokenUsage ? { tokenUsage } : {}),
     messages: allMessages.slice(),
     ...(errorMessage ? { errorMessage } : {}),
   };

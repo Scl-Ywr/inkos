@@ -13,7 +13,7 @@ export function buildSettlerSystemPrompt(
   const numericalBlock = genreProfile.numericalSystem
     ? `\n- 本题材有数值/资源体系，你必须在 UPDATED_LEDGER 中追踪正文中出现的所有资源变动
 - 数值验算铁律：期初 + 增量 = 期末，三项必须可验算`
-    : `\n- 本题材无数值系统，UPDATED_LEDGER 留空`;
+    : `\n- 本题材无数值系统，UPDATED_LEDGER 仍必须作为通用资源账本更新：追踪物品、线索、权限、身份筹码、欠债/承诺、人脉、情报、可用机会等剧情资源；没有数量时写状态与依据章节`;
 
   const hookRules = `
 ## 伏笔追踪规则（严格执行）
@@ -48,7 +48,7 @@ export function buildSettlerSystemPrompt(
 
 1. **角色行为**：谁做了什么，对谁，为什么；出场、退场、状态变化（受伤/突破/死亡等）
 2. **位置变化**：谁去了哪里，从哪里来；场景转换
-3. **资源变化**：获得、失去、消耗了什么，具体数量
+3. **资源变化**：获得、失去、消耗了什么；包括数值、物品、线索、情报、权限、承诺、人脉、身份筹码、机会窗口
 4. **关系变化**：新相遇、信任/不信任转变、结盟、背叛；角色间关系变化
 5. **情绪变化**：角色情绪从X到Y，触发事件是什么
 6. **信息流动**：谁知道了什么新信息，谁仍然不知情；新的信息边界
@@ -185,7 +185,7 @@ export function buildSettlerUserPrompt(params: {
   readonly validationFeedback?: string;
 }): string {
   const ledgerBlock = params.ledger
-    ? `\n## 当前资源账本\n${params.ledger}\n`
+    ? `\n## 当前资源账本（数值/物品/线索/情报/权限/承诺等剧情资源）\n${params.ledger}\n`
     : "";
 
   const summariesBlock = params.chapterSummaries !== "(文件尚未创建)"

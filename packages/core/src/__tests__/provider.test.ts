@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AssistantMessage, Model, Api } from "@mariozechner/pi-ai";
 import {
   __resetFixedTemperatureWarnings,
   chatCompletion,
+  chatWithTools,
   type LLMClient,
 } from "../llm/provider.js";
+import { clearAllL1Caches, putSemanticCache } from "../utils/headroom-cache.js";
 
 // ── Mock @mariozechner/pi-ai ──────────────────────────────────────────────────
 // We intercept streamSimple so tests don't hit the network.
@@ -139,10 +144,18 @@ async function captureError(task: Promise<unknown>): Promise<Error> {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("chatCompletion via pi-ai", () => {
+  const tempRoots: string[] = [];
+
   beforeEach(() => {
     mockStreamSimple.mockReset();
     mockCompleteSimple.mockReset();
     mockComplete.mockReset();
+  });
+
+  afterEach(async () => {
+    delete process.env.INKOS_DISABLE_NODE_SQLITE;
+    clearAllL1Caches();
+    await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
   it("returns text content from a successful stream", async () => {
@@ -247,6 +260,43 @@ describe("chatCompletion via pi-ai", () => {
     const opts = mockStreamSimple.mock.calls[0]?.[2] as Record<string, unknown>;
     expect(opts.temperature).toBe(0.3);
     expect(opts.maxTokens).toBe(256);
+  });
+
+  it("can skip semantic cache reads for creative requests while still calling the model", async () => {
+    process.env.INKOS_DISABLE_NODE_SQLITE = "1";
+    const projectRoot = await mkdtemp(join(tmpdir(), "inkos-provider-cache-read-"));
+    tempRoots.push(projectRoot);
+    const messages = [
+      { role: "system", content: "固定世界观：同一套宗门模板。" },
+      { role: "user", content: "续写第 2 章。" },
+    ] as const;
+    await putSemanticCache({
+      projectRoot,
+      bookId: "book-cache-read",
+      model: "test-model",
+      service: "openai",
+      variant: JSON.stringify({
+        temperature: 0.7,
+        maxTokens: 512,
+        webSearch: false,
+        extra: {},
+      }),
+    }, messages, {
+      content: "旧章节缓存内容，不应该被创作请求复用。",
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    });
+    mockStreamSimple.mockReturnValue(makeTextStream("fresh chapter content"));
+
+    const result = await chatCompletion(makeClient(), "test-model", messages, {
+      tokenOptimization: {
+        projectRoot,
+        bookId: "book-cache-read",
+        cacheRead: false,
+      },
+    });
+
+    expect(result.content).toBe("fresh chapter content");
+    expect(mockStreamSimple).toHaveBeenCalledOnce();
   });
 
   it("drops non-ByteString headers before calling pi-ai", async () => {
@@ -572,6 +622,128 @@ describe("chatCompletion via pi-ai", () => {
     expect(secondBody.messages[0]).toMatchObject({ role: "user" });
     expect(secondBody.messages[0].content).toContain("只输出中文。");
     expect(secondBody.messages[0].content).toContain("ping");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("retries custom openai-compatible chat with conservative payload after generic 400 parameter errors", async () => {
+    const encoder = new TextEncoder();
+    const sse = [
+      "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+      "data: {\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":1,\"total_tokens\":10}}\n\n",
+      "data: [DONE]\n\n",
+    ].join("");
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        statusText: "Bad Request",
+        text: async () => JSON.stringify({ error: { message: "请求参数错误" } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(sse));
+            controller.close();
+          },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = makeClient(0.7, {
+      service: "custom",
+      stream: true,
+      _piModel: {
+        ...MOCK_PI_MODEL,
+        provider: "openai",
+        baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+      },
+      defaults: {
+        temperature: 0.7,
+        maxTokens: 16_384,
+        thinkingBudget: 0,
+        extra: { top_p: 0.8 },
+      },
+    });
+    const result = await chatCompletion(client, "agnes-2.0-flash", [
+      { role: "system", content: "只输出中文。" },
+      { role: "user", content: "ping" },
+    ], { temperature: 0.3 });
+
+    expect(result.content).toBe("ok");
+    expect(result.usage.totalTokens).toBe(10);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const firstBody = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string);
+    const secondBody = JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string);
+    expect(firstBody.temperature).toBe(0.3);
+    expect(firstBody.max_tokens).toBe(16_384);
+    expect(firstBody.top_p).toBe(0.8);
+    expect(firstBody.stream_options).toEqual({ include_usage: true });
+    expect(firstBody.messages[0]).toMatchObject({ role: "system" });
+    expect(secondBody.temperature).toBe(1);
+    expect(secondBody.max_tokens).toBe(4096);
+    expect(secondBody.top_p).toBeUndefined();
+    expect(secondBody.stream_options).toBeUndefined();
+    expect(secondBody.messages).toHaveLength(1);
+    expect(secondBody.messages[0]).toMatchObject({ role: "user" });
+    expect(secondBody.messages[0].content).toContain("只输出中文。");
+    expect(secondBody.messages[0].content).toContain("ping");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("retries custom openai-compatible chat with a smaller token budget when the first fallback still gets 400", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        statusText: "Bad Request",
+        text: async () => JSON.stringify({ error: { message: "请求参数错误" } }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        statusText: "Bad Request",
+        text: async () => JSON.stringify({ error: { message: "max_tokens is too large" } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: "ok" } }],
+          usage: { prompt_tokens: 9, completion_tokens: 1, total_tokens: 10 },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = makeClient(0.7, {
+      service: "custom",
+      stream: false,
+      _piModel: {
+        ...MOCK_PI_MODEL,
+        provider: "openai",
+        baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+      },
+      defaults: {
+        temperature: 0.7,
+        maxTokens: 16_384,
+        thinkingBudget: 0,
+        extra: {},
+      },
+    });
+    const result = await chatCompletion(client, "agnes-2.0-flash", [
+      { role: "system", content: "只输出中文。" },
+      { role: "user", content: "ping" },
+    ], { temperature: 0.3 });
+
+    expect(result.content).toBe("ok");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const firstBody = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string);
+    const secondBody = JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string);
+    const thirdBody = JSON.parse(fetchMock.mock.calls[2]?.[1]?.body as string);
+    expect(firstBody).toMatchObject({ temperature: 0.3, max_tokens: 16_384 });
+    expect(secondBody).toMatchObject({ temperature: 1, max_tokens: 4096 });
+    expect(thirdBody).toMatchObject({ temperature: 1, max_tokens: 2048 });
 
     vi.unstubAllGlobals();
   });
@@ -938,6 +1110,26 @@ describe("createLLMClient with providers lookup", () => {
     expect(client._piModel?.id).toBe("k2p5");
   });
 
+  it("B7: deploymentName survives per-call model resolution during chatCompletion", async () => {
+    const { createLLMClient } = await import("../llm/provider.js");
+    const { LLMConfigSchema } = await import("../models/project.js");
+    const client = createLLMClient(LLMConfigSchema.parse({
+      provider: "anthropic",
+      service: "kimiCodingPlan",
+      model: "kimi-k2.5",
+      apiKey: "test",
+      baseUrl: "https://api.moonshot.cn/anthropic",
+      stream: false,
+    }));
+    mockCompleteSimple.mockResolvedValue(makeAssistantMessage("ok"));
+
+    await chatCompletion(client, "kimi-k2.5", [{ role: "user", content: "hi" }]);
+
+    const model = mockCompleteSimple.mock.calls[0]?.[0] as Model<Api>;
+    expect(model.id).toBe("k2p5");
+    expect(model.name).toBe("kimi-k2.5");
+  });
+
   it("B7: 没有 deploymentName 的 model piModel.id 保持原 config.model", async () => {
     const { createLLMClient } = await import("../llm/provider.js");
     const { LLMConfigSchema } = await import("../models/project.js");
@@ -965,5 +1157,163 @@ describe("createLLMClient with providers lookup", () => {
     expect(client._piModel?.provider).toBe("google");
     expect(client._piModel?.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
     expect(client._piModel?.compat).toBeUndefined();
+  });
+});
+
+describe("chatWithTools provider compatibility", () => {
+  beforeEach(() => {
+    mockStreamSimple.mockReset();
+    mockCompleteSimple.mockReset();
+    mockComplete.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("uses native OpenAI-compatible tool calling for Studio custom gateways", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: null,
+            tool_calls: [{
+              id: "call_1",
+              type: "function",
+              function: {
+                name: "read_file",
+                arguments: "{\"path\":\"README.md\"}",
+              },
+            }],
+          },
+        }],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = makeClient(0.7, {
+      service: "custom",
+      stream: false,
+      _piModel: {
+        ...MOCK_PI_MODEL,
+        provider: "openai",
+        baseUrl: "https://gateway.example/v1",
+      },
+    });
+
+    const result = await chatWithTools(client, "gpt-5.4", [
+      { role: "user", content: "read readme" },
+    ], [{
+      name: "read_file",
+      description: "Read a file",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string" } },
+        required: ["path"],
+      },
+    }]);
+
+    expect(result.toolCalls).toEqual([{
+      id: "call_1",
+      name: "read_file",
+      arguments: "{\"path\":\"README.md\"}",
+    }]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(mockComplete).not.toHaveBeenCalled();
+    const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string);
+    expect(body).toMatchObject({
+      model: "gpt-5.4",
+      tool_choice: "auto",
+      stream: false,
+    });
+    expect(body.tools[0]).toMatchObject({
+      type: "function",
+      function: { name: "read_file" },
+    });
+  });
+
+  it("collects streaming native OpenAI-compatible tool calls from split deltas", async () => {
+    const encoder = new TextEncoder();
+    const events = [
+      {
+        choices: [{
+          delta: {
+            tool_calls: [{
+              index: 0,
+              id: "call_1",
+              type: "function",
+              function: {
+                name: "read_file",
+                arguments: "{\"path\":",
+              },
+            }],
+          },
+        }],
+      },
+      {
+        choices: [{
+          delta: {
+            tool_calls: [{
+              index: 0,
+              function: {
+                arguments: "\"README.md\"}",
+              },
+            }],
+          },
+        }],
+      },
+    ];
+    const sse = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(sse));
+          controller.close();
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = makeClient(0.7, {
+      service: "custom",
+      stream: true,
+      _piModel: {
+        ...MOCK_PI_MODEL,
+        provider: "openai",
+        baseUrl: "https://gateway.example/v1",
+      },
+    });
+
+    const result = await chatWithTools(client, "gpt-5.4", [
+      { role: "user", content: "read readme" },
+    ], [{
+      name: "read_file",
+      description: "Read a file",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string" } },
+        required: ["path"],
+      },
+    }]);
+
+    expect(result).toEqual({
+      content: "",
+      toolCalls: [{
+        id: "call_1",
+        name: "read_file",
+        arguments: "{\"path\":\"README.md\"}",
+      }],
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(mockComplete).not.toHaveBeenCalled();
+    const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string);
+    expect(body).toMatchObject({
+      model: "gpt-5.4",
+      tool_choice: "auto",
+      stream: true,
+      stream_options: { include_usage: true },
+    });
   });
 });

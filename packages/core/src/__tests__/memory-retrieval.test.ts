@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRequire } from "node:module";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as memoryRetrieval from "../utils/memory-retrieval.js";
@@ -28,6 +28,21 @@ describe("retrieveMemorySelection", () => {
     }
     vi.resetModules();
     vi.doUnmock("../state/memory-db.js");
+  });
+
+  sqliteIt("quarantines an incompatible memory.db and rebuilds the derived index", async () => {
+    root = await mkdtemp(join(tmpdir(), "inkos-memory-repair-test-"));
+    const bookDir = join(root, "book");
+    const storyDir = join(bookDir, "story");
+    await mkdir(storyDir, { recursive: true });
+    await writeFile(join(storyDir, "memory.db"), "incompatible sqlite payload", "utf-8");
+
+    const db = new MemoryDB(bookDir);
+    expect(db.getChapterCount()).toBe(0);
+    db.close();
+
+    const backups = await readdir(join(storyDir, ".repair-backups"));
+    expect(backups.some((name) => name.startsWith("memory.db.corrupt-"))).toBe(true);
   });
 
   it("indexes current state facts into sqlite-backed memory selection", async () => {

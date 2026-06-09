@@ -48,9 +48,10 @@ describe("StateValidatorAgent", () => {
       "old hooks",
       "new hooks",
       "en",
-    )).resolves.toEqual({
+    )).resolves.toMatchObject({
       warnings: [],
       passed: true,
+      tokenUsage: ZERO_USAGE,
     });
   });
 

@@ -1,6 +1,6 @@
 {
   "name": "@actalk/inkos-core",
-  "version": "1.4.1",
+  "version": "1.4.6",
   "description": "InkOS core engine — multi-agent novel writing pipeline with 33-dimension continuity audit, style cloning, and de-AI-ification",
   "keywords": [
     "ai-novel-writing",
@@ -41,6 +41,9 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:integration": "vitest run --passWithNoTests \"src/**/*.integration.test.ts\"",
+    "test:packaging": "vitest run --passWithNoTests \"src/**/publish-package.test.ts\"",
     "lint": "pnpm run typecheck",
     "typecheck": "tsc --noEmit"
   },
@@ -50,6 +53,7 @@
     "@sinclair/typebox": "^0.34.49",
     "dotenv": "^16.4.0",
     "epub-gen-memory": "^1.0.10",
+    "headroom-ai": "0.22.4",
     "js-yaml": "^4.1.1",
     "undici": "6.21.3",
     "zod": "^3.25.76"

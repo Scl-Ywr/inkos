@@ -1,6 +1,9 @@
 import { useApi } from "./use-api";
+import { useEffect, useState } from "react";
 
 type Lang = "zh" | "en";
+const LANGUAGE_EVENT = "inkos:language-change";
+const LANGUAGE_STORAGE_KEY = "inkos:language";
 
 const strings = {
   // Header
@@ -172,6 +175,24 @@ const strings = {
   "doctor.failed": { zh: "失败", en: "Failed" },
   "doctor.allPassed": { zh: "所有检查通过 — 环境健康", en: "All checks passed — environment is healthy" },
   "doctor.someFailed": { zh: "部分检查失败 — 请查看配置", en: "Some checks failed — review configuration" },
+  "doctor.updateTitle": { zh: "在线更新", en: "Online Update" },
+  "doctor.updateCheck": { zh: "检查更新", en: "Check" },
+  "doctor.updateDownload": { zh: "下载更新", en: "Download" },
+  "doctor.updateInstall": { zh: "安装", en: "Install" },
+  "doctor.updatePermission": { zh: "开启安装权限", en: "Allow Install" },
+  "doctor.updateCurrent": { zh: "当前版本", en: "Current" },
+  "doctor.updateLatest": { zh: "最新版本", en: "Latest" },
+  "doctor.updateChannel": { zh: "通道", en: "Channel" },
+  "doctor.updateSize": { zh: "大小", en: "Size" },
+  "doctor.updateAvailable": { zh: "发现新版本", en: "Update available" },
+  "doctor.updateReady": { zh: "已是最新版本", en: "Up to date" },
+  "doctor.updateUnsupported": { zh: "仅 Android APK 支持在线安装。", en: "Online APK installation is only available in the Android app." },
+  "doctor.updateNoManifest": { zh: "暂时无法读取更新清单。", en: "Update manifest is unavailable." },
+  "doctor.updateDownloading": { zh: "正在下载 APK...", en: "Downloading APK..." },
+  "doctor.updateDownloaded": { zh: "APK 已下载并校验通过，可以安装。", en: "APK downloaded and verified. Ready to install." },
+  "doctor.updateInstalling": { zh: "已打开系统安装器，请确认安装。", en: "System installer opened. Confirm installation." },
+  "doctor.updateNeedPermission": { zh: "需要允许此应用安装未知来源 APK。", en: "Allow this app to install APKs first." },
+  "doctor.updatePermissionOpened": { zh: "已打开权限设置，开启后回到这里继续安装。", en: "Permission settings opened. Return here to install." },
 
   // Genre extras
   "genre.createNew": { zh: "创建新题材", en: "Create New Genre" },
@@ -270,6 +291,15 @@ const strings = {
   "chapter.label": { zh: "第{n}章", en: "Chapter {n}" },
   "common.exportSuccess": { zh: "已导出到项目目录", en: "Exported to project directory" },
   "common.exportFormat": { zh: "导出格式", en: "Export format" },
+  "reader.copy": { zh: "复制", en: "Copy" },
+  "reader.copied": { zh: "已复制", en: "Copied" },
+  "reader.exportTxt": { zh: "导出 TXT", en: "Export TXT" },
+  "reader.exported": { zh: "已导出", en: "Exported" },
+  "reader.exportedTxt": { zh: "TXT 已导出", en: "TXT exported" },
+  "reader.exportFailed": { zh: "导出失败，已尝试复制正文到剪贴板。", en: "Export failed; chapter text was copied as a fallback." },
+  "reader.deleteChapter": { zh: "删除章节", en: "Delete" },
+  "reader.deleting": { zh: "删除中...", en: "Deleting..." },
+  "reader.deleteConfirm": { zh: "确认删除这一章？该操作会删除章节文件并从章节列表移除。", en: "Delete this chapter? This removes the chapter file and its list entry." },
   "logs.title": { zh: "日志", en: "Logs" },
   "logs.empty": { zh: "暂无日志", en: "No log entries yet" },
   "logs.showingRecent": { zh: "当前展示最近日志记录。", en: "Showing recent log entries." },
@@ -278,9 +308,47 @@ const strings = {
 export type StringKey = keyof typeof strings;
 export type TFunction = (key: StringKey) => string;
 
+function normalizeLang(value: unknown): Lang | null {
+  return value === "en" || value === "zh" ? value : null;
+}
+
+function getStoredLang(): Lang | null {
+  if (typeof window === "undefined") return null;
+  return normalizeLang(window.localStorage.getItem(LANGUAGE_STORAGE_KEY));
+}
+
+export function publishLanguageChange(lang: Lang): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang);
+  window.dispatchEvent(new CustomEvent<{ lang: Lang }>(LANGUAGE_EVENT, {
+    detail: { lang },
+  }));
+}
+
 export function useI18n() {
   const { data } = useApi<{ language: string }>("/project");
-  const lang: Lang = data?.language === "en" ? "en" : "zh";
+  const [lang, setLang] = useState<Lang>(() => getStoredLang() ?? "zh");
+
+  useEffect(() => {
+    const nextLang = normalizeLang(data?.language);
+    if (!nextLang) return;
+    setLang(nextLang);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(LANGUAGE_STORAGE_KEY, nextLang);
+    }
+  }, [data?.language]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleLanguageChange = (event: Event) => {
+      const nextLang = normalizeLang((event as CustomEvent<{ lang?: unknown }>).detail?.lang);
+      if (nextLang) setLang(nextLang);
+    };
+    window.addEventListener(LANGUAGE_EVENT, handleLanguageChange);
+    return () => {
+      window.removeEventListener(LANGUAGE_EVENT, handleLanguageChange);
+    };
+  }, []);
 
   function t(key: StringKey): string {
     return strings[key][lang];

@@ -1,40 +1,25 @@
 ---
-name: System Apocalypse
+name: 末日系统
 id: system-apocalypse
-language: en
-chapterTypes: ["Survival", "Combat", "Setup", "Transition", "Payoff"]
-fatigueWords: ["delve", "tapestry", "testament", "intricate", "pivotal", "vibrant", "comprehensive", "nuanced", "embark", "foster", "underscore", "bolstered", "crucial"]
+language: zh
+chapterTypes: ["灾变章", "求生章", "任务章", "据点章", "背叛章", "清算章"]
+fatigueWords: ["末日", "系统", "丧尸", "异兽", "任务", "庇护所", "进化"]
 numericalSystem: true
 powerScaling: true
 eraResearch: false
-pacingRule: "Early (ch 1-15): survival pressure every chapter. Mid (ch 15-50): power-up + faction politics every 3-5 chapters. Late: expansion and existential threats."
-satisfactionTypes: ["Survival Against Odds", "Level Up", "Territory Claimed", "Faction Victory", "System Secret Revealed", "Societal Rebuild Milestone"]
-auditDimensions: [1,2,3,4,5,6,7,8,9,10,11,13,14,15,16,17,18,19,24,25,26]
+pacingRule: "每2-4章推进一次生存压力：资源、感染、内斗、天气、怪物或系统规则变化。"
+satisfactionTypes: ["极限求生", "据点建设", "资源争夺", "规则破解", "敌人清算"]
+auditDimensions: [1, 2, 3, 4, 5, 8, 9, 10, 12, 14, 15, 17, 18, 20, 24, 25, 26]
 ---
 
-## Genre Prohibitions
+## 生存规则
 
-- Day Zero that doesn't permanently change the world — no reverting to normal
-- Early chapters without genuine survival danger — readers demand real stakes from page one
-- System arrival with no in-world explanation (even a vague one)
-- Ignoring real-world geography and consequences when set on Earth
-- Factions that are binary good/evil — competing interests, not cartoon villainy
-- MC becoming unstoppable too fast — power fantasy must be earned through survival
-- Tech usage without addressing fuel, ammo, and infrastructure collapse
+末日压力要具体：水、药、弹药、睡眠、安全区、信任成本。
 
-## World Rules
+系统奖励必须伴随风险，不能成为免费补给站。
 
-- Day Zero must establish in chapters 1-3: how a normal person reacts, first death or near-death, and that old rules are gone
-- Infrastructure failure is real: food, water, electricity, medicine stop working
-- Resource scarcity drives conflict: water, ammunition, medical supplies, safe shelter
-- Factions form quickly: government remnants, criminal networks, cults, survival communities, warlords
-- Real-world grounding: name real locations, acknowledge real infrastructure, maintain daylight cycles and weather
-- System mechanics integrate logically — show why old-world tech fails or doesn't in a magical world
+## 题材禁忌
 
-## Pacing Guidance
+不要只写怪物升级，社会秩序瓦解后的组织、交易、背叛和规则重建同样重要。
 
-- Early (ch 1-15): Survival, confusion, learning system. MC is weak, struggles with low-tier threats. Shorter chapters (2-3k words)
-- Mid (ch 15-50): Growing stronger, claiming territory, faction politics. Power fantasy increases; survival becomes strategic
-- Late: Expansion, faction wars, world-scale threats. MC powerful but not unstoppable; challenges are existential/political
-- Introduce new threat types as MC grows — defeating zombies leads to intelligent predators, rival factions, interdimensional invasions
-- Balance survival pressure with power progression — desperation early, strategy mid, leadership late
+主角的冷酷需要原因和边界，否则会变成空洞爽点。

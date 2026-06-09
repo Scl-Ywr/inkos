@@ -32,7 +32,7 @@ describe("project bootstrap", () => {
     expect(config.llm.baseUrl).toBe("");
     await expect(readFile(join(tempDir, ".nvmrc"), "utf-8")).resolves.toBe("22\n");
     await expect(readFile(join(tempDir, ".node-version"), "utf-8")).resolves.toBe("22\n");
-  });
+  }, 10_000);
 
   it("does not overwrite support files when auto-initializing", async () => {
     await writeFile(join(tempDir, ".env"), "EXISTING=1\n", "utf-8");

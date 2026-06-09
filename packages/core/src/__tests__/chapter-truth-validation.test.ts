@@ -11,6 +11,24 @@ const ZERO_USAGE = {
   totalTokens: 0,
 } as const;
 
+const FIRST_VALIDATION_USAGE = {
+  promptTokens: 1,
+  completionTokens: 2,
+  totalTokens: 3,
+} as const;
+
+const RETRY_SETTLEMENT_USAGE = {
+  promptTokens: 10,
+  completionTokens: 20,
+  totalTokens: 30,
+} as const;
+
+const RETRY_VALIDATION_USAGE = {
+  promptTokens: 3,
+  completionTokens: 4,
+  totalTokens: 7,
+} as const;
+
 function createAuditResult(overrides?: Partial<AuditResult>): AuditResult {
   return {
     passed: true,
@@ -73,8 +91,11 @@ describe("validateChapterTruthPersistence", () => {
             category: "unsupported_change",
             description: "正文写铜牌在怀里，但 state 说未携带。",
           }],
+          tokenUsage: FIRST_VALIDATION_USAGE,
         }))
-        .mockResolvedValueOnce(createValidationResult()),
+        .mockResolvedValueOnce(createValidationResult({
+          tokenUsage: RETRY_VALIDATION_USAGE,
+        })),
     };
     const writer = {
       settleChapterState: vi.fn().mockResolvedValue(
@@ -82,6 +103,7 @@ describe("validateChapterTruthPersistence", () => {
           updatedState: "fixed state",
           updatedHooks: "fixed hooks",
           updatedLedger: "fixed ledger",
+          tokenUsage: RETRY_SETTLEMENT_USAGE,
         }),
       ),
     };
@@ -122,6 +144,11 @@ describe("validateChapterTruthPersistence", () => {
     expect(result.persistenceOutput.updatedState).toBe("fixed state");
     expect(result.persistenceOutput.updatedHooks).toBe("fixed hooks");
     expect(result.auditResult.issues).toEqual([]);
+    expect(result.tokenUsage).toEqual({
+      promptTokens: 14,
+      completionTokens: 26,
+      totalTokens: 40,
+    });
     expect(logger.warn).toHaveBeenCalledWith("  [unsupported_change] 正文写铜牌在怀里，但 state 说未携带。");
   });
 

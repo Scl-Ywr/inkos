@@ -15,7 +15,6 @@ import { cn } from "@/lib/utils";
 import type { UIMessage } from "ai";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import type { ComponentProps, HTMLAttributes, ReactElement } from "react";
-import type { StreamdownProps } from "streamdown";
 import {
   createContext,
   memo,
@@ -26,6 +25,7 @@ import {
   useState,
 } from "react";
 import { LazyStreamdown } from "./lazy-streamdown";
+import type { LazyStreamdownProps } from "./lazy-streamdown";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
@@ -316,7 +316,7 @@ export const MessageBranchPage = ({
   );
 };
 
-export type MessageResponseProps = StreamdownProps;
+export type MessageResponseProps = LazyStreamdownProps;
 
 const messageResponseClassName =
   "size-full text-[15px] leading-[1.65] tracking-[-0.006em] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>p+p]:mt-4";

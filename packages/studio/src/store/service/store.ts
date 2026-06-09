@@ -8,6 +8,18 @@ interface GroupPayload {
   readonly models: ReadonlyArray<ModelInfo>;
 }
 
+function pruneModelsByConnectedServices(
+  modelsByService: Record<string, ReadonlyArray<ModelInfo>>,
+  services: ReadonlyArray<ServiceInfo>,
+): Record<string, ReadonlyArray<ModelInfo>> {
+  const connected = new Set(services
+    .filter((service) => service.connected && service.service !== "official-optimization")
+    .map((service) => service.service));
+  return Object.fromEntries(
+    Object.entries(modelsByService).filter(([service]) => connected.has(service)),
+  );
+}
+
 export const useServiceStore = create<ServiceStore>()((set, get) => ({
   services: [],
   servicesLoading: false,
@@ -22,7 +34,12 @@ export const useServiceStore = create<ServiceStore>()((set, get) => ({
     set({ servicesLoading: true });
     try {
       const data = await fetchJson<{ services: ReadonlyArray<ServiceInfo> }>("/services");
-      set({ services: data.services ?? [], servicesLoading: false });
+      const services = data.services ?? [];
+      set((state) => ({
+        services,
+        modelsByService: pruneModelsByConnectedServices(state.modelsByService, services),
+        servicesLoading: false,
+      }));
     } catch {
       set({ servicesLoading: false });
     }
@@ -39,7 +56,7 @@ export const useServiceStore = create<ServiceStore>()((set, get) => ({
     try {
       const data = await fetchJson<{ groups: ReadonlyArray<GroupPayload> }>("/services/models");
       set((s) => {
-        const next = { ...s.modelsByService };
+        const next = pruneModelsByConnectedServices(s.modelsByService, s.services);
         for (const group of data.groups ?? []) {
           next[group.service] = group.models;
         }
@@ -56,7 +73,7 @@ export const useServiceStore = create<ServiceStore>()((set, get) => ({
     try {
       const data = await fetchJson<{ groups: ReadonlyArray<GroupPayload> }>("/services/models/custom");
       set((s) => {
-        const next = { ...s.modelsByService };
+        const next = pruneModelsByConnectedServices(s.modelsByService, s.services);
         for (const group of data.groups ?? []) {
           next[group.service] = group.models;
         }
@@ -98,7 +115,7 @@ export const useServiceStore = create<ServiceStore>()((set, get) => ({
   getModelPickerStatus: () => {
     const { services, servicesLoading, bankModelsLoading, customModelsLoading, modelsByService } = get();
     if (servicesLoading) return "loading";
-    const connected = services.filter((s) => s.connected);
+    const connected = services.filter((s) => s.connected && s.service !== "official-optimization");
     if (connected.length === 0) return "no-models";
     if (bankModelsLoading) return "loading";
     if (connected.some((s) => (modelsByService[s.service]?.length ?? 0) > 0)) return "ready";
@@ -112,7 +129,7 @@ export const useServiceStore = create<ServiceStore>()((set, get) => ({
   getGroupedModels: () => {
     const { services, modelsByService } = get();
     const groups: Array<{ service: string; label: string; models: ReadonlyArray<ModelInfo> }> = [];
-    for (const svc of services.filter((s) => s.connected)) {
+    for (const svc of services.filter((s) => s.connected && s.service !== "official-optimization")) {
       const models = modelsByService[svc.service] ?? [];
       if (models.length > 0) {
         groups.push({ service: svc.service, label: svc.label, models });

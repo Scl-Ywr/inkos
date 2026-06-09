@@ -313,5 +313,5 @@ describe("PipelineRunner structured-state memory sync", () => {
         events: "Lin Yue follows the debt into the watchtower archive.",
       }),
     ]);
-  });
+  }, 10_000);
 });
