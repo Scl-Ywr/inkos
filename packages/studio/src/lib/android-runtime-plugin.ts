@@ -3,6 +3,7 @@ import { isNativeRuntime } from "./mobile-runtime";
 
 interface InkOSRuntimePlugin {
   restartNode(): Promise<{ ok: boolean }>;
+  resetNodeRuntime(): Promise<{ ok: boolean }>;
   appVersion(): Promise<{
     packageName: string;
     versionCode: number;
@@ -53,6 +54,16 @@ export async function restartEmbeddedNode(): Promise<boolean> {
 
 export async function ensureEmbeddedNodeRunning(): Promise<boolean> {
   return restartEmbeddedNode();
+}
+
+export async function resetEmbeddedNodeRuntime(): Promise<boolean> {
+  if (!isNativeRuntime()) return false;
+  try {
+    await InkOSRuntime.resetNodeRuntime();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function getAndroidAppVersion(): Promise<{

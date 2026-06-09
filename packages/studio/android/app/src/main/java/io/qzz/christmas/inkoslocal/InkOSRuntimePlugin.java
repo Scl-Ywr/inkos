@@ -46,6 +46,20 @@ public class InkOSRuntimePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void resetNodeRuntime(PluginCall call) {
+        Intent intent = new Intent(getContext(), EmbeddedNodeService.class);
+        intent.setAction(EmbeddedNodeService.ACTION_RESET_RUNTIME);
+        try {
+            getContext().startService(intent);
+        } catch (Exception error) {
+            ContextCompat.startForegroundService(getContext(), intent);
+        }
+        JSObject result = new JSObject();
+        result.put("ok", true);
+        call.resolve(result);
+    }
+
+    @PluginMethod
     public void appVersion(PluginCall call) {
         JSObject result = new JSObject();
         result.put("packageName", getContext().getPackageName());

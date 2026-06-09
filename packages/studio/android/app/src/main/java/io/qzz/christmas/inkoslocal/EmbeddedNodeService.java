@@ -41,6 +41,7 @@ public class EmbeddedNodeService extends Service {
     private static final int MAX_AUTO_RESTARTS = 12;
     public static final int MIN_NODE24_SDK = 28;
     public static final String ACTION_RESTART = "io.qzz.christmas.inkoslocal.RESTART_NODE";
+    public static final String ACTION_RESET_RUNTIME = "io.qzz.christmas.inkoslocal.RESET_NODE_RUNTIME";
     public static final String ACTION_UPDATE_TASK_NOTIFICATION = "io.qzz.christmas.inkoslocal.UPDATE_TASK_NOTIFICATION";
     public static final String EXTRA_NOTIFICATION_TITLE = "notificationTitle";
     public static final String EXTRA_NOTIFICATION_TEXT = "notificationText";
@@ -83,6 +84,11 @@ public class EmbeddedNodeService extends Service {
         }
         if (intent != null && ACTION_RESTART.equals(intent.getAction())) {
             restartNodeIfNeeded();
+            return START_STICKY;
+        }
+        if (intent != null && ACTION_RESET_RUNTIME.equals(intent.getAction())) {
+            resetEmbeddedRuntime();
+            startNodeOnce();
             return START_STICKY;
         }
         startNodeOnce();
@@ -153,6 +159,28 @@ public class EmbeddedNodeService extends Service {
         }
         writeRuntimeStatus("restart-requested", "Restart requested from InkOS Studio.");
         startNodeOnce();
+    }
+
+    private synchronized void resetEmbeddedRuntime() {
+        stopNodeProcess();
+        startedNodeAlready = false;
+        autoRestartAttempts = 0;
+        runtimeUnsupported = false;
+        packagedRuntimeVersion = "";
+        installedRuntimeVersion = "";
+
+        File runtimeDir = new File(getFilesDir(), "embedded-node");
+        boolean runtimeDeleted = deleteRecursively(runtimeDir);
+        File privateStatusDir = new File(getFilesDir(), "InkOS Studio");
+        deleteRecursively(new File(privateStatusDir, "runtime-status.json"));
+        deleteRecursively(new File(privateStatusDir, "node-output.log"));
+        deleteRecursively(new File(privateStatusDir, "node-progress.json"));
+
+        writeRuntimeStatus(
+            runtimeDeleted ? "runtime-reset" : "runtime-reset-warning",
+            "Cleared embedded Node runtime cache in app private storage. User project files in Documents/InkOS Studio were not changed."
+        );
+        updateNotification("InkOS local runtime cache cleared");
     }
 
     private void startNode() {
@@ -343,10 +371,36 @@ public class EmbeddedNodeService extends Service {
     }
 
     private synchronized void stopNodeProcess() {
-        if (isProcessAlive(nodeProcess)) {
-            nodeProcess.destroy();
+        Process process = nodeProcess;
+        if (isProcessAlive(process)) {
+            process.destroy();
+            try {
+                if (!process.waitFor(1500L, java.util.concurrent.TimeUnit.MILLISECONDS) && isProcessAlive(process)) {
+                    process.destroyForcibly();
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                process.destroyForcibly();
+            }
         }
         nodeProcess = null;
+    }
+
+    private boolean deleteRecursively(File target) {
+        if (target == null || !target.exists()) {
+            return true;
+        }
+        if (target.isDirectory()) {
+            File[] children = target.listFiles();
+            if (children != null) {
+                boolean ok = true;
+                for (File child : children) {
+                    ok = deleteRecursively(child) && ok;
+                }
+                return target.delete() && ok;
+            }
+        }
+        return target.delete();
     }
 
     private Thread startProcessLogPump(Process process, File logFile) {

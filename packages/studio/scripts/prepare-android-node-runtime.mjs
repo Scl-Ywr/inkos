@@ -1,4 +1,4 @@
-import { cp, mkdir, copyFile, writeFile, rm, stat, readdir } from "node:fs/promises";
+import { cp, mkdir, copyFile, writeFile, rm, stat, readdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -115,17 +115,18 @@ if (nodeLib) {
 }
 
 const runtimeHash = createHash("sha256");
+const studioPackage = JSON.parse(await readFile(resolve(studioRoot, "package.json"), "utf-8"));
+runtimeHash.update("studio-version");
+runtimeHash.update(String(studioPackage.version ?? ""));
 for (const path of [
   resolve(appRoot, "server.cjs"),
   resolve(appRoot, "package.json"),
 ]) {
-  runtimeHash.update(await import("node:fs/promises").then(({ readFile }) => readFile(path)));
+  runtimeHash.update(await readFile(path));
 }
 for (const file of (await readdir(genresRoot)).sort()) {
   runtimeHash.update(file);
-  runtimeHash.update(await import("node:fs/promises").then(({ readFile }) =>
-    readFile(resolve(genresRoot, file)),
-  ));
+  runtimeHash.update(await readFile(resolve(genresRoot, file)));
 }
 if (existsSync(packagedNodeLib)) {
   const nodeStat = await stat(packagedNodeLib);
@@ -145,6 +146,6 @@ console.log(`[inkos-android] prepared embedded runtime at ${assetsRoot}`);
 
 async function hashFile(path) {
   return createHash("sha256")
-    .update(await import("node:fs/promises").then(({ readFile }) => readFile(path)))
+    .update(await readFile(path))
     .digest("hex");
 }

@@ -31,6 +31,7 @@ import { AppDialogProvider } from "./lib/app-dialog";
 import {
   ensureEmbeddedNodeRunning,
   requestBatteryOptimizationExemption,
+  resetEmbeddedNodeRuntime,
   updateAndroidTaskNotification,
 } from "./lib/android-runtime-plugin";
 import { isNativeRuntime } from "./lib/mobile-runtime";
@@ -536,11 +537,13 @@ function RuntimeStatusButton() {
   }, []);
 
   const handleEnsureNode = async () => {
-    setActionStatus("正在请求启动/恢复 Node 服务...");
-    const ok = await ensureEmbeddedNodeRunning();
-    setActionStatus(ok ? "已发送启动请求，正在重新检测..." : "当前环境无法直接启动 Node。");
+    setActionStatus("正在重建内置 Node 运行时...");
+    const resetOk = await resetEmbeddedNodeRuntime();
+    const ok = resetOk || await ensureEmbeddedNodeRunning();
+    setActionStatus(ok ? "已发送修复请求，正在重新检测..." : "当前环境无法直接启动 Node。");
     window.setTimeout(() => void refresh(), 900);
     window.setTimeout(() => void refresh(), 2400);
+    window.setTimeout(() => void refresh(), 6000);
   };
 
   const handleBatteryPermission = async () => {
@@ -624,8 +627,8 @@ function RuntimeStatusButton() {
                 onClick={() => void handleEnsureNode()}
                 className="inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/20 transition-colors hover:bg-primary/90"
               >
-                <Activity size={16} />
-                启动 Node
+                <Wrench size={16} />
+                修复 Node
               </button>
             )}
             <button
