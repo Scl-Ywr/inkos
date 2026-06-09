@@ -73,8 +73,7 @@ jobs:
       - name: Build Android web and Node runtime assets
         working-directory: packages/studio
         run: |
-          pnpm run build:client
-          pnpm run android:runtime
+          pnpm run android:sync
 
       - name: Build signed release APK
         working-directory: packages/studio/android
