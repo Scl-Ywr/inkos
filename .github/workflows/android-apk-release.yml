@@ -24,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       APK_ASSET_NAME: inkos-studio.apk
+      ANDROID_NODE_RUNTIME_URL: https://github.com/Scl-Ywr/inkos/releases/download/android-node-runtime-v1/inkos-android-node-runtime-arm64-v8a.zip
+      ANDROID_NODE_RUNTIME_SHA256: 2b7c1cc4d7b49ed8dd9d07577e5d7da67d70759c47230a9f1d851007ad1f3521
       ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/packages/studio/android/app/release.keystore
       ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -67,6 +69,21 @@ jobs:
           set -euo pipefail
           echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
           test -s "$ANDROID_KEYSTORE_PATH"
+
+      - name: Download Android Node runtime
+        run: |
+          set -euo pipefail
+          runtime_zip="$RUNNER_TEMP/inkos-android-node-runtime-arm64-v8a.zip"
+          curl -fL "$ANDROID_NODE_RUNTIME_URL" -o "$runtime_zip"
+          actual_sha="$(sha256sum "$runtime_zip" | awk '{print $1}')"
+          if [ "$actual_sha" != "$ANDROID_NODE_RUNTIME_SHA256" ]; then
+            echo "::error::Android Node runtime checksum mismatch: $actual_sha"
+            exit 1
+          fi
+          mkdir -p packages/studio/android/app/src/main/jniLibs/arm64-v8a
+          unzip -o "$runtime_zip" -d packages/studio/android/app/src/main/jniLibs/arm64-v8a
+          test -s packages/studio/android/app/src/main/jniLibs/arm64-v8a/libnode.so
+          test -s packages/studio/android/app/src/main/jniLibs/arm64-v8a/libc++_shared.so
 
       - run: pnpm install --frozen-lockfile
 
