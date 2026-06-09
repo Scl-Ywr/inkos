@@ -47,9 +47,10 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: Use runner Java home
+      - name: Use runner Gradle settings
         run: |
           sed -i.bak '/^org\.gradle\.java\.home=/d' packages/studio/android/gradle.properties
+          sed -i.bak '/maven\.aliyun\.com/d' packages/studio/android/build.gradle
 
       - name: Verify release signing secrets
         run: |
