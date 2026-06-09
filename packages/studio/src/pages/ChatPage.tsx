@@ -170,10 +170,18 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
         if (!cancelled) setTokenSavingsLabel(null);
       }
     };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      void refresh();
+    };
     void refresh();
-    const id = window.setInterval(() => void refresh(), 10_000);
+    const id = window.setInterval(refreshWhenVisible, 10_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("focus", refreshWhenVisible);
     return () => {
       cancelled = true;
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("focus", refreshWhenVisible);
       window.clearInterval(id);
     };
   }, []);

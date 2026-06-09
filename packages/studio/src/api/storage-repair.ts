@@ -8,6 +8,34 @@ import {
   serviceConfigKey,
   syncTopLevelLlmMirror,
 } from "./service-config-utils.js";
+
+const DEFAULT_STUDIO_TEXT_SERVICE = "xiaomimimo";
+const DEFAULT_STUDIO_TEXT_MODEL = "mimo-v2-omni";
+const LEGACY_STUDIO_TEXT_MODELS = new Set(["agnes-2.0-flash"]);
+
+function looksLikeXiaomiMimoService(service: string, baseUrl: string): boolean {
+  return service === DEFAULT_STUDIO_TEXT_SERVICE
+    || service === "custom:mimo"
+    || baseUrl.includes("xiaomimimo.com")
+    || baseUrl.includes("api-ai.xiaomi.com");
+}
+
+function normalizeStudioTextService(service: string): string {
+  return service === "apihub" ? DEFAULT_STUDIO_TEXT_SERVICE : service;
+}
+
+function normalizeStudioDefaultTextModel(args: {
+  readonly model: string;
+  readonly service: string;
+  readonly baseUrl: string;
+}): string {
+  if (!args.model) return DEFAULT_STUDIO_TEXT_MODEL;
+  if (LEGACY_STUDIO_TEXT_MODELS.has(args.model) && looksLikeXiaomiMimoService(args.service, args.baseUrl)) {
+    return DEFAULT_STUDIO_TEXT_MODEL;
+  }
+  return args.model;
+}
+
 export async function ensureProjectStorageSkeleton(root: string): Promise<void> {
   const projectDirs = [
     root,
@@ -535,14 +563,25 @@ export function buildDefaultStudioProjectConfig(existing?: Record<string, unknow
   const existingCover = existingLlm.cover && typeof existingLlm.cover === "object"
     ? existingLlm.cover as Record<string, unknown>
     : {};
-  const service = typeof existingLlm.service === "string" && existingLlm.service.trim()
-    ? existingLlm.service.trim()
-    : "apihub";
-  const defaultModel = typeof existingLlm.defaultModel === "string" && existingLlm.defaultModel.trim()
+  const services = normalizeServiceConfig(existingLlm.services);
+  const service = normalizeStudioTextService(
+    typeof existingLlm.service === "string" && existingLlm.service.trim()
+      ? existingLlm.service.trim()
+      : DEFAULT_STUDIO_TEXT_SERVICE,
+  );
+  const selectedServiceEntry = services.find((entry) => serviceConfigKey(entry) === service);
+  const selectedBaseUrl = selectedServiceEntry?.baseUrl
+    ?? (typeof existingLlm.baseUrl === "string" ? existingLlm.baseUrl : "");
+  const requestedDefaultModel = typeof existingLlm.defaultModel === "string" && existingLlm.defaultModel.trim()
     ? existingLlm.defaultModel.trim()
     : typeof existingLlm.model === "string" && existingLlm.model.trim()
       ? existingLlm.model.trim()
-      : "agnes-2.0-flash";
+      : "";
+  const defaultModel = normalizeStudioDefaultTextModel({
+    model: requestedDefaultModel,
+    service,
+    baseUrl: selectedBaseUrl,
+  });
 
   return {
     ...existing,
@@ -565,7 +604,7 @@ export function buildDefaultStudioProjectConfig(existing?: Record<string, unknow
             : "openai",
       defaultModel,
       model: defaultModel,
-      services: normalizeServiceConfig(existingLlm.services),
+      services,
       cover: {
         ...existingCover,
         service: typeof existingCover.service === "string" && existingCover.service.trim()

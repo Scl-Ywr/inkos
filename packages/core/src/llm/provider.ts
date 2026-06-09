@@ -735,18 +735,25 @@ function isOpenAICompatibleRequestParameterErrorText(text: string): boolean {
 function shouldRetryWithConservativeChatPayload(
   detail: string,
   messages: ReadonlyArray<LLMMessage>,
-  resolved: { readonly maxTokens: number },
+  resolved: { readonly temperature: number; readonly maxTokens: number },
+  compatibilityFallbackLevel: number,
 ): boolean {
   if (!isOpenAICompatibleRequestParameterErrorText(detail)) return false;
-  return hasSystemMessages(messages) || resolved.maxTokens > 4096;
+  if (compatibilityFallbackLevel >= 2) return false;
+  if (compatibilityFallbackLevel > 0) return true;
+  return hasSystemMessages(messages) || resolved.maxTokens > 4096 || resolved.temperature !== 1;
 }
 
 function conservativeChatResolved(
   resolved: { readonly temperature: number; readonly maxTokens: number; readonly extra: Record<string, unknown> },
+  compatibilityFallbackLevel: number,
 ): { readonly temperature: number; readonly maxTokens: number; readonly extra: Record<string, unknown> } {
+  const maxTokens = compatibilityFallbackLevel >= 2 ? 2048 : 4096;
   return {
     ...resolved,
-    maxTokens: Math.min(resolved.maxTokens, 4096),
+    temperature: 1,
+    maxTokens: Math.min(resolved.maxTokens, maxTokens),
+    extra: {},
   };
 }
 
@@ -1000,7 +1007,7 @@ async function chatCompletionViaCustomOpenAICompatible(
   onStreamProgress?: OnStreamProgress,
   onTextDelta?: (text: string) => void,
   signal?: AbortSignal,
-  allowSystemRoleFallback = true,
+  compatibilityFallbackLevel = 0,
 ): Promise<LLMResponse> {
   if (client.provider === "anthropic") {
     return chatCompletionViaCustomAnthropicCompatible(client, model, messages, resolved, onStreamProgress, onTextDelta, signal);
@@ -1113,7 +1120,7 @@ async function chatCompletionViaCustomOpenAICompatible(
     max_tokens: resolved.maxTokens,
     ...extra,
   };
-  if (client.stream) {
+  if (client.stream && compatibilityFallbackLevel === 0) {
     payload.stream_options = { include_usage: true };
   }
 
@@ -1125,7 +1132,20 @@ async function chatCompletionViaCustomOpenAICompatible(
   }, client.proxyUrl);
   if (!response.ok) {
     const detail = await readErrorResponse(response);
-    if (allowSystemRoleFallback && hasSystemMessages(messages) && isSystemRoleUnsupportedErrorText(detail)) {
+    const nextFallbackLevel = compatibilityFallbackLevel + 1;
+    if (shouldRetryWithConservativeChatPayload(detail, messages, resolved, compatibilityFallbackLevel)) {
+      return chatCompletionViaCustomOpenAICompatible(
+        client,
+        model,
+        hasSystemMessages(messages) ? foldSystemMessagesIntoFirstUser(messages) : messages,
+        conservativeChatResolved(resolved, nextFallbackLevel),
+        onStreamProgress,
+        onTextDelta,
+        signal,
+        nextFallbackLevel,
+      );
+    }
+    if (compatibilityFallbackLevel === 0 && hasSystemMessages(messages) && isSystemRoleUnsupportedErrorText(detail)) {
       return chatCompletionViaCustomOpenAICompatible(
         client,
         model,
@@ -1134,19 +1154,7 @@ async function chatCompletionViaCustomOpenAICompatible(
         onStreamProgress,
         onTextDelta,
         signal,
-        false,
-      );
-    }
-    if (allowSystemRoleFallback && shouldRetryWithConservativeChatPayload(detail, messages, resolved)) {
-      return chatCompletionViaCustomOpenAICompatible(
-        client,
-        model,
-        foldSystemMessagesIntoFirstUser(messages),
-        conservativeChatResolved(resolved),
-        onStreamProgress,
-        onTextDelta,
-        signal,
-        false,
+        nextFallbackLevel,
       );
     }
     throw wrapLLMError(new Error(detail), errorCtx);
@@ -1359,6 +1367,9 @@ export async function chatWithTools(
       recordTokenOptimizationEvent({ kind: "cache-skip", label: "工具调用请求不跳过 LLM，避免跳过工具执行" });
       recordTokenOptimizationEvent({ kind: "llm-call", label: "LLM 工具调用请求" });
     }
+    if (shouldUseNativeCustomTransport(client) && client.provider === "openai") {
+      return await chatWithToolsViaNativeOpenAICompatible(client, model, optimizedMessages, tools, resolved);
+    }
     return await chatWithToolsViaPiAi(client, model, optimizedMessages, tools, resolved);
   } catch (error) {
     throw wrapLLMError(error, errorCtx);
@@ -1375,8 +1386,15 @@ export async function chatWithTools(
  */
 function resolvePiModel(client: LLMClient, model: string): PiModel<PiApi> {
   const base = client._piModel!;
-  if (base.id === model) return base;
-  return { ...base, id: model, name: model };
+  if (base.id === model || base.name === model) return base;
+  const modelCard = lookupModel(client.service ?? "custom", model);
+  return {
+    ...base,
+    id: modelCard?.deploymentName ?? model,
+    name: model,
+    contextWindow: modelCard?.contextWindowTokens ?? base.contextWindow,
+    maxTokens: modelCard?.maxOutput ?? base.maxTokens,
+  };
 }
 
 /** Convert inkos LLMMessage[] to pi-ai Context. */
@@ -1462,6 +1480,154 @@ function toPiTools(tools: ReadonlyArray<ToolDefinition>): PiTool[] {
     description: t.description,
     parameters: t.parameters as PiTool["parameters"],
   }));
+}
+
+function agentMessagesToOpenAIChatMessages(messages: ReadonlyArray<AgentMessage>): Array<Record<string, unknown>> {
+  return messages.map((message) => {
+    if (message.role === "assistant") {
+      return {
+        role: "assistant",
+        content: message.content ?? null,
+        ...(message.toolCalls && message.toolCalls.length > 0
+          ? {
+              tool_calls: message.toolCalls.map((toolCall) => ({
+                id: toolCall.id,
+                type: "function",
+                function: {
+                  name: toolCall.name,
+                  arguments: toolCall.arguments,
+                },
+              })),
+            }
+          : {}),
+      };
+    }
+    if (message.role === "tool") {
+      return {
+        role: "tool",
+        tool_call_id: message.toolCallId,
+        content: message.content,
+      };
+    }
+    return { role: message.role, content: message.content };
+  });
+}
+
+function toOpenAITools(tools: ReadonlyArray<ToolDefinition>): Array<Record<string, unknown>> {
+  return tools.map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    },
+  }));
+}
+
+function extractOpenAIToolCalls(json: unknown): ToolCall[] {
+  const choices = readJsonPath(json, ["choices"]);
+  if (!Array.isArray(choices)) return [];
+  const message = readJsonPath(choices[0], ["message"]);
+  if (!isJsonRecord(message)) return [];
+  const rawToolCalls = readJsonPath(message, ["tool_calls"]);
+  if (!Array.isArray(rawToolCalls)) return [];
+  return rawToolCalls.flatMap((item): ToolCall[] => {
+    if (!isJsonRecord(item)) return [];
+    const id = readJsonString(item, ["id"]);
+    const name = readJsonString(item, ["function", "name"]);
+    const args = readJsonString(item, ["function", "arguments"]) ?? "{}";
+    if (!id || !name) return [];
+    return [{ id, name, arguments: args }];
+  });
+}
+
+async function chatWithToolsViaNativeOpenAICompatible(
+  client: LLMClient,
+  model: string,
+  messages: ReadonlyArray<AgentMessage>,
+  tools: ReadonlyArray<ToolDefinition>,
+  resolved: { readonly temperature: number; readonly maxTokens: number },
+): Promise<ChatWithToolsResult> {
+  const baseUrl = client._piModel?.baseUrl ?? "";
+  const errorCtx = { baseUrl, model, service: client.service };
+  const payload: Record<string, unknown> = {
+    model: resolvePiModel(client, model).id,
+    messages: agentMessagesToOpenAIChatMessages(messages),
+    tools: toOpenAITools(tools),
+    tool_choice: "auto",
+    stream: client.stream,
+    temperature: resolved.temperature,
+    max_tokens: resolved.maxTokens,
+  };
+  if (client.stream) {
+    payload.stream_options = { include_usage: true };
+  }
+
+  const response = await fetchWithProxy(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+    method: "POST",
+    headers: buildCustomHeaders(client),
+    body: JSON.stringify(payload),
+  }, client.proxyUrl);
+  if (!response.ok) {
+    throw wrapLLMError(new Error(await readErrorResponse(response)), errorCtx);
+  }
+
+  if (!client.stream) {
+    const json = await response.json() as unknown;
+    return {
+      content: extractChatContent(json) || "",
+      toolCalls: extractOpenAIToolCalls(json),
+    };
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw wrapLLMError(new Error("Streaming body unavailable"), errorCtx);
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  const toolCallParts = new Map<number, { id: string; name: string; arguments: string }>();
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parsed = parseSseEvents(buffer);
+    buffer = parsed.rest;
+    for (const event of parsed.events) {
+      if (!event.data || event.data === "[DONE]") continue;
+      const json = JSON.parse(event.data) as unknown;
+      const delta = extractChatDeltaContent(json);
+      if (delta) content += delta;
+      const choices = readJsonPath(json, ["choices"]);
+      if (!Array.isArray(choices)) continue;
+      const rawToolCalls = readJsonPath(choices[0], ["delta", "tool_calls"]);
+      if (!Array.isArray(rawToolCalls)) continue;
+      for (const raw of rawToolCalls) {
+        if (!isJsonRecord(raw)) continue;
+        const index = readJsonNumber(raw, ["index"]) ?? 0;
+        const current = toolCallParts.get(index) ?? { id: "", name: "", arguments: "" };
+        const id = readJsonString(raw, ["id"]);
+        const name = readJsonString(raw, ["function", "name"]);
+        const args = readJsonString(raw, ["function", "arguments"]);
+        toolCallParts.set(index, {
+          id: id ?? current.id,
+          name: name ?? current.name,
+          arguments: current.arguments + (args ?? ""),
+        });
+      }
+    }
+  }
+
+  return {
+    content,
+    toolCalls: [...toolCallParts.values()]
+      .filter((toolCall) => toolCall.id && toolCall.name)
+      .map((toolCall) => ({
+        id: toolCall.id,
+        name: toolCall.name,
+        arguments: toolCall.arguments || "{}",
+      })),
+  };
 }
 
 async function chatCompletionViaPiAi(

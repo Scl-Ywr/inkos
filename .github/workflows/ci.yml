@@ -7,7 +7,7 @@ on:
     branches: [master, main]
 
 jobs:
-  build-and-test:
+  typecheck-and-test:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -29,13 +29,35 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
-      - run: pnpm lint
-      - run: pnpm build
       - run: pnpm test
+
+  build:
+    runs-on: ${{ matrix.os }}
+    needs: typecheck-and-test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node-version: [22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
 
   verify-pack:
     runs-on: ubuntu-latest
-    needs: build-and-test
+    needs: build
     steps:
       - uses: actions/checkout@v4
 

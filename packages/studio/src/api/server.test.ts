@@ -1782,10 +1782,15 @@ describe("createStudioServer daemon lifecycle", () => {
         modelsSource: "api",
       },
     });
-    expect(chatCompletionMock).not.toHaveBeenCalled();
+    expect(chatCompletionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "doubao-seed-2.0-lite",
+      expect.any(Array),
+      expect.any(Object),
+    );
   });
 
-  it("does not run chat probes when /models returns a usable text model", async () => {
+  it("runs a chat probe even when /models returns a usable text model", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -1814,7 +1819,12 @@ describe("createStudioServer daemon lifecycle", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(chatCompletionMock).not.toHaveBeenCalled();
+    expect(chatCompletionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "model-one",
+      expect.any(Array),
+      expect.any(Object),
+    );
     await expect(response.json()).resolves.toMatchObject({
       ok: true,
       selectedModel: "model-one",
@@ -1913,7 +1923,12 @@ describe("createStudioServer daemon lifecycle", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(chatCompletionMock).not.toHaveBeenCalled();
+    expect(chatCompletionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "deepseek-v4-flash",
+      expect.any(Array),
+      expect.any(Object),
+    );
     await expect(response.json()).resolves.toMatchObject({
       ok: true,
       selectedModel: "deepseek-v4-flash",
@@ -1961,7 +1976,12 @@ describe("createStudioServer daemon lifecycle", () => {
       selectedModel: "qwen3.6:35b-a3b",
       models: [{ id: "qwen3.6:35b-a3b", name: "qwen3.6:35b-a3b" }],
     });
-    expect(chatCompletionMock).not.toHaveBeenCalled();
+    expect(chatCompletionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "qwen3.6:35b-a3b",
+      expect.any(Array),
+      expect.any(Object),
+    );
   });
 
   it("does not fall back to the global default model when a bank endpoint probe fails", async () => {

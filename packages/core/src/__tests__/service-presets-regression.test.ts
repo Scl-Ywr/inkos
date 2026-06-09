@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { guessServiceFromBaseUrl, resolveServicePreset, listModelsForService } from "../llm/service-presets.js";
+import { guessServiceFromBaseUrl, resolveServicePreset, listModelsForService, listServicesWithModelCount, SERVICE_TO_PI_PROVIDER } from "../llm/service-presets.js";
 
 describe("service-presets regression", () => {
   describe("Kimi Code preset", () => {
@@ -68,6 +68,15 @@ describe("service-presets regression", () => {
     it("returns empty for custom service without apikey + baseUrl", async () => {
       const models = await listModelsForService("custom");
       expect(models).toEqual([]);
+    });
+
+    it("counts provider-bank-only services, not only legacy SERVICE_PRESETS", async () => {
+      const services = await listServicesWithModelCount();
+      expect(services.some((service) => service.service === "kimicode")).toBe(true);
+      expect(services.some((service) => service.service === "githubCopilot")).toBe(true);
+      expect(services.find((service) => service.service === "custom")).toMatchObject({ modelCount: 0 });
+      expect(SERVICE_TO_PI_PROVIDER.kimicode).toBe("anthropic");
+      expect(SERVICE_TO_PI_PROVIDER.githubCopilot).toBe("openai");
     });
   });
 });
