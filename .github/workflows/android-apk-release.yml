@@ -47,6 +47,10 @@ jobs:
           distribution: temurin
           java-version: 21
 
+      - name: Use runner Java home
+        run: |
+          sed -i.bak '/^org\.gradle\.java\.home=/d' packages/studio/android/gradle.properties
+
       - name: Verify release signing secrets
         run: |
           set -euo pipefail
