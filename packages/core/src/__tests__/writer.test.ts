@@ -514,6 +514,90 @@ describe("WriterAgent", () => {
     }
   });
 
+  it("skips the settlement LLM when quick writing requests deferred state settlement", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-writer-quick-skip-settlement-"));
+    const bookDir = join(root, "book");
+    const storyDir = join(bookDir, "story");
+    const chaptersDir = join(bookDir, "chapters");
+    await mkdir(storyDir, { recursive: true });
+    await mkdir(chaptersDir, { recursive: true });
+
+    await Promise.all([
+      writeFile(join(chaptersDir, "index.json"), "[]", "utf-8"),
+      writeFile(join(storyDir, "story_bible.md"), "# Story Bible\n\nLong setting bible that should not force a second LLM call.\n", "utf-8"),
+      writeFile(join(storyDir, "volume_outline.md"), "# Volume Outline\n\n## Chapter 1\nOpen with the ledger.\n", "utf-8"),
+      writeFile(join(storyDir, "style_guide.md"), "# Style Guide\n\n- Direct prose.\n", "utf-8"),
+      writeFile(join(storyDir, "current_state.md"), "# Current State\n\n| Field | Value |\n| --- | --- |\n| Current Chapter | 0 |\n", "utf-8"),
+      writeFile(join(storyDir, "particle_ledger.md"), "# Particle Ledger\n", "utf-8"),
+      writeFile(join(storyDir, "pending_hooks.md"), "# Pending Hooks\n\n(None yet.)\n", "utf-8"),
+      writeFile(join(storyDir, "chapter_summaries.md"), "# Chapter Summaries\n\n| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n", "utf-8"),
+      writeFile(join(storyDir, "subplot_board.md"), "# Subplot Board\n", "utf-8"),
+      writeFile(join(storyDir, "emotional_arcs.md"), "# Emotional Arcs\n", "utf-8"),
+      writeFile(join(storyDir, "character_matrix.md"), "# Character Matrix\n", "utf-8"),
+    ]);
+
+    const agent = new WriterAgent({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: {
+          temperature: 0.7,
+          maxTokens: 4096,
+          thinkingBudget: 0,
+          extra: {},
+        },
+      },
+      model: "test-model",
+      projectRoot: root,
+    });
+
+    const chatSpy = vi.spyOn(WriterAgent.prototype as never, "chat" as never)
+      .mockResolvedValueOnce({
+        content: [
+          "=== PRE_WRITE_CHECK ===",
+          "- ok",
+          "",
+          "=== CHAPTER_TITLE ===",
+          "Ledger Rain",
+          "",
+          "=== CHAPTER_CONTENT ===",
+          "Rain tapped the ledger while Lin Yue chose the road ahead.",
+        ].join("\n"),
+        usage: { promptTokens: 11, completionTokens: 22, totalTokens: 33 },
+      });
+
+    try {
+      const output = await agent.writeChapter({
+        book: {
+          id: "quick-book",
+          title: "Quick Book",
+          platform: "tomato",
+          genre: "xuanhuan",
+          status: "active",
+          targetChapters: 80,
+          chapterWordCount: 2200,
+          createdAt: "2026-03-23T00:00:00.000Z",
+          updatedAt: "2026-03-23T00:00:00.000Z",
+          language: "en",
+        },
+        bookDir,
+        chapterNumber: 1,
+        lengthSpec: buildLengthSpec(120, "en"),
+        skipSettlement: true,
+      });
+
+      expect(chatSpy).toHaveBeenCalledTimes(1);
+      expect(output.postSettlement).toContain("Quick mode skipped");
+      expect(output.updatedState).toBe("");
+      expect(output.updatedHooks).toBe("");
+      expect(output.chapterSummary).toContain("settlement deferred");
+      expect(output.tokenUsage).toEqual({ promptTokens: 11, completionTokens: 22, totalTokens: 33 });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("builds structured runtime-state artifacts when settler returns a delta", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-writer-runtime-state-test-"));
     const bookDir = join(root, "book");

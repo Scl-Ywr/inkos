@@ -2,10 +2,15 @@ import { PipelineRunner, createLLMClient } from "@actalk/inkos-core";
 import type { Hono } from "hono";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { LLMConfig } from "@actalk/inkos-core";
+import type { LLMConfig, WritePipelineMode } from "@actalk/inkos-core";
 import { resolveAgentModelSelection } from "./agent-model-resolution.js";
+import { enqueueBookScopedBackgroundResync } from "./background-resync-queue.js";
 import type { BookChapterRoutesDeps } from "./book-route-context.js";
 import { findChapterMarkdownFile, parsePositiveIntegerParam } from "./book-route-utils.js";
+
+function resolveWritePipelineMode(value: unknown): WritePipelineMode {
+  return value === "full" ? "full" : "quick";
+}
 
 export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesDeps): void {
   const {
@@ -17,6 +22,8 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
     broadcast,
     serverLog,
     setOperation,
+    getActiveOperation,
+    touchOperation,
     createOperationController,
     isOperationCancelled,
     clearOperation,
@@ -29,10 +36,14 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
 
   app.post("/api/v1/books/:id/write-next", async (c) => {
     const id = c.req.param("id");
-    const body = await c.req.json<{ wordCount?: number }>().catch(() => ({ wordCount: undefined }));
+    const body = await c.req
+      .json<{ wordCount?: number; mode?: unknown }>()
+      .catch(() => ({ wordCount: undefined, mode: undefined }));
+    const mode = resolveWritePipelineMode(body.mode);
+    const modeLabel = mode === "quick" ? "快速" : "完整";
 
     broadcast("write:start", { bookId: id });
-    serverLog("info", "write", `开始写作书籍 ${id}`);
+    serverLog("info", "write", `开始${modeLabel}写作书籍 ${id}`);
 
     // Track active operation for session recovery
     const operationKey = `write:${id}`;
@@ -40,20 +51,94 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
       type: "write",
       bookId: id,
       label: "章节写作",
-      message: `正在为《${id}》生成下一章，AI 正在整理剧情、人物状态和章节文本。`,
+      message: `正在以${modeLabel}模式为《${id}》生成下一章，AI 正在整理剧情、人物状态和章节文本。`,
     });
     const operationController = createOperationController(operationKey);
 
+    const startBackgroundStateResync = (chapterNumber: number) => {
+      const resyncKey = `resync:${id}:${chapterNumber}`;
+      if (getActiveOperation(resyncKey)) {
+        serverLog("warn", "resync", `书籍 ${id} 第 ${chapterNumber} 章状态补算已在运行，跳过重复任务`);
+        return;
+      }
+      if (!enqueueBookScopedBackgroundResync(id, resyncKey, async () => {
+
+      broadcast("resync:start", { bookId: id, chapter: chapterNumber, background: true });
+      setOperation(resyncKey, {
+        type: "resync",
+        bookId: id,
+        chapter: chapterNumber,
+        label: "后台状态补算",
+        message: `《${id}》第 ${chapterNumber} 章正文已完成，正在后台同步 truth/state/summary。`,
+      });
+      const resyncController = createOperationController(resyncKey);
+      touchOperation(resyncKey, `正在后台补算《${id}》第 ${chapterNumber} 章状态产物。`);
+
+      const resyncPipeline = new PipelineRunner(await buildPipelineConfig({
+        bookId: id,
+        operationKey: resyncKey,
+        signal: resyncController.signal,
+      }));
+      await resyncPipeline.resyncChapterArtifacts(id, chapterNumber).then(
+        (resyncResult) => {
+          if (isOperationCancelled(resyncKey) || resyncController.signal.aborted) {
+            clearOperation(resyncKey, { status: "cancelled", message: "用户已停止后台状态补算。" });
+            return;
+          }
+          const message = `《${id}》第 ${resyncResult.chapterNumber} 章状态补算完成：${resyncResult.status}`;
+          serverLog("info", "resync", message);
+          void syncBookDerivedFoundationFiles(id).catch((error) => {
+            serverLog("warn", "foundation", `同步 ${id} 核心文件失败: ${error instanceof Error ? error.message : String(error)}`);
+          });
+          rememberRuntimeNotice({
+            kind: "completed",
+            title: "状态补算完成",
+            message,
+          });
+          clearOperation(resyncKey, { status: "completed", message });
+          broadcast("resync:complete", {
+            bookId: id,
+            chapter: resyncResult.chapterNumber,
+            status: resyncResult.status,
+            background: true,
+          });
+        },
+        (error) => {
+          const msg = error instanceof Error ? error.message : String(error);
+          if (isOperationAbortError(error)) {
+            clearOperation(resyncKey, { status: "cancelled", message: "用户已停止后台状态补算。" });
+            broadcast("resync:error", { bookId: id, chapter: chapterNumber, error: "用户已停止后台状态补算。", background: true });
+            return;
+          }
+          const message = `《${id}》第 ${chapterNumber} 章状态补算失败：${msg}`;
+          clearOperation(resyncKey, { status: "error", message, error: msg });
+          serverLog("error", "resync", message);
+          rememberRuntimeNotice({
+            kind: "error",
+            title: "状态补算失败",
+            message: `${message.slice(0, 180)}。章节正文已保留，可手动重同步。`,
+          });
+          broadcast("resync:error", { bookId: id, chapter: chapterNumber, error: msg, background: true });
+        },
+      );
+      })) {
+        serverLog("warn", "resync", `书籍 ${id} 第 ${chapterNumber} 章状态补算已排队，跳过重复任务`);
+      }
+    };
+
     // Fire and forget — progress/completion/errors pushed via SSE
-    const pipeline = new PipelineRunner(await buildPipelineConfig({ bookId: id, signal: operationController.signal }));
-    pipeline.writeNextChapter(id, body.wordCount).then(
+    touchOperation(operationKey, `正在准备《${id}》下一章上下文和写作计划（${modeLabel}模式）。`);
+    const pipeline = new PipelineRunner(await buildPipelineConfig({ bookId: id, operationKey, signal: operationController.signal }));
+    pipeline.writeNextChapter(id, body.wordCount, undefined, { mode }).then(
       (result) => {
         if (isOperationCancelled(operationKey) || operationController.signal.aborted) {
           serverLog("warn", "write", `书籍 ${id} 写作结果已丢弃：任务已停止`);
           clearOperation(operationKey, { status: "cancelled", message: "用户已停止当前生成。" });
           return;
         }
-        const completionMessage = `书籍 ${id} 第 ${result.chapterNumber} 章写作完成: ${result.title} (${result.wordCount} 字)`;
+        const completionMessage = mode === "quick"
+          ? `书籍 ${id} 第 ${result.chapterNumber} 章正文已完成: ${result.title} (${result.wordCount} 字)，状态补算已转入后台`
+          : `书籍 ${id} 第 ${result.chapterNumber} 章${modeLabel}写作完成: ${result.title} (${result.wordCount} 字)`;
         serverLog("info", "write", completionMessage);
         void syncBookDerivedFoundationFiles(id).catch((error) => {
           serverLog("warn", "foundation", `同步 ${id} 核心文件失败: ${error instanceof Error ? error.message : String(error)}`);
@@ -61,15 +146,20 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
         const runtimeTokenUsage = readRuntimeTokenUsage(result.tokenUsage);
         rememberRuntimeNotice({
           kind: "completed",
-          title: "章节生成完成",
+          title: mode === "quick" ? "章节正文已完成" : "章节生成完成",
           message: appendRuntimeTokenSummary(
-            `《${id}》第 ${result.chapterNumber} 章《${result.title}》已完成，${result.wordCount} 字，状态 ${result.status}。`,
+            mode === "quick"
+              ? `《${id}》第 ${result.chapterNumber} 章《${result.title}》正文已完成，${result.wordCount} 字；truth/state/summary 正在后台补算。`
+              : `《${id}》第 ${result.chapterNumber} 章《${result.title}》已完成，${result.wordCount} 字，状态 ${result.status}。`,
             runtimeTokenUsage,
           ),
           ...(runtimeTokenUsage ? { tokenUsage: runtimeTokenUsage } : {}),
         });
         clearOperation(operationKey, { status: "completed", message: completionMessage });
         broadcast("write:complete", { bookId: id, chapterNumber: result.chapterNumber, status: result.status, title: result.title, wordCount: result.wordCount });
+        if (mode === "quick") {
+          startBackgroundStateResync(result.chapterNumber);
+        }
       },
       (e) => {
         const msg = e instanceof Error ? e.message : String(e);
@@ -111,7 +201,8 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
     });
     const operationController = createOperationController(operationKey);
 
-    const pipeline = new PipelineRunner(await buildPipelineConfig({ bookId: id, signal: operationController.signal }));
+    touchOperation(operationKey, `正在准备《${id}》草稿上下文和章节骨架。`);
+    const pipeline = new PipelineRunner(await buildPipelineConfig({ bookId: id, operationKey, signal: operationController.signal }));
     pipeline.writeDraft(id, body.context, body.wordCount).then(
       (result) => {
         if (isOperationCancelled(operationKey) || operationController.signal.aborted) {
@@ -179,7 +270,9 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
       label: "章节审计",
       message: `正在审计《${id}》第 ${chapterNum} 章的连续性和设定一致性。`,
     });
+    const operationController = createOperationController(operationKey);
     try {
+      touchOperation(operationKey, `正在读取《${id}》第 ${chapterNum} 章并准备审计上下文。`);
       const book = await state.loadBookConfig(id);
       const chaptersDir = join(bookDir, "chapters");
       const match = await findChapterMarkdownFile(chaptersDir, chapterNum);
@@ -213,7 +306,9 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
         model: modelSelection.modelId,
         projectRoot: root,
         bookId: id,
+        signal: operationController.signal,
       });
+      touchOperation(operationKey, `正在调用模型审计《${id}》第 ${chapterNum} 章。`);
       const result = await auditor.auditChapter(bookDir, content, chapterNum, book.genre);
       clearOperation(operationKey, {
         status: "completed",
@@ -223,6 +318,11 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
       return c.json(result);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      if (isOperationAbortError(e)) {
+        clearOperation(operationKey, { status: "cancelled", message: "用户已停止当前生成。" });
+        broadcast("audit:error", { bookId: id, error: "用户已停止当前生成。" });
+        return c.json({ error: "用户已停止当前生成。" }, 400);
+      }
       clearOperation(operationKey, { status: "error", message: `《${id}》第 ${chapterNum} 章审计失败：${msg}`, error: msg });
       broadcast("audit:error", { bookId: id, error: msg });
       return c.json({ error: msg }, 500);

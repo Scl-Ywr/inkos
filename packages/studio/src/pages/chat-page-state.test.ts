@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearBookCreateSessionId,
   clearBookCreateAssistantInput,
+  ensureConfiguredModelGroup,
   filterModelGroups,
   getBookCreateAssistantInput,
   getBookCreateSessionId,
@@ -195,8 +196,68 @@ describe("pickModelSelection", () => {
     })).toBeNull();
   });
 
+  it("keeps the current selection while model lists are still loading", () => {
+    expect(pickModelSelection([], "manual-model", "custom:local", null, {
+      modelsLoading: true,
+    })).toBeNull();
+  });
+
   it("returns null when no models are available", () => {
     expect(pickModelSelection([], "gemini-3.1-flash-image-preview", "google")).toBeNull();
+  });
+});
+
+describe("ensureConfiguredModelGroup", () => {
+  it("adds the configured custom model while its live model list is not loaded yet", () => {
+    expect(ensureConfiguredModelGroup([], [
+      { service: "custom:local", label: "Local API", connected: true },
+    ], {
+      service: "custom:local",
+      model: "mimo-v2.5",
+    })).toEqual([
+      {
+        service: "custom:local",
+        label: "Local API",
+        models: [{ id: "mimo-v2.5", name: "mimo-v2.5" }],
+      },
+    ]);
+  });
+
+  it("adds the configured model even before the matching service has refreshed", () => {
+    expect(ensureConfiguredModelGroup([], [], {
+      service: "custom:local",
+      model: "mimo-v2.5",
+    })).toEqual([
+      {
+        service: "custom:local",
+        label: "custom:local",
+        models: [{ id: "mimo-v2.5", name: "mimo-v2.5" }],
+      },
+    ]);
+  });
+
+  it("prepends the configured model to an existing service group when missing", () => {
+    expect(ensureConfiguredModelGroup([
+      {
+        service: "custom:local",
+        label: "Local API",
+        models: [{ id: "other-model", name: "other-model" }],
+      },
+    ], [
+      { service: "custom:local", label: "Local API", connected: true },
+    ], {
+      service: "custom:local",
+      model: "mimo-v2.5",
+    })).toEqual([
+      {
+        service: "custom:local",
+        label: "Local API",
+        models: [
+          { id: "mimo-v2.5", name: "mimo-v2.5" },
+          { id: "other-model", name: "other-model" },
+        ],
+      },
+    ]);
   });
 });
 

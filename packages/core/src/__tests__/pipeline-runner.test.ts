@@ -1511,6 +1511,29 @@ describe("PipelineRunner", () => {
     }
   });
 
+  it("passes skipSettlement to writer in quick writeNextChapter mode", async () => {
+    const { root, runner, bookId } = await createRunnerFixture({
+      inputGovernanceMode: "legacy",
+    });
+    const writeChapter = vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
+      createWriterOutput({
+        chapterNumber: 1,
+        content: "Quick pipeline draft.",
+        wordCount: "Quick pipeline draft.".length,
+      }),
+    );
+
+    try {
+      await runner.writeNextChapter(bookId, 220, undefined, { mode: "quick" });
+
+      expect(writeChapter.mock.calls[0]?.[0]).toMatchObject({
+        skipSettlement: true,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("passes configured writeNextChapter context through planner and governed writer input", async () => {
     const chapterContext = "本章标题：雨夜账本\n必须围绕账本失窃后的当面对质展开。";
     const { root, runner, state, bookId } = await createRunnerFixture({

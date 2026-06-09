@@ -16,6 +16,11 @@ import {
   gatherPlanningMaterials,
   loadPlanningSeedMaterials,
 } from "../utils/planning-materials.js";
+import {
+  buildPlannerContextBudget,
+  compactPlanningTextForChapter,
+  type PlannerContextCompaction,
+} from "../utils/planner-context-budget.js";
 import { parseMemo, PlannerParseError } from "../utils/chapter-memo-parser.js";
 import {
   buildPlannerUserMessage,
@@ -231,28 +236,52 @@ export class PlannerAgent extends BaseAgent {
       ? "Fix and re-emit."
       : "请修正后重新输出。";
 
+    const budget = buildPlannerContextBudget();
+    const compactions: PlannerContextCompaction[] = [];
+    const compact = (label: string, text: string, maxChars: number): string => {
+      const result = compactPlanningTextForChapter(text, {
+        label,
+        maxChars,
+        chapterNumber: input.chapterNumber,
+        goal: input.fallbackGoal,
+        language,
+      });
+      if (result.compaction) compactions.push(result.compaction);
+      return result.text;
+    };
+
     const userMessage = buildPlannerUserMessage({
       chapterNumber: input.chapterNumber,
       previousChapterEndingExcerpt: input.previousEndingExcerpt?.trim()
-        ? input.previousEndingExcerpt.trim()
+        ? compact("previousEndingExcerpt", input.previousEndingExcerpt.trim(), budget.previousEndingExcerpt)
         : noPriorChapter,
-      recentSummaries: formatRecentSummaries(input.chapterSummariesRaw, input.chapterNumber, 3),
-      currentArcProse: composeCurrentArcProse(subplotBoard, emotionalArcs, input.chapterNumber),
-      protagonistMatrixRow: extractProtagonistRow(characterMatrix),
-      opponentRows: extractOpponentRows(characterMatrix, 3),
-      collaboratorRows: extractCollaboratorRows(characterMatrix, 3),
-      relevantThreads: extractRelevantThreads(pendingHooks, subplotBoard),
-      recyclableHooks: formatRecyclableHooks(
-        input.recyclableHooks ?? [],
-        input.chapterNumber,
-        language,
+      recentSummaries: compact("recentSummaries", formatRecentSummaries(input.chapterSummariesRaw, input.chapterNumber, 3), budget.recentSummaries),
+      currentArcProse: compact("currentArcProse", composeCurrentArcProse(subplotBoard, emotionalArcs, input.chapterNumber), budget.currentArcProse),
+      protagonistMatrixRow: compact("protagonistMatrixRow", extractProtagonistRow(characterMatrix), budget.protagonistMatrixRow),
+      opponentRows: compact("opponentRows", extractOpponentRows(characterMatrix, 3), budget.opponentRows),
+      collaboratorRows: compact("collaboratorRows", extractCollaboratorRows(characterMatrix, 3), budget.collaboratorRows),
+      relevantThreads: compact("relevantThreads", extractRelevantThreads(pendingHooks, subplotBoard), budget.relevantThreads),
+      recyclableHooks: compact(
+        "recyclableHooks",
+        formatRecyclableHooks(
+          input.recyclableHooks ?? [],
+          input.chapterNumber,
+          language,
+        ),
+        budget.recyclableHooks,
       ),
       isGoldenOpening: input.isGoldenOpening,
-      bookRulesRelevant: bookRulesRaw.trim().length > 0 ? bookRulesRaw.trim() : noBookRules,
-      brief: input.brief ?? "",
-      chapterContext: input.chapterContext ?? "",
+      bookRulesRelevant: bookRulesRaw.trim().length > 0 ? compact("bookRulesRelevant", bookRulesRaw.trim(), budget.bookRulesRelevant) : noBookRules,
+      brief: compact("brief", input.brief ?? "", budget.brief),
+      chapterContext: compact("chapterContext", input.chapterContext ?? "", budget.chapterContext),
       language,
     });
+    if (compactions.length > 0) {
+      const detail = compactions
+        .map((item) => `${item.label}:${item.originalChars}->${item.compactedChars}`)
+        .join(", ");
+      this.log?.info?.(`[planner] compacted planning context for chapter ${input.chapterNumber}: ${detail}`);
+    }
 
     const systemPrompt = getPlannerMemoSystemPrompt(language);
 
@@ -293,8 +322,8 @@ export class PlannerAgent extends BaseAgent {
         lastError = error;
         this.log?.warn(`[planner] memo parse failed (attempt ${attempt + 1}/${MEMO_RETRY_LIMIT}): ${error.message}`);
         const chapterReminder = language === "en"
-          ? `The YAML frontmatter chapter field MUST be exactly ${input.chapterNumber}; do not reuse a previous/example chapter number.`
-          : `YAML frontmatter 的 chapter 字段必须精确写 ${input.chapterNumber}，不要沿用上一章或示例章号。`;
+          ? `The YAML frontmatter chapter field MUST be exactly ${input.chapterNumber}; do not reuse a previous/example chapter number. Re-emit every required markdown heading verbatim, including "## Do not"; if there are no extra prohibitions, write "none" under it.`
+          : `YAML frontmatter 的 chapter 字段必须精确写 ${input.chapterNumber}，不要沿用上一章或示例章号。必须逐字重新输出所有必填 markdown 标题，包括 "## 不要做"；如果没有额外禁忌，就在该标题下写"无"。`;
         currentUserMessage = `${userMessage}\n\n${retryFeedbackHeader}\n${error.message}\n${chapterReminder}\n${retryFeedbackTrailer}`;
       }
     }

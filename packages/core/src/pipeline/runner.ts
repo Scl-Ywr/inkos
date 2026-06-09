@@ -348,6 +348,12 @@ export interface InitBookOptions {
   readonly currentFocus?: string;
 }
 
+export type WritePipelineMode = "quick" | "full";
+
+export interface WriteNextChapterOptions {
+  readonly mode?: WritePipelineMode;
+}
+
 export class PipelineRunner {
   private readonly state: StateManager;
   private readonly config: PipelineConfig;
@@ -1379,10 +1385,21 @@ export class PipelineRunner {
   // Full pipeline (convenience — runs draft + audit + revise in one shot)
   // ---------------------------------------------------------------------------
 
-  async writeNextChapter(bookId: string, wordCount?: number, temperatureOverride?: number): Promise<ChapterPipelineResult> {
+  async writeNextChapter(
+    bookId: string,
+    wordCount?: number,
+    temperatureOverride?: number,
+    options: WriteNextChapterOptions = {},
+  ): Promise<ChapterPipelineResult> {
     const releaseLock = await this.state.acquireBookLock(bookId);
     try {
-      return await this._writeNextChapterLocked(bookId, wordCount, temperatureOverride, this.config.externalContext);
+      return await this._writeNextChapterLocked(
+        bookId,
+        wordCount,
+        temperatureOverride,
+        this.config.externalContext,
+        options,
+      );
     } finally {
       await releaseLock();
     }
@@ -1411,6 +1428,7 @@ export class PipelineRunner {
     wordCount?: number,
     temperatureOverride?: number,
     externalContext?: string,
+    options: WriteNextChapterOptions = {},
   ): Promise<ChapterPipelineResult> {
     await this.state.ensureControlDocuments(bookId);
     const book = await this.state.loadBookConfig(bookId);
@@ -1418,6 +1436,17 @@ export class PipelineRunner {
     await this.assertNoPendingStateRepair(bookId);
     const chapterNumber = await this.state.getNextChapterNumber(bookId);
     const stageLanguage = await this.resolveBookLanguage(book);
+    const writeMode: WritePipelineMode = options.mode ?? "full";
+    const quickMode = writeMode === "quick";
+    this.logStage(stageLanguage, quickMode
+      ? {
+          zh: "快速写作模式：跳过 AI 审计、自动修订和真相校验",
+          en: "quick writing mode: skipping AI audit, auto-revision, and truth validation",
+        }
+      : {
+          zh: "完整写作模式：执行 planner、writer、audit、revise、settle 全链路",
+          en: "full writing mode: running planner, writer, audit, revise, and settle",
+        });
     this.logStage(stageLanguage, { zh: "准备章节输入", en: "preparing chapter inputs" });
     const writeInput = await this.prepareWriteInput(
       book,
@@ -1464,6 +1493,7 @@ export class PipelineRunner {
       lengthSpec,
       ...(wordCount ? { wordCountOverride: wordCount } : {}),
       ...(temperatureOverride ? { temperatureOverride } : {}),
+      ...(quickMode ? { skipSettlement: true } : {}),
     });
     const writerCount = countChapterLength(output.content, lengthSpec.countingMode);
     let totalUsage: TokenUsageSummary = output.tokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
@@ -1509,7 +1539,7 @@ export class PipelineRunner {
       reducedControlInput,
       lengthSpec,
       initialUsage: totalUsage,
-      skipAudit: this.config.skipAudit ?? false,
+      skipAudit: quickMode || (this.config.skipAudit ?? false),
       createReviser: () => new ReviserAgent(this.agentCtxFor("reviser", bookId)),
       auditor,
       normalizeDraftLengthIfNeeded: (chapterContent) => this.normalizeDraftLengthIfNeeded({
@@ -1542,7 +1572,7 @@ export class PipelineRunner {
           : [];
         return [...baseIssues, ...ledgerIssues];
       },
-      maxReviewIterations: this.config.writingReviewRetries,
+      maxReviewIterations: quickMode ? 0 : this.config.writingReviewRetries,
       logWarn: (message) => this.logWarn(pipelineLang, message),
       logStage: (message) => this.logStage(stageLanguage, message),
     });
@@ -1665,7 +1695,7 @@ export class PipelineRunner {
     this.logLengthWarnings(lengthWarnings);
 
     // 4.1 Validate settler output before writing (parallel with paragraph shape check)
-    const skipStateValidation = this.config.skipStateValidation ?? false;
+    const skipStateValidation = quickMode || (this.config.skipStateValidation ?? false);
     const paragraphShapePromise = this.runParagraphShapeCheck(bookDir, finalContent, pipelineLang)
       .then((paragraphIssues) => ({ paragraphIssues }));
 

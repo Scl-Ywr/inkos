@@ -68,7 +68,7 @@ describe("interaction tools", () => {
     const writeResult = await tools.writeNextChapter("harbor");
     await tools.reviseDraft("harbor", 3, "rewrite");
 
-    expect(pipeline.writeNextChapter).toHaveBeenCalledWith("harbor");
+    expect(pipeline.writeNextChapter).toHaveBeenCalledWith("harbor", undefined, undefined, { mode: "quick" });
     expect(pipeline.reviseDraft).toHaveBeenCalledWith("harbor", 3, "rewrite");
     expect((writeResult as { __interaction?: { activeChapterNumber?: number } }).__interaction?.activeChapterNumber).toBe(1);
     expect(events).toEqual([]);

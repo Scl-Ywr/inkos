@@ -1,5 +1,5 @@
 export interface ActiveOperation {
-  readonly type: "write" | "draft" | "rewrite" | "agent" | "revise" | "audit";
+  readonly type: "write" | "draft" | "rewrite" | "agent" | "revise" | "audit" | "resync";
   readonly bookId: string;
   readonly startedAt: number;
   readonly updatedAt: number;
@@ -61,6 +61,7 @@ export function operationLabel(type: ActiveOperation["type"]): string {
     case "agent": return "AI 对话";
     case "revise": return "章节修订";
     case "audit": return "章节审计";
+    case "resync": return "状态补算";
   }
 }
 

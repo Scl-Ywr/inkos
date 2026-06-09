@@ -159,7 +159,7 @@ describe("agent deterministic writing tools", () => {
       instruction: "继续写，控制在 2600 字",
     } as any);
 
-    expect(pipeline.writeNextChapter).toHaveBeenCalledWith("harbor", 2600);
+    expect(pipeline.writeNextChapter).toHaveBeenCalledWith("harbor", 2600, undefined, { mode: "quick" });
   });
 
   it("surfaces writer sub-agent pipeline failures as tool errors", async () => {
@@ -192,7 +192,7 @@ describe("agent deterministic writing tools", () => {
       instruction: "继续写下一章",
     } as any);
 
-    expect(pipeline.writeNextChapter).toHaveBeenCalledWith("harbor", 2600);
+    expect(pipeline.writeNextChapter).toHaveBeenCalledWith("harbor", 2600, undefined, { mode: "quick" });
   });
 
   it("documents sub_agent bookId as an optional active-book override", () => {

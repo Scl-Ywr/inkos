@@ -147,12 +147,12 @@ describe("writer agent — wordCount passthrough", () => {
 
   it("passes chapterWordCount as wordCount", async () => {
     await tool.execute("tc1", { agent: "writer", instruction: "Write", bookId: "my-book", chapterWordCount: 5000 });
-    expect(writeNextChapterMock).toHaveBeenCalledWith("my-book", 5000);
+    expect(writeNextChapterMock).toHaveBeenCalledWith("my-book", 5000, undefined, { mode: "quick" });
   });
 
   it("passes undefined when chapterWordCount omitted", async () => {
     await tool.execute("tc2", { agent: "writer", instruction: "Write", bookId: "my-book" });
-    expect(writeNextChapterMock).toHaveBeenCalledWith("my-book", undefined);
+    expect(writeNextChapterMock).toHaveBeenCalledWith("my-book", undefined, undefined, { mode: "quick" });
   });
 });
 

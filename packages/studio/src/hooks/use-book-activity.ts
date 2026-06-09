@@ -13,6 +13,8 @@ const BOOK_REFRESH_EVENTS = new Set([
   "revise:error",
   "audit:complete",
   "audit:error",
+  "resync:complete",
+  "resync:error",
 ]);
 
 const BOOK_COLLECTION_REFRESH_EVENTS = new Set([
@@ -29,6 +31,8 @@ const BOOK_COLLECTION_REFRESH_EVENTS = new Set([
   "revise:error",
   "audit:complete",
   "audit:error",
+  "resync:complete",
+  "resync:error",
 ]);
 
 const DAEMON_STATUS_REFRESH_EVENTS = new Set([

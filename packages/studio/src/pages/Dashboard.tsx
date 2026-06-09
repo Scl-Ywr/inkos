@@ -732,7 +732,7 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: DashboardSseS
                 <div className="flex w-full shrink-0 items-center gap-2 sm:ml-6 sm:w-auto sm:gap-3">
                   <button
                     onClick={async () => {
-                      try { await postApi(`/books/${book.id}/write-next`); }
+                      try { await postApi(`/books/${book.id}/write-next`, { mode: "quick" }); }
                       catch (e) { await appAlert({ title: "写作启动失败", message: e instanceof Error ? e.message : "Write failed", tone: "danger" }); }
                     }}
                     disabled={isWriting}

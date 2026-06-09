@@ -71,7 +71,7 @@ export async function processTuiAgentInput(params: {
   }
 
   if (resolvedBookId && isWriteNextInstruction(params.input)) {
-    const writeResult = await pipeline.writeNextChapter(resolvedBookId);
+    const writeResult = await pipeline.writeNextChapter(resolvedBookId, undefined, undefined, { mode: "quick" });
     const chapterNumber = getResultNumber(writeResult, "chapterNumber");
     const title = getResultString(writeResult, "title");
     const wordCount = getResultNumber(writeResult, "wordCount");

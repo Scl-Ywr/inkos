@@ -730,7 +730,7 @@ export function createInteractionToolsFromDeps(
       const result = await withPipelineInteractionTelemetry(
         instrumentedPipeline,
         bookId,
-        () => pipeline.writeNextChapter(bookId),
+        () => pipeline.writeNextChapter(bookId, undefined, undefined, { mode: "quick" }),
       );
       const chapterLabel = typeof result.chapterNumber === "number"
         ? String(result.chapterNumber).padStart(4, "0")

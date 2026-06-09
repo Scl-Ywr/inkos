@@ -92,6 +92,7 @@ export interface WriteChapterInput {
   readonly wordCountOverride?: number;
   readonly temperatureOverride?: number;
   readonly fileCache?: FileCache;
+  readonly skipSettlement?: boolean;
 }
 
 export interface SettleChapterStateInput {
@@ -328,6 +329,48 @@ export class WriterAgent extends BaseAgent {
     // the LLM self-check may have skipped or abbreviated a row.
     if (input.chapterMemo) {
       this.verifyPreWriteCheckAlignsWithMemo(creative.preWriteCheck, chapterNumber, resolvedLanguage);
+    }
+
+    if (input.skipSettlement) {
+      this.logInfo(resolvedLanguage, {
+        zh: `快速模式：跳过状态结算 LLM（第${chapterNumber}章）`,
+        en: `Quick mode: skipping state settlement LLM for chapter ${chapterNumber}`,
+      });
+      const surfaceNormalizedContent = normalizePostWriteSurface(creative.content, resolvedLanguage);
+      const surfaceNormalizedWordCount = countChapterLength(surfaceNormalizedContent, resolvedLengthSpec.countingMode);
+      const ruleViolations = [
+        ...validatePostWrite(surfaceNormalizedContent, genreProfile, bookRules, resolvedLanguage),
+        ...detectCrossChapterRepetition(surfaceNormalizedContent, fingerprintChapters, resolvedLanguage),
+        ...detectParagraphLengthDrift(surfaceNormalizedContent, fingerprintChapters, resolvedLanguage),
+      ];
+      const postWriteErrors = ruleViolations.filter(v => v.severity === "error");
+      const postWriteWarnings = ruleViolations.filter(v => v.severity === "warning");
+      return {
+        chapterNumber,
+        title: creative.title,
+        content: surfaceNormalizedContent,
+        wordCount: surfaceNormalizedWordCount,
+        preWriteCheck: creative.preWriteCheck,
+        postSettlement: resolvedLanguage === "en"
+          ? "Quick mode skipped AI state settlement; existing truth files were preserved. Run resync/repair for authoritative state updates."
+          : "快速模式已跳过 AI 状态结算；现有真相文件保持不变。需要权威状态更新时可运行重同步/修复。",
+        updatedState: "",
+        updatedLedger: "",
+        updatedHooks: "",
+        chapterSummary: this.buildFastChapterSummaryRow({
+          chapterNumber,
+          title: creative.title,
+          content: surfaceNormalizedContent,
+          language: resolvedLanguage,
+        }),
+        updatedSubplots: "",
+        updatedEmotionalArcs: "",
+        updatedCharacterMatrix: "",
+        postWriteErrors,
+        postWriteWarnings,
+        hookHealthIssues: [],
+        tokenUsage: creativeUsage,
+      };
     }
 
     // ── Phase 2: State settlement (temperature 0.3) ──
@@ -1648,6 +1691,23 @@ ${overrides}\n`;
     });
 
     return filteredRows.length > 0 ? filteredRows.join("\n") : "";
+  }
+
+  private buildFastChapterSummaryRow(params: {
+    readonly chapterNumber: number;
+    readonly title: string;
+    readonly content: string;
+    readonly language: "zh" | "en";
+  }): string {
+    const plain = params.content
+      .replace(/\s+/g, params.language === "en" ? " " : "")
+      .trim();
+    const excerpt = plain.slice(0, params.language === "en" ? 180 : 90);
+    const safe = (value: string) => value.replace(/\|/g, "｜").replace(/\r?\n/g, " ").trim();
+    const quickNote = params.language === "en"
+      ? "quick write; settlement deferred"
+      : "快速写作；状态结算延后";
+    return `| ${params.chapterNumber} | ${safe(params.title)} | 待结算 | ${safe(excerpt)} | ${quickNote} | 待结算 | 待结算 | quick |`;
   }
 
   private sanitizeFilename(title: string): string {

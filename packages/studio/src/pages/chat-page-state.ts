@@ -14,6 +14,12 @@ export interface ChatPageModelPreference {
   readonly service?: string | null;
 }
 
+export interface ChatPageServiceInfo {
+  readonly service: string;
+  readonly label: string;
+  readonly connected: boolean;
+}
+
 export interface ChatPageSessionSummary {
   readonly sessionId: string;
   readonly messageCount: number;
@@ -95,6 +101,7 @@ export function pickModelSelection(
   selectedModel: string | null,
   selectedService: string | null,
   preference?: ChatPageModelPreference | null,
+  options: { readonly modelsLoading?: boolean } = {},
 ): { model: string; service: string } | null {
   const selectedStillAvailable = selectedModel && selectedService
     ? groupedModels.some((group) =>
@@ -103,6 +110,7 @@ export function pickModelSelection(
       )
     : false;
   if (selectedStillAvailable) return null;
+  if (options.modelsLoading && selectedModel && selectedService) return null;
 
   const preferredService = preference?.service?.trim();
   const preferredModel = preference?.model?.trim();
@@ -131,6 +139,41 @@ export function pickModelSelection(
   const firstModel = firstGroup?.models[0];
   if (!firstGroup || !firstModel) return null;
   return { model: firstModel.id, service: firstGroup.service };
+}
+
+export function ensureConfiguredModelGroup(
+  groupedModels: ReadonlyArray<ChatPageModelGroup>,
+  services: ReadonlyArray<ChatPageServiceInfo>,
+  preference?: ChatPageModelPreference | null,
+): ReadonlyArray<ChatPageModelGroup> {
+  const preferredService = preference?.service?.trim();
+  const preferredModel = preference?.model?.trim();
+  if (!preferredService || !preferredModel) return groupedModels;
+
+  const existingIndex = groupedModels.findIndex((group) => group.service === preferredService);
+  if (existingIndex >= 0) {
+    const existing = groupedModels[existingIndex]!;
+    if (existing.models.some((model) => model.id === preferredModel)) return groupedModels;
+    return groupedModels.map((group, index) => index === existingIndex
+      ? {
+          ...existing,
+          models: [
+            { id: preferredModel, name: preferredModel },
+            ...existing.models,
+          ],
+        }
+      : group);
+  }
+
+  const service = services.find((item) => item.service === preferredService);
+  return [
+    {
+      service: preferredService,
+      label: service?.label || preferredService,
+      models: [{ id: preferredModel, name: preferredModel }],
+    },
+    ...groupedModels,
+  ];
 }
 
 export function pickProjectChatSessionId(

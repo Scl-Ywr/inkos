@@ -1458,6 +1458,35 @@ describe("createStudioServer daemon lifecycle", () => {
     });
   });
 
+  it("treats custom services with a saved baseUrl as connected even without an API key", async () => {
+    await writeFile(join(root, "inkos.json"), JSON.stringify({
+      ...projectConfig,
+      llm: {
+        services: [
+          { service: "custom", name: "Local", baseUrl: "http://127.0.0.1:8001/v1" },
+        ],
+        service: "custom:Local",
+        defaultModel: "qwen3.6:35b-a3b",
+      },
+    }, null, 2), "utf-8");
+    loadSecretsMock.mockResolvedValue({ services: {} });
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/services");
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      services: expect.arrayContaining([
+        expect.objectContaining({
+          service: "custom:Local",
+          label: "Local",
+          connected: true,
+        }),
+      ]),
+    });
+  });
+
   it("rejects switching Studio runtime to env config source", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
@@ -2802,7 +2831,7 @@ describe("createStudioServer daemon lifecycle", () => {
         activeBookId: "demo-book",
       },
     });
-    expect(writeNextChapterMock).toHaveBeenCalledWith("demo-book");
+    expect(writeNextChapterMock).toHaveBeenCalledWith("demo-book", undefined, undefined, { mode: "quick" });
     expect(runAgentSessionMock).not.toHaveBeenCalled();
     expect(appendManualSessionMessagesMock).toHaveBeenCalledWith(
       root,
@@ -2837,6 +2866,56 @@ describe("createStudioServer daemon lifecycle", () => {
     }));
   });
 
+  it("passes quick writing mode into Studio write-next", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/books/explicit-quick-book/write-next", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "quick" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(writeNextChapterMock).toHaveBeenCalledWith("explicit-quick-book", undefined, undefined, { mode: "quick" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it("defaults Studio write-next to quick mode and schedules background resync", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/books/default-quick-book/write-next", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    expect(response.status).toBe(200);
+    expect(writeNextChapterMock).toHaveBeenCalledWith("default-quick-book", undefined, undefined, { mode: "quick" });
+    await vi.waitFor(() => {
+      expect(resyncChapterArtifactsMock).toHaveBeenCalledWith("default-quick-book", 3);
+    });
+  });
+
+  it("does not schedule background resync for full Studio write-next", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/books/full-mode-book/write-next", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "full" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(writeNextChapterMock).toHaveBeenCalledWith("full-mode-book", undefined, undefined, { mode: "full" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(resyncChapterArtifactsMock).not.toHaveBeenCalled();
+  });
+
   it("records completed backend tasks in operation history", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
@@ -2844,7 +2923,7 @@ describe("createStudioServer daemon lifecycle", () => {
     const response = await app.request("http://localhost/api/v1/books/demo-book/write-next", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ mode: "full" }),
     });
 
     expect(response.status).toBe(200);

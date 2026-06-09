@@ -17,6 +17,7 @@ writeCommand
   .option("--words <n>", "Words per chapter (overrides book config)")
   .option("--context <text>", "Creative guidance (natural language)")
   .option("--context-file <path>", "Read guidance from file")
+  .option("--full", "Run full audit/revision/state-validation pipeline")
   .option("--json", "Output JSON")
   .option("-q, --quiet", "Suppress console output")
   .action(async (bookIdArg: string | undefined, opts) => {
@@ -42,7 +43,9 @@ writeCommand
       for (let i = 0; i < count; i++) {
         if (!opts.json) log(formatWriteNextProgress(language, i + 1, count, bookId));
 
-        const result = await pipeline.writeNextChapter(bookId, wordCount);
+        const result = await pipeline.writeNextChapter(bookId, wordCount, undefined, {
+          mode: opts.full ? "full" : "quick",
+        });
         results.push(result);
 
         if (!opts.json) {

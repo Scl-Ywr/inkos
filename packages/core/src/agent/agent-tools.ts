@@ -275,7 +275,7 @@ export function createSubAgentTool(
               path: `books/${targetBookId}/story/`,
               detail: "读取世界观、角色、伏笔和上下文",
             });
-            const result = await pipeline.writeNextChapter(targetBookId, chapterWordCount);
+            const result = await pipeline.writeNextChapter(targetBookId, chapterWordCount, undefined, { mode: "quick" });
             progress(`Writer finished chapter for "${targetBookId}".`);
             emitFileAudit(auditHooks, {
               action: "write",

@@ -66,7 +66,7 @@ describe("interaction tools adapter", () => {
     await tools.writeNextChapter("harbor");
     await tools.reviseDraft("harbor", 3, "rewrite");
 
-    expect(pipeline.writeNextChapter).toHaveBeenCalledWith("harbor");
+    expect(pipeline.writeNextChapter).toHaveBeenCalledWith("harbor", undefined, undefined, { mode: "quick" });
     expect(pipeline.reviseDraft).toHaveBeenCalledWith("harbor", 3, "rewrite");
   });
 

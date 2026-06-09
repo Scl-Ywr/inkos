@@ -19,7 +19,7 @@ import {
 import { ChatMessage } from "../components/chat/ChatMessage";
 import { QuickActions } from "../components/chat/QuickActions";
 import { ToolExecutionSteps } from "../components/chat/ToolExecutionSteps";
-import { mobileTextInputHandlers } from "../lib/mobile-input";
+import { mobileTextInputHandlers, preserveTextSelectionAfterUpdate } from "../lib/mobile-input";
 import { subscribeServiceConfigChanged } from "../lib/service-config-events";
 import {
   BotMessageSquare,
@@ -37,6 +37,7 @@ import {
 } from "../components/ai-elements/message";
 import {
   type ChatPageModelPreference,
+  ensureConfiguredModelGroup,
   filterModelGroups,
   getBookCreateSessionId,
   getProjectChatSessionId,
@@ -85,7 +86,6 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   // -- Store selectors --
   const messages = useChatStore(chatSelectors.activeMessages);
   const activeSessionId = useChatStore((s) => s.activeSessionId);
-  const input = useChatStore((s) => s.input);
   const loading = useChatStore(chatSelectors.isActiveSessionStreaming);
   const selectedModel = useChatStore((s) => s.selectedModel);
   const selectedService = useChatStore((s) => s.selectedService);
@@ -103,9 +103,9 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const composerTextSnapshotRef = useRef(input);
+  const composerTextSnapshotRef = useRef(useChatStore.getState().input);
   const [followingLatest, setFollowingLatest] = useState(true);
-  const [composerTextSnapshot, setComposerTextSnapshot] = useState(input);
+  const [composerHasText, setComposerHasText] = useState(() => composerTextSnapshotRef.current.trim().length > 0);
   const [tokenSavingsLabel, setTokenSavingsLabel] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{
     readonly sessionId: string;
@@ -114,6 +114,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     readonly role: "user" | "assistant";
     readonly preview: string;
   } | null>(null);
+  const [deletingMessage, setDeletingMessage] = useState(false);
 
   const isZh = t("nav.connected") === "\u5DF2\u8FDE\u63A5";
   const hasBook = Boolean(activeBookId);
@@ -240,7 +241,15 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     });
   }, [refreshServiceConfig]);
 
+  const groupedModels = useMemo(() => {
+    const baseGroups = services
+      .filter((s) => s.connected && (modelsByService[s.service]?.length ?? 0) > 0)
+      .map((s) => ({ service: s.service, label: s.label, models: modelsByService[s.service]! }));
+    return ensureConfiguredModelGroup(baseGroups, services, configuredModelSelection);
+  }, [configuredModelSelection, services, modelsByService]);
+
   const modelPickerStatus = useMemo(() => {
+    if (groupedModels.some((group) => group.models.length > 0)) return "ready" as const;
     if (servicesLoading || services.length === 0) return "loading" as const;
     const connected = services.filter((s) => s.connected);
     if (connected.length === 0) return "no-models" as const;
@@ -250,13 +259,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     const hasConnectedCustom = connected.some((s) => s.service.startsWith("custom"));
     if (!hasConnectedBank && hasConnectedCustom && customModelsLoading) return "loading" as const;
     return "no-models" as const;
-  }, [services, servicesLoading, bankModelsLoading, customModelsLoading, modelsByService]);
-
-  const groupedModels = useMemo(() => {
-    return services
-      .filter((s) => s.connected && (modelsByService[s.service]?.length ?? 0) > 0)
-      .map((s) => ({ service: s.service, label: s.label, models: modelsByService[s.service]! }));
-  }, [services, modelsByService]);
+  }, [groupedModels, services, servicesLoading, bankModelsLoading, customModelsLoading, modelsByService]);
 
   const selectedModelLabel = useMemo(() => {
     if (!selectedModel) return "选择模型";
@@ -275,6 +278,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
       selectedModel,
       selectedService,
       configuredModelSelection,
+      { modelsLoading: modelPickerStatus === "loading" },
     );
     if (nextSelection) {
       setSelectedModel(nextSelection.model, nextSelection.service);
@@ -291,35 +295,32 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     }
   }, [configuredModelSelection, groupedModels, modelPickerStatus, selectedModel, selectedService, serviceConfigLoaded, setSelectedModel]);
 
-  // Auto-resize textarea
-  useEffect(() => {
+  const resizeComposer = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-  }, [composerTextSnapshot]);
-
-  useEffect(() => {
-    composerTextSnapshotRef.current = composerTextSnapshot;
-  }, [composerTextSnapshot]);
+  }, []);
 
   useEffect(() => {
     const el = textareaRef.current;
+    const storeInput = useChatStore.getState().input;
     const result = resolveComposerTextSync({
-      storeInput: input,
-      composerText: composerTextSnapshot,
+      storeInput,
+      composerText: composerTextSnapshotRef.current,
       elementValue: el?.value ?? null,
-      elementFocused: Boolean(el && document.activeElement === el),
+      elementFocused: false,
     });
-
-    setComposerTextSnapshot((current) => current === result.text ? current : result.text);
-    if (result.syncStoreText !== null && useChatStore.getState().input !== result.syncStoreText) {
+    composerTextSnapshotRef.current = result.text;
+    setComposerHasText(result.text.trim().length > 0);
+    if (result.syncStoreText !== null && storeInput !== result.syncStoreText) {
       setInput(result.syncStoreText);
     }
-    if (el && result.syncElementText !== null && el.value !== result.syncElementText) {
-      el.value = result.syncElementText;
+    if (el && el.value !== result.text) {
+      el.value = result.text;
     }
-  }, [activeSessionId, composerTextSnapshot, input, setInput]);
+    resizeComposer();
+  }, [activeSessionId, resizeComposer, setInput]);
 
   const isNearScrollBottom = (el: HTMLDivElement) => {
     return el.scrollHeight - el.scrollTop - el.clientHeight < 96;
@@ -433,7 +434,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
 
   const commitComposerText = useCallback((text: string) => {
     composerTextSnapshotRef.current = text;
-    setComposerTextSnapshot(text);
+    setComposerHasText(text.trim().length > 0);
     if (text !== useChatStore.getState().input) {
       setInput(text);
     }
@@ -442,8 +443,10 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   const setComposerText = (text: string) => {
     commitComposerText(text);
     if (textareaRef.current && textareaRef.current.value !== text) {
+      preserveTextSelectionAfterUpdate(textareaRef.current);
       textareaRef.current.value = text;
     }
+    resizeComposer();
   };
 
   const onSend = async (text: string) => {
@@ -466,11 +469,14 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     }
   };
 
-  const getComposerText = () => textareaRef.current?.value ?? composerTextSnapshot;
+  const getComposerText = () => textareaRef.current?.value ?? composerTextSnapshotRef.current;
   const syncComposerTextFromElement = useCallback((el: HTMLTextAreaElement) => {
     const nextText = el.value;
-    commitComposerText(nextText);
-  }, [commitComposerText]);
+    preserveTextSelectionAfterUpdate(el);
+    composerTextSnapshotRef.current = nextText;
+    setComposerHasText(nextText.trim().length > 0);
+    resizeComposer();
+  }, [resizeComposer]);
   const syncComposerTextAfterDomUpdate = useCallback((el: HTMLTextAreaElement) => {
     window.setTimeout(() => syncComposerTextFromElement(el), 0);
     window.requestAnimationFrame(() => syncComposerTextFromElement(el));
@@ -483,43 +489,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     }
     const nextText = getComposerText();
     commitComposerText(nextText);
-  }, [commitComposerText, syncComposerTextFromElement, composerTextSnapshot]);
-  const composerHasText = composerTextSnapshot.trim().length > 0;
-
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    let frame = 0;
-    const stop = () => {
-      if (frame) {
-        window.cancelAnimationFrame(frame);
-        frame = 0;
-      }
-    };
-    const tick = () => {
-      if (document.activeElement !== el) {
-        stop();
-        return;
-      }
-      if (el.value !== composerTextSnapshotRef.current) {
-        syncComposerTextFromElement(el);
-      }
-      frame = window.requestAnimationFrame(tick);
-    };
-    const start = () => {
-      if (!frame) {
-        frame = window.requestAnimationFrame(tick);
-      }
-    };
-    el.addEventListener("focus", start);
-    el.addEventListener("blur", stop);
-    if (document.activeElement === el) start();
-    return () => {
-      el.removeEventListener("focus", start);
-      el.removeEventListener("blur", stop);
-      stop();
-    };
-  }, [syncComposerTextFromElement]);
+  }, [commitComposerText, syncComposerTextFromElement]);
 
   const handleQuickAction = (command: string) => {
     const sessionId = activeSessionId ?? createDraftSession(activeBookId ?? null);
@@ -541,13 +511,18 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
 
   const confirmDeleteMessage = async () => {
     const target = pendingDelete;
-    if (!target) return;
-    setPendingDelete(null);
-    const latestSession = useChatStore.getState().sessions[target.sessionId];
-    const latestIndex = latestSession?.messages.findIndex((message) =>
-      `${message.role}\u001f${message.timestamp}\u001f${message.content.trim().slice(0, 240)}` === target.messageKey,
-    ) ?? -1;
-    await deleteMessage(target.sessionId, latestIndex >= 0 ? latestIndex : target.messageIndex);
+    if (!target || deletingMessage) return;
+    setDeletingMessage(true);
+    try {
+      const latestSession = useChatStore.getState().sessions[target.sessionId];
+      const latestIndex = latestSession?.messages.findIndex((message) =>
+        `${message.role}\u001f${message.timestamp}\u001f${message.content.trim().slice(0, 240)}` === target.messageKey,
+      ) ?? -1;
+      await deleteMessage(target.sessionId, latestIndex >= 0 ? latestIndex : target.messageIndex);
+      setPendingDelete(null);
+    } finally {
+      setDeletingMessage(false);
+    }
   };
 
   const emptyGuidance = isZh
@@ -728,10 +703,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
               <div className="flex items-end gap-2 px-3 py-2.5">
                 <textarea
                   ref={textareaRef}
-                  value={composerTextSnapshot}
-                  onBeforeInput={(e) => {
-                    syncComposerTextAfterDomUpdate(e.currentTarget);
-                  }}
+                  defaultValue={composerTextSnapshotRef.current}
                   onInput={(e) => {
                     syncComposerTextFromElement(e.currentTarget);
                   }}
@@ -749,6 +721,9 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                   }}
                   onPaste={(e) => {
                     syncComposerTextAfterDomUpdate(e.currentTarget);
+                  }}
+                  onBlur={(e) => {
+                    commitComposerText(e.currentTarget.value);
                   }}
                   onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); syncComposerText(); void onSend(getComposerText()); } }}
                   placeholder={isZh ? "输入消息..." : "Message InkOS..."}
@@ -853,6 +828,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
             <div className="mt-5 grid grid-cols-2 gap-3">
               <button
                 type="button"
+                disabled={deletingMessage}
                 onClick={() => setPendingDelete(null)}
                 className="soft-pill h-11 rounded-2xl px-4 text-sm font-semibold text-foreground"
               >
@@ -860,11 +836,12 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
               </button>
               <button
                 type="button"
+                disabled={deletingMessage}
                 onClick={() => void confirmDeleteMessage()}
                 className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl bg-destructive px-4 text-sm font-semibold text-destructive-foreground shadow-lg shadow-destructive/20 transition-colors hover:bg-destructive/90"
               >
                 <Trash2 size={15} />
-                删除
+                {deletingMessage ? "删除中..." : "删除"}
               </button>
             </div>
           </div>

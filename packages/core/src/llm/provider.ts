@@ -47,6 +47,7 @@ const UNKNOWN_MODEL_FALLBACK_MAX_TOKENS = 16_384;
 export const WRITING_MAX_OUTPUT_TOKENS = 24_576;
 const TRANSIENT_LLM_RETRIES = 2;
 const STABLE_PI_CONTEXT_TIMESTAMP = 0;
+const DEFAULT_LLM_CALL_TIMEOUT_MS = 60 * 60 * 1000;
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) return;
@@ -130,6 +131,56 @@ export interface LLMResponse {
     readonly completionTokens: number;
     readonly totalTokens: number;
   };
+}
+
+function resolveLLMCallTimeoutMs(): number {
+  const raw = Number(process.env.INKOS_LLM_CALL_TIMEOUT_MS ?? DEFAULT_LLM_CALL_TIMEOUT_MS);
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_LLM_CALL_TIMEOUT_MS;
+  return Math.max(30_000, Math.trunc(raw));
+}
+
+function createChildAbortSignal(
+  parent: AbortSignal | undefined,
+  timeoutMs: number,
+  label: string,
+): { readonly signal: AbortSignal; readonly dispose: () => void } {
+  const controller = new AbortController();
+  const abortFromParent = () => controller.abort(parent?.reason ?? new Error("用户已停止当前生成。"));
+  const timer = setTimeout(() => {
+    controller.abort(new Error(`${label} 超时（${Math.round(timeoutMs / 1000)} 秒无完成响应）。请稍后重试，或减少任务规模/切换更稳定的模型。`));
+  }, timeoutMs);
+
+  if (parent?.aborted) {
+    abortFromParent();
+  } else {
+    parent?.addEventListener("abort", abortFromParent, { once: true });
+  }
+
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timer);
+      parent?.removeEventListener("abort", abortFromParent);
+    },
+  };
+}
+
+async function awaitAbortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  throwIfAborted(signal);
+  let onAbort: (() => void) | undefined;
+  const abortPromise = new Promise<T>((_, reject) => {
+    onAbort = () => {
+      const reason = signal.reason;
+      reject(reason instanceof Error ? reason : new Error(typeof reason === "string" ? reason : "用户已停止当前生成。"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([promise, abortPromise]);
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
 }
 
 export interface LLMMessage {
@@ -1257,7 +1308,9 @@ export async function chatCompletion(
   };
   const onStreamProgress = options?.onStreamProgress;
   const onTextDelta = options?.onTextDelta;
-  const signal = options?.signal;
+  const timeoutMs = resolveLLMCallTimeoutMs();
+  const callAbort = createChildAbortSignal(options?.signal, timeoutMs, `LLM 调用 ${model}`);
+  const signal = callAbort.signal;
   const errorCtx = { baseUrl: client._piModel?.baseUrl ?? "(unknown)", model, service: client.service };
   const tokenOptimization = resolveTokenOptimization(options?.tokenOptimization);
   const optimizationContext = tokenOptimization?.enabled === false
@@ -1311,9 +1364,15 @@ export async function chatCompletion(
         recordTokenOptimizationEvent({ kind: "llm-call", label: "LLM 调用：缓存未命中后请求模型" });
         let response: LLMResponse;
         if (shouldUseNativeCustomTransport(client)) {
-          response = await chatCompletionViaCustomOpenAICompatible(client, model, optimized.messages, resolved, onStreamProgress, onTextDelta, signal);
+          response = await awaitAbortable(
+            chatCompletionViaCustomOpenAICompatible(client, model, optimized.messages, resolved, onStreamProgress, onTextDelta, signal),
+            signal,
+          );
         } else {
-          response = await chatCompletionViaPiAi(client, model, optimized.messages, resolved, onStreamProgress, onTextDelta, signal);
+          response = await awaitAbortable(
+            chatCompletionViaPiAi(client, model, optimized.messages, resolved, onStreamProgress, onTextDelta, signal),
+            signal,
+          );
         }
         if (optimizationContext && cacheWriteEnabled) {
           await putSemanticCache(optimizationContext, optimized.messages, response).catch(() => undefined);
@@ -1332,6 +1391,8 @@ export async function chatCompletion(
       };
     }
     throw wrapLLMError(error, errorCtx);
+  } finally {
+    callAbort.dispose();
   }
 }
 

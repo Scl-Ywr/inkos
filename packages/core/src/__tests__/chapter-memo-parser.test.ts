@@ -181,7 +181,7 @@ describe("parseMemo", () => {
         .toThrow(/empty sections.*当前任务/);
     });
 
-    it("rejects a memo where one section has 'TODO' (under 20 chars)", () => {
+    it("rejects a memo where one section has placeholder content", () => {
       const body = SECTIONS.replace(
         /## 章尾必须发生的改变\n[\s\S]*?\n\n## 本章 hook 账/,
         "## 章尾必须发生的改变\nTODO\n\n## 本章 hook 账",
@@ -191,8 +191,8 @@ describe("parseMemo", () => {
     });
 
     it("accepts a sparse-but-non-empty memo (Phase 6 sparse-memo principle)", () => {
-      // Each section just barely meets the threshold — this is the
-      // breath/transition chapter case the principle wants to keep legal.
+      // Terse transition-chapter rows should remain legal; the parser should
+      // reject shells, not enforce filler length.
       const sparseBody = [
         "## 当前任务",
         "主角与协作者在码头会合，交换上一案的情报与下一步行动安排。",
@@ -224,8 +224,39 @@ describe("parseMemo", () => {
       expect(memo.body).toContain("## 不要做");
     });
 
+    it("accepts short but specific section payloads without a 20-char floor", () => {
+      const shortBody = [
+        "## 当前任务",
+        "码头会合。",
+        "",
+        "## 读者此刻在等什么",
+        "等暗线露头。",
+        "",
+        "## 该兑现的 / 暂不掀的",
+        "兑现 H03；不掀黑手。",
+        "",
+        "## 日常/过渡承担什么任务",
+        "铺关系。",
+        "",
+        "## 关键抉择过三连问",
+        "信谁？为何？代价？",
+        "",
+        "## 章尾必须发生的改变",
+        "同盟成形。",
+        "",
+        "## 本章 hook 账",
+        "advance: H03。",
+        "",
+        "## 不要做",
+        "无",
+      ].join("\n");
+
+      const memo = parseMemo(makeRaw({ body: shortBody }), 12, false);
+      expect(memo.body).toContain("码头会合");
+    });
+
     it('accepts "## 不要做" with very short content like "无" / "N/A" (relaxed threshold)', () => {
-      // The "do not" section uses a 5-char minimum so books with no extra
+      // The "do not" section uses a relaxed minimum so books with no extra
       // chapter-level prohibitions can say so without inventing filler.
       const body = SECTIONS.replace(
         /## 不要做\n[\s\S]*$/,

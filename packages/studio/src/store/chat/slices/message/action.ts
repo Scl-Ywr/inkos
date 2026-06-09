@@ -42,6 +42,11 @@ function shouldUseRemoteMessages(
   return remoteLast.content.length >= localLast.content.length;
 }
 
+function isDeleteAlreadyAppliedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /404|not found|Message or session not found|消息.*不存在|会话.*不存在/i.test(message);
+}
+
 function parseAgentSseResult(text: string): AgentResponse | null {
   const blocks = text.split(/\r?\n\r?\n/u);
   for (const block of blocks) {
@@ -110,7 +115,7 @@ function estimateResponseTokens(text: string): number {
   return Math.max(1, Math.ceil(chinese + nonChinese / 4));
 }
 
-const AGENT_REQUEST_TIMEOUT_MS = 60 * 60_000;
+const AGENT_REQUEST_TIMEOUT_MS = 6 * 60 * 60_000;
 
 function isLikelyBackgroundDisconnect(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -321,7 +326,10 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
           };
         });
       }
-    } catch {
+    } catch (error) {
+      if (isDeleteAlreadyAppliedError(error)) {
+        return;
+      }
       set((state) => ({
         sessions: {
           ...state.sessions,

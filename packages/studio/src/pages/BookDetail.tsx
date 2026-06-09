@@ -55,6 +55,7 @@ interface BookData {
 type ReviseMode = "spot-fix" | "polish" | "rewrite" | "rework" | "anti-detect";
 type ExportFormat = "txt" | "md" | "epub";
 type BookStatus = "active" | "paused" | "outlining" | "completed" | "dropped";
+type WriteMode = "quick" | "full";
 
 interface Nav {
   toDashboard: () => void;
@@ -111,6 +112,7 @@ export function BookDetail({
   const [settingsStatus, setSettingsStatus] = useState<BookStatus | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("txt");
   const [exportApprovedOnly, setExportApprovedOnly] = useState(false);
+  const [writeMode, setWriteMode] = useState<WriteMode>("quick");
   const activity = useMemo(() => deriveBookActivity(sse.messages, bookId), [bookId, sse.messages]);
   const writing = writeRequestPending || activity.writing;
   const drafting = draftRequestPending || activity.drafting;
@@ -200,7 +202,7 @@ export function BookDetail({
   const handleWriteNext = async () => {
     setWriteRequestPending(true);
     try {
-      await postApi(`/books/${bookId}/write-next`);
+      await postApi(`/books/${bookId}/write-next`, { mode: writeMode });
     } catch (e) {
       setWriteRequestPending(false);
       await appAlert({ title: "写作启动失败", message: e instanceof Error ? e.message : "Failed", tone: "danger" });
@@ -425,7 +427,33 @@ export function BookDetail({
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex h-10 rounded-xl border border-border/60 bg-secondary/40 p-1">
+            <button
+              type="button"
+              onClick={() => setWriteMode("quick")}
+              disabled={writing || drafting}
+              className={`px-3 text-xs font-bold rounded-lg transition-colors disabled:opacity-50 ${
+                writeMode === "quick"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              快速
+            </button>
+            <button
+              type="button"
+              onClick={() => setWriteMode("full")}
+              disabled={writing || drafting}
+              className={`px-3 text-xs font-bold rounded-lg transition-colors disabled:opacity-50 ${
+                writeMode === "full"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              完整
+            </button>
+          </div>
           <button
             onClick={handleWriteNext}
             disabled={writing || drafting}

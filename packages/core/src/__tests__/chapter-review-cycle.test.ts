@@ -256,6 +256,36 @@ describe("runChapterReviewCycle v9", () => {
     expect(result.revised).toBe(false);
   });
 
+  it("skips LLM audit and repair when skipAudit is enabled", async () => {
+    const auditChapter = vi.fn();
+    const reviseChapter = vi.fn();
+    const normalizeDraftLengthIfNeeded = vi.fn()
+      .mockImplementation(async (content: string) => ({
+        content,
+        wordCount: content.length,
+        applied: false,
+        tokenUsage: ZERO_USAGE,
+      }));
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      initialOutput: {
+        content: "e".repeat(200),
+        wordCount: 200,
+        postWriteErrors: [],
+      },
+      skipAudit: true,
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+      normalizeDraftLengthIfNeeded,
+    });
+
+    expect(auditChapter).not.toHaveBeenCalled();
+    expect(reviseChapter).not.toHaveBeenCalled();
+    expect(result.auditResult.passed).toBe(true);
+    expect(result.revised).toBe(false);
+  });
+
   it("normalizes deterministic surface blockers before audit and repair", async () => {
     const auditChapter = vi.fn()
       .mockResolvedValue(createAuditResult({ overallScore: 90, passed: true }));

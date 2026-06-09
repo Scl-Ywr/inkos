@@ -42,6 +42,7 @@ import { registerSessionRoutes } from "./session-routes.js";
 import { registerProjectRoutes } from "./project-routes.js";
 import { registerServiceModelRoutes } from "./service-routes.js";
 import { registerBookChapterRoutes } from "./book-chapter-routes.js";
+import { enqueueBookScopedBackgroundResync } from "./background-resync-queue.js";
 import { registerGenreRoutes } from "./genre-routes.js";
 import { registerCreativeToolRoutes } from "./creative-tool-routes.js";
 import { registerDoctorRoutes } from "./doctor-routes.js";
@@ -198,6 +199,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
   async function buildPipelineConfig(
     overrides?: Partial<Pick<PipelineConfig, "externalContext" | "client" | "model" | "signal">> & {
       readonly currentConfig?: ProjectConfig;
+      readonly operationKey?: string;
       readonly sessionIdForSSE?: string;
       readonly bookId?: string;
     },
@@ -229,6 +231,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       notifyChannels: currentConfig.notify,
       logger,
       onStreamProgress: (progress) => {
+        if (overrides?.operationKey) {
+          const seconds = Math.max(1, Math.round(progress.elapsedMs / 1000));
+          const chars = progress.chineseChars > 0 ? progress.chineseChars : progress.totalChars;
+          touchOperation(
+            overrides.operationKey,
+            progress.status === "done"
+              ? `模型输出完成，累计约 ${chars.toLocaleString()} 字，耗时 ${seconds} 秒。`
+              : `模型正在输出，已收到约 ${chars.toLocaleString()} 字，耗时 ${seconds} 秒。`,
+          );
+        }
         broadcast("llm:progress", {
           ...(overrides?.sessionIdForSSE ? { sessionId: overrides.sessionIdForSSE } : {}),
           ...(overrides?.bookId ? { bookId: overrides.bookId } : {}),
@@ -260,6 +272,77 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     }
   }
 
+  async function startBackgroundChapterResync(bookId: string, chapterNumber: number): Promise<void> {
+    const resyncKey = `resync:${bookId}:${chapterNumber}`;
+    if (getActiveOperation(resyncKey)) {
+      serverLog("warn", "resync", `书籍 ${bookId} 第 ${chapterNumber} 章状态补算已在运行，跳过重复任务`);
+      return;
+    }
+    if (!enqueueBookScopedBackgroundResync(bookId, resyncKey, async () => {
+
+    broadcast("resync:start", { bookId, chapter: chapterNumber, background: true });
+    setOperation(resyncKey, {
+      type: "resync",
+      bookId,
+      chapter: chapterNumber,
+      label: "后台状态补算",
+      message: `《${bookId}》第 ${chapterNumber} 章正文已完成，正在后台同步 truth/state/summary。`,
+    });
+    const resyncController = createOperationController(resyncKey);
+    touchOperation(resyncKey, `正在后台补算《${bookId}》第 ${chapterNumber} 章状态产物。`);
+
+    const resyncPipeline = new PipelineRunner(await buildPipelineConfig({
+      bookId,
+      operationKey: resyncKey,
+      signal: resyncController.signal,
+    }));
+    await resyncPipeline.resyncChapterArtifacts(bookId, chapterNumber).then(
+      (result) => {
+        if (isOperationCancelled(resyncKey) || resyncController.signal.aborted) {
+          clearOperation(resyncKey, { status: "cancelled", message: "用户已停止后台状态补算。" });
+          return;
+        }
+        const message = `《${bookId}》第 ${result.chapterNumber} 章状态补算完成：${result.status}`;
+        serverLog("info", "resync", message);
+        void syncBookDerivedFoundationFiles(bookId).catch((error) => {
+          serverLog("warn", "foundation", `同步 ${bookId} 核心文件失败: ${error instanceof Error ? error.message : String(error)}`);
+        });
+        rememberRuntimeNotice({
+          kind: "completed",
+          title: "状态补算完成",
+          message,
+        });
+        clearOperation(resyncKey, { status: "completed", message });
+        broadcast("resync:complete", {
+          bookId,
+          chapter: result.chapterNumber,
+          status: result.status,
+          background: true,
+        });
+      },
+      (error) => {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (isOperationAbortError(error)) {
+          clearOperation(resyncKey, { status: "cancelled", message: "用户已停止后台状态补算。" });
+          broadcast("resync:error", { bookId, chapter: chapterNumber, error: "用户已停止后台状态补算。", background: true });
+          return;
+        }
+        const message = `《${bookId}》第 ${chapterNumber} 章状态补算失败：${msg}`;
+        clearOperation(resyncKey, { status: "error", message, error: msg });
+        serverLog("error", "resync", message);
+        rememberRuntimeNotice({
+          kind: "error",
+          title: "状态补算失败",
+          message: `${message.slice(0, 180)}。章节正文已保留，可手动重同步。`,
+        });
+        broadcast("resync:error", { bookId, chapter: chapterNumber, error: msg, background: true });
+      },
+    );
+    })) {
+      serverLog("warn", "resync", `书籍 ${bookId} 第 ${chapterNumber} 章状态补算已排队，跳过重复任务`);
+    }
+  }
+
   registerBookChapterRoutes(app, {
     root,
     state,
@@ -273,6 +356,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     serverLog,
     emitStudioFileAudit,
     setOperation,
+    getActiveOperation,
+    touchOperation,
     createOperationController,
     isOperationCancelled,
     clearOperation,
@@ -655,7 +740,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
             path: `books/${agentBookId}/story/`,
             detail: "读取世界观、角色、伏笔和章节上下文",
           }, { sessionId: streamSessionId, bookId: agentBookId });
-          const writeResult = await pipeline.writeNextChapter(agentBookId);
+          const writeResult = await pipeline.writeNextChapter(agentBookId, undefined, undefined, { mode: "quick" });
           if (isOperationCancelled(operationKey) || operationController.signal.aborted) {
             throw operationCancelledError();
           }
@@ -675,12 +760,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
             bookId: agentBookId,
             tool: "sub_agent.writer",
             path: `books/${agentBookId}/story/`,
-            detail: "更新核心文件、章节摘要、伏笔和角色状态",
+            detail: "章节正文已写入，truth/state/summary 转入后台补算",
           }, { sessionId: streamSessionId, bookId: agentBookId });
+          void startBackgroundChapterResync(agentBookId, writeResult.chapterNumber).catch((error) => {
+            serverLog("error", "resync", `启动 ${agentBookId} 第 ${writeResult.chapterNumber} 章后台状态补算失败: ${formatUnknownError(error)}`);
+          });
           const responseText = [
             `已为 ${agentBookId} 完成第 ${writeResult.chapterNumber} 章`,
             writeResult.title ? `《${writeResult.title}》` : "",
-            `，字数 ${writeResult.wordCount}，状态 ${writeResult.status}。`,
+            `，字数 ${writeResult.wordCount}，状态补算已转入后台。`,
           ].join("");
           const writeTokenUsage = writeResult.tokenUsage && writeResult.tokenUsage.totalTokens > 0
             ? writeResult.tokenUsage

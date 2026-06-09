@@ -379,7 +379,7 @@ export function registerServiceModelRoutes(app: Hono, deps: ServiceModelRoutesDe
             service: secretKey,
             label: svc.name ?? "Custom",
             group: undefined,
-            connected: Boolean(secrets.services[secretKey]?.apiKey),
+            connected: Boolean(secrets.services[secretKey]?.apiKey || svc.baseUrl),
           });
         }
       }

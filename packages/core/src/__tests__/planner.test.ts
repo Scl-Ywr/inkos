@@ -182,6 +182,37 @@ describe("PlannerAgent.planChapter memo generation", () => {
     expect(userMsg?.content).toContain("当面对质");
   });
 
+  it("compacts oversized planning context before sending the memo prompt", async () => {
+    const storyDir = join(bookDir, "story");
+    await writeFile(
+      join(storyDir, "brief.md"),
+      [
+        "第 4 章必须继续七号门调查。",
+        "主角当前目标是锁定仓库账本。",
+        "世界观背景：".repeat(1_000),
+        "无关远古设定：".repeat(2_000),
+      ].join("\n\n"),
+      "utf-8",
+    );
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
+      content: validMemoRaw(4),
+      usage: ZERO_USAGE,
+    } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    await makePlanner().planChapter({
+      book: makeBook(),
+      bookDir,
+      chapterNumber: 4,
+    });
+
+    const messages = chatSpy.mock.calls[0]![2] as ReadonlyArray<{ role: string; content: string }>;
+    const combinedPrompt = messages.map((message) => message.content).join("\n\n");
+    expect(combinedPrompt).toContain("planner 上下文已压缩");
+    expect(combinedPrompt).toContain("第 4 章必须继续七号门调查");
+    expect(combinedPrompt).toContain("## 不要做");
+    expect(combinedPrompt.length).toBeLessThan(25_000);
+  });
+
   it("retries when the first response is malformed and succeeds on retry", async () => {
     const chatSpy = vi.spyOn(llmProvider, "chatCompletion")
       .mockResolvedValueOnce({
@@ -212,6 +243,8 @@ describe("PlannerAgent.planChapter memo generation", () => {
     const secondMessages = secondCallArgs[2] as ReadonlyArray<{ role: string; content: string }>;
     const userMsg = secondMessages.find((m) => m.role === "user");
     expect(userMsg?.content).toContain("上次输出的错误");
+    expect(userMsg?.content).toContain("必须逐字重新输出所有必填 markdown 标题");
+    expect(userMsg?.content).toContain("## 不要做");
   });
 
   it("corrects stale memo chapter frontmatter when the model reuses the previous chapter number", async () => {
