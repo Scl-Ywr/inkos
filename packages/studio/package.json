@@ -34,6 +34,7 @@
     "android:apk": "pnpm run android:sync && cd android && gradlew.bat assembleDebug",
     "android:aab": "pnpm run android:sync && cd android && gradlew.bat bundleRelease",
     "preview": "vite preview",
+    "pretypecheck": "pnpm --filter @actalk/inkos-core build",
     "test": "vitest run",
     "test:unit": "vitest run --exclude \"src/api/server.test.ts\"",
     "test:integration": "vitest run src/api/server.test.ts",
