@@ -7,6 +7,8 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.app.ActivityManager;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.os.Build;
 import android.os.Environment;
@@ -206,6 +208,8 @@ public class EmbeddedNodeService extends Service {
 
             setNodeEnv("NODE_ENV", "production");
             setNodeEnv("INKOS_ANDROID", "1");
+            setNodeEnv("INKOS_ANDROID_VERSION_CODE", String.valueOf(readAppVersionCode()));
+            setNodeEnv("INKOS_ANDROID_VERSION_NAME", readAppVersionName());
             setNodeEnv("INKOS_STUDIO_PORT", "4567");
             setNodeEnv("INKOS_PROJECT_ROOT", projectRoot.getAbsolutePath());
             setNodeEnv("INKOS_BUILTIN_GENRES_DIR", builtinGenresDir.getAbsolutePath());
@@ -704,6 +708,27 @@ public class EmbeddedNodeService extends Service {
             Os.setenv(key, value, true);
         } catch (ErrnoException error) {
             Log.w(TAG, "Unable to set environment variable " + key, error);
+        }
+    }
+
+    private long readAppVersionCode() {
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                return info.getLongVersionCode();
+            }
+            return info.versionCode;
+        } catch (PackageManager.NameNotFoundException error) {
+            return 0L;
+        }
+    }
+
+    private String readAppVersionName() {
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            return info.versionName == null ? "" : info.versionName;
+        } catch (PackageManager.NameNotFoundException error) {
+            return "";
         }
     }
 

@@ -3,6 +3,32 @@ import { isNativeRuntime } from "./mobile-runtime";
 
 interface InkOSRuntimePlugin {
   restartNode(): Promise<{ ok: boolean }>;
+  appVersion(): Promise<{
+    packageName: string;
+    versionCode: number;
+    versionName: string;
+    canRequestPackageInstalls: boolean;
+  }>;
+  installPermissionStatus(): Promise<{ canRequestPackageInstalls: boolean }>;
+  openInstallPermissionSettings(): Promise<{ ok: boolean }>;
+  downloadUpdateApk(options: {
+    url: string;
+    sha256: string;
+    fileName?: string;
+  }): Promise<{
+    ok: boolean;
+    path: string;
+    size: number;
+    sha256: string;
+  }>;
+  installDownloadedApk(options: {
+    path: string;
+  }): Promise<{
+    ok: boolean;
+    path?: string;
+    needsPermission?: boolean;
+    message?: string;
+  }>;
   requestBatteryOptimizationExemption(): Promise<{ ok: boolean; ignoring?: boolean }>;
   batteryOptimizationStatus(): Promise<{ ignoring: boolean }>;
   updateTaskNotification(options: {
@@ -27,6 +53,60 @@ export async function restartEmbeddedNode(): Promise<boolean> {
 
 export async function ensureEmbeddedNodeRunning(): Promise<boolean> {
   return restartEmbeddedNode();
+}
+
+export async function getAndroidAppVersion(): Promise<{
+  packageName: string;
+  versionCode: number;
+  versionName: string;
+  canRequestPackageInstalls: boolean;
+} | null> {
+  if (!isNativeRuntime()) return null;
+  return await InkOSRuntime.appVersion();
+}
+
+export async function getInstallPermissionStatus(): Promise<boolean | null> {
+  if (!isNativeRuntime()) return null;
+  const result = await InkOSRuntime.installPermissionStatus();
+  return result.canRequestPackageInstalls;
+}
+
+export async function openInstallPermissionSettings(): Promise<boolean> {
+  if (!isNativeRuntime()) return false;
+  await InkOSRuntime.openInstallPermissionSettings();
+  return true;
+}
+
+export async function downloadUpdateApk(options: {
+  readonly url: string;
+  readonly sha256: string;
+  readonly fileName?: string;
+}): Promise<{
+  readonly ok: boolean;
+  readonly path: string;
+  readonly size: number;
+  readonly sha256: string;
+}> {
+  if (!isNativeRuntime()) {
+    throw new Error("APK update downloads are only available in the Android app.");
+  }
+  return await InkOSRuntime.downloadUpdateApk({
+    url: options.url,
+    sha256: options.sha256,
+    fileName: options.fileName,
+  });
+}
+
+export async function installDownloadedApk(path: string): Promise<{
+  readonly ok: boolean;
+  readonly path?: string;
+  readonly needsPermission?: boolean;
+  readonly message?: string;
+}> {
+  if (!isNativeRuntime()) {
+    throw new Error("APK installation is only available in the Android app.");
+  }
+  return await InkOSRuntime.installDownloadedApk({ path });
 }
 
 export async function requestBatteryOptimizationExemption(): Promise<boolean> {

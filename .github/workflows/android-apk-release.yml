@@ -1,0 +1,99 @@
+name: Android APK Release
+
+on:
+  push:
+    tags:
+      - "apk-v*"
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Update channel"
+        required: true
+        default: "stable"
+      prerelease:
+        description: "Create a prerelease"
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-release-apk:
+    runs-on: ubuntu-latest
+    env:
+      APK_ASSET_NAME: inkos-studio.apk
+      ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/packages/studio/android/app/release.keystore
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Verify release signing secrets
+        run: |
+          set -euo pipefail
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::$name is required for a self-hosted APK update release."
+              exit 1
+            fi
+          done
+
+      - name: Decode release keystore
+        run: |
+          set -euo pipefail
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
+          test -s "$ANDROID_KEYSTORE_PATH"
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build Android web and Node runtime assets
+        working-directory: packages/studio
+        run: |
+          pnpm run build:client
+          pnpm run android:runtime
+
+      - name: Build signed release APK
+        working-directory: packages/studio/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease
+
+      - name: Prepare release assets
+        run: |
+          set -euo pipefail
+          mkdir -p dist/android-release
+          cp packages/studio/android/app/build/outputs/apk/release/app-release.apk "dist/android-release/$APK_ASSET_NAME"
+          node scripts/generate-android-update-manifest.mjs \
+            --apk "dist/android-release/$APK_ASSET_NAME" \
+            --out dist/android-release/update.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --asset-name "$APK_ASSET_NAME" \
+            --channel "${{ github.event.inputs.channel || 'stable' }}"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/android-release/${{ env.APK_ASSET_NAME }}
+            dist/android-release/update.json
+          generate_release_notes: true
+          prerelease: ${{ github.event.inputs.prerelease || false }}

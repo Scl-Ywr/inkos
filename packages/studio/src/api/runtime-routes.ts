@@ -30,6 +30,20 @@ const NODE_TOOL_CAPABILITIES = [
   notes: "由 APK 内置 Node.js 后端直接运行，不使用 WebView JS fallback。",
 }));
 
+const DEFAULT_UPDATE_MANIFEST_URL = "https://github.com/Scl-Ywr/inkos/releases/latest/download/update.json";
+
+interface AndroidUpdateManifest {
+  readonly channel: string;
+  readonly versionName: string;
+  readonly versionCode: number;
+  readonly minVersionCode: number;
+  readonly apkUrl: string;
+  readonly apkSha256: string;
+  readonly size: number;
+  readonly notes: string[];
+  readonly publishedAt: string;
+}
+
 interface StorageRepairEntry {
   readonly action: string;
   readonly path: string;
@@ -44,6 +58,56 @@ interface RuntimeRoutesDeps {
   readonly broadcast: (event: string, data: unknown) => void;
 }
 
+function readAndroidVersionCode(): number {
+  const raw = Number(process.env.INKOS_ANDROID_VERSION_CODE ?? 0);
+  return Number.isInteger(raw) && raw > 0 ? raw : 0;
+}
+
+function readAndroidVersionName(): string {
+  return String(process.env.INKOS_ANDROID_VERSION_NAME ?? "").trim();
+}
+
+function parseUpdateManifest(value: unknown): AndroidUpdateManifest {
+  if (!value || typeof value !== "object") {
+    throw new Error("Update manifest is not a JSON object.");
+  }
+  const record = value as Record<string, unknown>;
+  const versionCode = Number(record.versionCode);
+  const minVersionCode = Number(record.minVersionCode ?? 1);
+  const size = Number(record.size ?? 0);
+  const versionName = String(record.versionName ?? "").trim();
+  const channel = String(record.channel ?? "stable").trim() || "stable";
+  const apkUrl = String(record.apkUrl ?? "").trim();
+  const apkSha256 = String(record.apkSha256 ?? "").trim().toLowerCase();
+  const publishedAt = String(record.publishedAt ?? "").trim();
+  const notes = Array.isArray(record.notes)
+    ? record.notes.map((note) => String(note).trim()).filter(Boolean)
+    : [];
+
+  if (!Number.isInteger(versionCode) || versionCode <= 0) {
+    throw new Error("Update manifest versionCode must be a positive integer.");
+  }
+  if (!Number.isInteger(minVersionCode) || minVersionCode <= 0) {
+    throw new Error("Update manifest minVersionCode must be a positive integer.");
+  }
+  if (!versionName) throw new Error("Update manifest versionName is required.");
+  if (!/^https:\/\//i.test(apkUrl)) throw new Error("Update manifest apkUrl must be an HTTPS URL.");
+  if (!/^[a-f0-9]{64}$/i.test(apkSha256)) throw new Error("Update manifest apkSha256 must be a SHA-256 hex digest.");
+  if (!Number.isFinite(size) || size <= 0) throw new Error("Update manifest size must be positive.");
+
+  return {
+    channel,
+    versionName,
+    versionCode,
+    minVersionCode,
+    apkUrl,
+    apkSha256,
+    size: Math.floor(size),
+    notes,
+    publishedAt,
+  };
+}
+
 export function registerRuntimeRoutes(app: Hono, deps: RuntimeRoutesDeps): void {
   const { root, state, ensureProjectStorageSkeleton, repairProjectResourceIndex, broadcast } = deps;
   let semanticCacheStorage = ensureSemanticCacheStorage(root);
@@ -54,6 +118,54 @@ export function registerRuntimeRoutes(app: Hono, deps: RuntimeRoutesDeps): void 
       message: `Node backend is serving API requests on this device. Project root: ${root}`,
       updatedAt: Date.now(),
     });
+  });
+
+  app.get("/api/v1/runtime/update/check", async (c) => {
+    const manifestUrl = String(process.env.INKOS_UPDATE_MANIFEST_URL ?? DEFAULT_UPDATE_MANIFEST_URL).trim();
+    const currentVersionCode = readAndroidVersionCode();
+    const currentVersionName = readAndroidVersionName();
+    try {
+      const response = await fetch(manifestUrl, {
+        headers: { Accept: "application/json", "User-Agent": "InkOS-Studio-Update-Check" },
+      });
+      if (!response.ok) {
+        return c.json({
+          ok: false,
+          manifestUrl,
+          current: {
+            versionCode: currentVersionCode,
+            versionName: currentVersionName,
+          },
+          error: `Update manifest returned HTTP ${response.status}.`,
+        }, 502);
+      }
+      const update = parseUpdateManifest(await response.json());
+      const supported = currentVersionCode > 0;
+      const available = supported
+        && update.versionCode > currentVersionCode
+        && currentVersionCode >= update.minVersionCode;
+      return c.json({
+        ok: true,
+        manifestUrl,
+        current: {
+          versionCode: currentVersionCode,
+          versionName: currentVersionName,
+        },
+        supported,
+        available,
+        update,
+      });
+    } catch (error) {
+      return c.json({
+        ok: false,
+        manifestUrl,
+        current: {
+          versionCode: currentVersionCode,
+          versionName: currentVersionName,
+        },
+        error: error instanceof Error ? error.message : String(error),
+      }, 502);
+    }
   });
 
   app.post("/api/v1/runtime/repair", async (c) => {

@@ -1,5 +1,11 @@
 apply plugin: 'com.android.application'
 
+def releaseKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+def releaseKeystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+def releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
+def releaseKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+def hasReleaseSigning = releaseKeystorePath && releaseKeystorePassword && releaseKeyAlias && releaseKeyPassword
+
 android {
     namespace = "io.qzz.christmas.inkoslocal"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +13,8 @@ android {
         applicationId "io.qzz.christmas.inkoslocal"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 4
-        versionName "1.4.4"
+        versionCode 6
+        versionName "1.4.6"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters "arm64-v8a"
@@ -25,8 +31,21 @@ android {
             useLegacyPackaging true
         }
     }
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(releaseKeystorePath)
+                storePassword releaseKeystorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
     buildTypes {
         release {
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
