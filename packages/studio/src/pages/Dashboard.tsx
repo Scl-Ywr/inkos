@@ -58,6 +58,7 @@ interface CurrentTask {
   readonly label: string;
   readonly status: "running" | "complete" | "error";
   readonly timestamp: number;
+  readonly startedAt?: number;
 }
 
 export interface OperationHistoryItem {
@@ -190,6 +191,7 @@ function getCurrentTask(messages: ReadonlyArray<SSEMessage>): CurrentTask | null
     label: operation.type === "agent" ? "Agent 正在执行" : "任务正在执行",
     status: "running",
     timestamp: restored?.timestamp ?? Date.now(),
+    startedAt: restored?.timestamp ?? Date.now(),
   };
 }
 
@@ -223,7 +225,22 @@ function getCurrentTaskFromOperations(operations: ReadonlyArray<ActiveOperation>
     label: operation.label ?? (operation.type === "agent" ? "AI 对话正在执行" : "任务正在执行"),
     status: "running",
     timestamp: operation.updatedAt ?? operation.startedAt ?? Date.now(),
+    startedAt: operation.startedAt,
   };
+}
+
+export function pickCurrentTask(
+  operations: ReadonlyArray<ActiveOperation> | undefined,
+  messages: ReadonlyArray<SSEMessage>,
+): CurrentTask | null {
+  const operationTask = getCurrentTaskFromOperations(operations);
+  const eventTask = getCurrentTask(messages);
+  if (eventTask && eventTask.status !== "running") {
+    if (!operationTask || eventTask.timestamp >= operationTask.timestamp) {
+      return eventTask;
+    }
+  }
+  return operationTask ?? eventTask;
 }
 
 function restoredOperationMatchesBook(message: SSEMessage, bookId: string): boolean {
@@ -284,12 +301,13 @@ function historyStatusView(status: OperationHistoryItem["status"]): {
 
 export function selectLatestProgressEvent(
   messages: ReadonlyArray<SSEMessage>,
-  filter?: { readonly bookId?: string | null; readonly sessionId?: string | null },
+  filter?: { readonly bookId?: string | null; readonly sessionId?: string | null; readonly startedAt?: number },
 ): SSEMessage | undefined {
   const hasFilter = Boolean(filter?.bookId || filter?.sessionId);
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (message.event !== "llm:progress" || !message.data || typeof message.data !== "object") continue;
+    if (filter?.startedAt && message.timestamp < filter.startedAt) continue;
     if (!hasFilter) return message;
 
     const data = message.data as { bookId?: unknown; sessionId?: unknown };
@@ -318,19 +336,24 @@ function TaskExecutionLog({
   entries,
   progressEvent,
   compact = false,
+  onClear,
+  startedAt,
 }: {
   readonly title: string;
   readonly subtitle?: string;
   readonly entries: ReadonlyArray<TaskLogEntry>;
   readonly progressEvent?: SSEMessage;
   readonly compact?: boolean;
+  readonly onClear?: () => void;
+  readonly startedAt?: number;
 }) {
   const progress = progressEvent?.data as { elapsedMs?: number; totalChars?: number; status?: string } | null;
   const isLiveProgress = Boolean(progress && progress.status !== "done");
   const now = useLiveNow(isLiveProgress);
   const elapsedMs = progress
-    ? Math.max(0, progress.elapsedMs ?? 0)
-      + (isLiveProgress && progressEvent ? Math.max(0, now - progressEvent.timestamp) : 0)
+    ? isLiveProgress && startedAt
+      ? Math.max(0, now - startedAt)
+      : Math.max(0, progress.elapsedMs ?? 0)
     : 0;
 
   if (entries.length === 0 && !progressEvent) {
@@ -350,17 +373,37 @@ function TaskExecutionLog({
           </div>
         </div>
         {progress && (
-          <div className="soft-pill flex w-full items-center justify-between gap-3 rounded-full px-3 py-2 text-xs font-bold text-primary sm:w-auto">
-            <span className="flex items-center gap-1.5">
-              <Clock size={12} />
-              {Math.floor(elapsedMs / 1000)}s
-            </span>
-            <span className="h-3 w-px bg-primary/20" />
-            <span className="flex items-center gap-1.5">
-              <Zap size={12} />
-              {(progress.totalChars ?? 0).toLocaleString()} 字
-            </span>
+          <div className="flex w-full items-center gap-2 sm:w-auto">
+            <div className="soft-pill flex flex-1 items-center justify-between gap-3 rounded-full px-3 py-2 text-xs font-bold text-primary sm:flex-none">
+              <span className="flex items-center gap-1.5">
+                <Clock size={12} />
+                {Math.floor(elapsedMs / 1000)}s
+              </span>
+              <span className="h-3 w-px bg-primary/20" />
+              <span className="flex items-center gap-1.5">
+                <Zap size={12} />
+                {(progress.totalChars ?? 0).toLocaleString()} 字
+              </span>
+            </div>
+            {onClear && (
+              <button
+                type="button"
+                onClick={onClear}
+                className="rounded-full border border-border/45 bg-background/45 px-3 py-2 text-xs font-bold text-muted-foreground transition-colors hover:border-destructive/35 hover:bg-destructive/10 hover:text-destructive"
+              >
+                清除
+              </button>
+            )}
           </div>
+        )}
+        {!progress && onClear && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="rounded-full border border-border/45 bg-background/45 px-3 py-2 text-xs font-bold text-muted-foreground transition-colors hover:border-destructive/35 hover:bg-destructive/10 hover:text-destructive"
+          >
+            清除
+          </button>
         )}
       </div>
 
@@ -529,29 +572,34 @@ function BookMenu({ bookId, bookTitle, nav, t, onDelete, onOpenChange }: {
 export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: DashboardSseState; theme: Theme; t: TFunction }) {
   const c = useColors(theme);
   const [menuOpenBookId, setMenuOpenBookId] = useState<string | null>(null);
+  const [dismissedTaskAt, setDismissedTaskAt] = useState<number | null>(null);
   const { data, loading, error, refetch } = useApi<{ books: ReadonlyArray<BookSummary> }>("/books");
   const { data: operationHistoryData, refetch: refetchOperationHistory } = useApi<{
     operations: ReadonlyArray<OperationHistoryItem>;
   }>("/operations/history?limit=6");
+  const currentTask = useMemo(
+    () => pickCurrentTask(sse.activeOperations, sse.messages),
+    [sse.activeOperations, sse.messages],
+  );
+  const visibleCurrentTask = currentTask && dismissedTaskAt !== currentTask.timestamp ? currentTask : null;
   const writingBooks = useMemo(() => {
     const active = new Set(deriveActiveBookIds(sse.messages));
     for (const bookId of deriveBackendActiveBookIds(sse.activeOperations)) {
       active.add(bookId);
     }
+    if (currentTask?.bookId && currentTask.status !== "running") {
+      active.delete(currentTask.bookId);
+    }
     return active;
-  }, [sse.activeOperations, sse.messages]);
+  }, [currentTask, sse.activeOperations, sse.messages]);
   const serviceStoreServices = useServiceStore((s) => s.services);
   const fetchServices = useServiceStore((s) => s.fetchServices);
   useEffect(() => { void fetchServices(); }, [fetchServices]);
   const hasServices = serviceStoreServices.some((s) => s.connected);
 
-  const currentTask = useMemo(
-    () => getCurrentTaskFromOperations(sse.activeOperations) ?? getCurrentTask(sse.messages),
-    [sse.activeOperations, sse.messages],
-  );
   const progressEvent = useMemo(
-    () => selectLatestProgressEvent(sse.messages, currentTask ?? undefined),
-    [currentTask, sse.messages],
+    () => selectLatestProgressEvent(sse.messages, visibleCurrentTask ?? undefined),
+    [visibleCurrentTask, sse.messages],
   );
   const currentTaskLogs = useMemo(() => getRecentTaskLogs(sse.messages), [sse.messages]);
 
@@ -671,7 +719,8 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: DashboardSseS
           const bookProgressEvent = isWriting
             ? selectLatestProgressEvent(sse.messages, {
                 bookId: book.id,
-                sessionId: currentTask?.bookId === book.id ? currentTask.sessionId : null,
+                sessionId: visibleCurrentTask?.bookId === book.id ? visibleCurrentTask.sessionId : null,
+                startedAt: visibleCurrentTask?.bookId === book.id ? visibleCurrentTask.startedAt : undefined,
               })
             : undefined;
           const staggerClass = `stagger-${Math.min(index + 1, 5)}`;
@@ -777,9 +826,10 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: DashboardSseS
                   <TaskExecutionLog
                     compact
                     title="当前任务执行日志"
-                    subtitle={currentTask?.bookId === book.id ? currentTask.label : "正在执行写作任务"}
+                    subtitle={visibleCurrentTask?.bookId === book.id ? visibleCurrentTask.label : "正在执行写作任务"}
                     entries={bookTaskLogs}
                     progressEvent={bookProgressEvent}
+                    startedAt={visibleCurrentTask?.bookId === book.id ? visibleCurrentTask.startedAt : undefined}
                   />
                 </div>
               )}
@@ -796,13 +846,15 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: DashboardSseS
       </div>
 
       {/* Current task execution log */}
-      {currentTask && currentTaskLogs.length > 0 && writingBooks.size === 0 && (
+      {visibleCurrentTask && currentTaskLogs.length > 0 && writingBooks.size === 0 && (
         <div className="glass-panel rounded-[2rem] p-4 sm:p-8 border-primary/20 bg-primary/[0.02] shadow-2xl shadow-primary/5 fade-in">
           <TaskExecutionLog
             title="当前任务执行日志"
-            subtitle={currentTask.label}
+            subtitle={visibleCurrentTask.label}
             entries={currentTaskLogs}
             progressEvent={progressEvent}
+            startedAt={visibleCurrentTask.startedAt}
+            onClear={visibleCurrentTask.status !== "running" ? () => setDismissedTaskAt(visibleCurrentTask.timestamp) : undefined}
           />
         </div>
       )}

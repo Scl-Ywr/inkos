@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { selectLatestProgressEvent } from "./Dashboard";
-import type { SSEMessage } from "../hooks/use-sse";
+import { pickCurrentTask, selectLatestProgressEvent } from "./Dashboard";
+import type { ActiveOperation, SSEMessage } from "../hooks/use-sse";
 
 function progressMessage(
   timestamp: number,
@@ -40,6 +40,44 @@ describe("selectLatestProgressEvent", () => {
     expect(selectLatestProgressEvent(messages, { bookId: "book-a", sessionId: "session-a" })?.data).toMatchObject({
       sessionId: "session-a",
       elapsedMs: 1_000,
+    });
+  });
+
+  it("ignores stale progress emitted before the current task started", () => {
+    const messages = [
+      progressMessage(1_000, { bookId: "book-a", elapsedMs: 30_000 }),
+      progressMessage(3_000, { bookId: "book-a", elapsedMs: 1_000 }),
+    ];
+
+    expect(selectLatestProgressEvent(messages, { bookId: "book-a", startedAt: 2_000 })?.data).toMatchObject({
+      bookId: "book-a",
+      elapsedMs: 1_000,
+    });
+  });
+});
+
+describe("pickCurrentTask", () => {
+  it("prefers a newer failed task event over a stale active operation snapshot", () => {
+    const operations: ActiveOperation[] = [{
+      type: "write",
+      bookId: "book-a",
+      status: "running",
+      label: "章节写作",
+      message: "正在写作",
+      startedAt: 1_000,
+      updatedAt: 2_000,
+    }];
+    const messages: SSEMessage[] = [{
+      event: "write:error",
+      data: { bookId: "book-a", error: "boom" },
+      timestamp: 3_000,
+    }];
+
+    expect(pickCurrentTask(operations, messages)).toMatchObject({
+      bookId: "book-a",
+      label: "写作失败",
+      status: "error",
+      timestamp: 3_000,
     });
   });
 });

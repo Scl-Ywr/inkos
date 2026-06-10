@@ -272,6 +272,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     }
   }
 
+  function refreshDerivedFoundationFilesAfterSuccess(bookId: string): void {
+    void syncBookDerivedFoundationFiles(bookId).catch((error) => {
+      serverLog(
+        "info",
+        "foundation",
+        `核心文件聚合暂未刷新，不影响已完成的章节/状态补算：${bookId} (${error instanceof Error ? error.message : String(error)})`,
+      );
+    });
+  }
+
   async function startBackgroundChapterResync(bookId: string, chapterNumber: number): Promise<void> {
     const resyncKey = `resync:${bookId}:${chapterNumber}`;
     if (getActiveOperation(resyncKey)) {
@@ -304,9 +314,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
         }
         const message = `《${bookId}》第 ${result.chapterNumber} 章状态补算完成：${result.status}`;
         serverLog("info", "resync", message);
-        void syncBookDerivedFoundationFiles(bookId).catch((error) => {
-          serverLog("warn", "foundation", `同步 ${bookId} 核心文件失败: ${error instanceof Error ? error.message : String(error)}`);
-        });
         rememberRuntimeNotice({
           kind: "completed",
           title: "状态补算完成",
@@ -319,6 +326,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
           status: result.status,
           background: true,
         });
+        refreshDerivedFoundationFilesAfterSuccess(bookId);
       },
       (error) => {
         const msg = error instanceof Error ? error.message : String(error);
@@ -801,8 +809,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
             usage: transcriptUsageFrom(writeTokenUsage),
             stopReason: "toolUse",
             timestamp: Date.now(),
-          }], instruction);
-          await refreshBookSessionFromTranscript();
+          }], instruction)
+            .then(() => refreshBookSessionFromTranscript())
+            .catch((error) => {
+              serverLog(
+                "warn",
+                "agent",
+                `章节已写入，但会话记录刷新失败，不影响章节结果：${formatUnknownError(error)}`,
+              );
+            });
           broadcast("agent:complete", { instruction, activeBookId: agentBookId, sessionId: bookSession.sessionId });
           await sendResult({
             response: responseText,
@@ -812,6 +827,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
             },
             ...(writeTokenUsage ? { tokenUsage: writeTokenUsage } : {}),
           });
+          operationOutcome = {
+            status: "completed",
+            message: responseText.slice(0, 180),
+          };
           return;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);

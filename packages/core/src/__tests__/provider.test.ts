@@ -173,6 +173,34 @@ describe("chatCompletion via pi-ai", () => {
     expect(mockStreamSimple).toHaveBeenCalledOnce();
   });
 
+  it("explains 403 model access failures with a model-switch hint", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: "Forbidden",
+      text: async () => JSON.stringify({
+        error: { message: "model is not available for this account" },
+      }),
+    }));
+    const client = makeClient(0.7, {
+      service: "custom",
+      stream: false,
+      _piModel: {
+        ...MOCK_PI_MODEL,
+        provider: "openai",
+        baseUrl: "https://gateway.example/v1",
+      },
+    });
+
+    const error = await captureError(chatCompletion(client, "locked-model", [
+      { role: "user", content: "ping" },
+    ]));
+
+    expect(error.message).toContain("API 返回 403");
+    expect(error.message).toContain("没有访问该模型的权限");
+    expect(error.message).toContain("模型选择器换用同服务下的稳定文本模型");
+  });
+
   it("uses stable pi-ai message timestamps so identical prompts can hit upstream cache", async () => {
     mockStreamSimple.mockReturnValue(makeTextStream("ok"));
 

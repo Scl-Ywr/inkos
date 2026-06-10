@@ -298,6 +298,10 @@ export { FanqieRadarSource, QidianRadarSource, TextRadarSource, type RadarSource
 export { readGenreProfile, readBookRules, listAvailableGenres, getBuiltinGenresDir } from "./agents/rules-reader.js";
 export { buildWriterSystemPrompt, buildGoldenOpeningDiscipline } from "./agents/writer-prompts.js";
 export { analyzeAITells, type AITellResult, type AITellIssue } from "./agents/ai-tells.js";
+export { validateWriteRequest, validateBookCreateRequest } from "./utils/pre-write-validation.js";
+export type { ValidationWarning, PreWriteValidationResult } from "./utils/pre-write-validation.js";
+export { getMemoryUsage, checkMemoryThreshold, formatMemoryUsage, triggerGC } from "./utils/memory-monitor.js";
+export type { MemoryUsage, MemoryThresholds } from "./utils/memory-monitor.js";
 export { analyzeSensitiveWords, type SensitiveWordResult, type SensitiveWordMatch } from "./agents/sensitive-words.js";
 export { detectAIContent, type DetectionResult } from "./agents/detector.js";
 export { analyzeStyle } from "./agents/style-analyzer.js";

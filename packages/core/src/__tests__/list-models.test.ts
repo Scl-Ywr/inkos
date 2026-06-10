@@ -30,6 +30,12 @@ describe("listModelsForService (B8)", () => {
     expect(models.some((m) => m.id.includes("image"))).toBe(false);
   });
 
+  it("provider fallback 不返回 disabled/nonText 模型", async () => {
+    const models = await listModelsForService("kkaiapi");
+    expect(models.some((m) => m.id === "MiniMax-M2.7")).toBe(false);
+    expect(models.some((m) => m.id === "gpt-image-2")).toBe(false);
+  });
+
   it("custom service 走 live probe + bank 补元数据", async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,

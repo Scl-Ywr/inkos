@@ -8,12 +8,13 @@ import { mobileTextInputHandlers } from "../../lib/mobile-input";
 import { PanelRightClose, PanelRightOpen, ArrowLeft, Loader2, Pencil, Save, X } from "lucide-react";
 import { LazyStreamdown } from "../ai-elements/lazy-streamdown";
 import { ProgressSection } from "../sidebar/ProgressSection";
-import { FoundationSection } from "../sidebar/FoundationSection";
+import { FoundationSection, invalidateFoundationFilesCache } from "../sidebar/FoundationSection";
 import { SummarySection } from "../sidebar/SummarySection";
 import { ChaptersSection } from "../sidebar/ChaptersSection";
-import { CharacterSection } from "../sidebar/CharacterSection";
+import { CharacterSection, invalidateCharactersCache } from "../sidebar/CharacterSection";
 import {
   getCachedArtifactContent,
+  invalidateBookArtifactContent,
   loadArtifactContent,
   setCachedArtifactContent,
   type ArtifactContentTarget,
@@ -292,8 +293,20 @@ function defaultSidebarWidth(): number {
 
 export function BookSidebar({ bookId, theme, t, sse }: BookSidebarProps) {
   const sidebarView = useChatStore((s) => s.sidebarView);
+  const bumpBookDataVersion = useChatStore((s) => s.bumpBookDataVersion);
   const [width, setWidth] = useState(defaultSidebarWidth);
   const dragging = useRef(false);
+
+  useEffect(() => {
+    const latest = sse.messages.at(-1);
+    if (!latest || (latest.event !== "resync:complete" && latest.event !== "resync:error")) return;
+    const data = latest.data as { bookId?: unknown } | null;
+    if (data?.bookId !== bookId) return;
+    invalidateBookArtifactContent(bookId);
+    invalidateFoundationFilesCache(bookId);
+    invalidateCharactersCache(bookId);
+    bumpBookDataVersion();
+  }, [bookId, bumpBookDataVersion, sse.messages]);
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();

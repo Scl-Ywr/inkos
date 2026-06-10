@@ -75,8 +75,11 @@ function StageIcon({ status }: { status: PipelineStage["status"] }) {
   }
 }
 
-function formatProgress(progress: NonNullable<PipelineStage["progress"]>): string {
-  const secs = Math.round(progress.elapsedMs / 1000);
+function formatProgress(progress: NonNullable<PipelineStage["progress"]>, liveElapsedMs?: number): string {
+  const elapsedMs = liveElapsedMs !== undefined
+    ? Math.max(progress.elapsedMs, liveElapsedMs)
+    : progress.elapsedMs;
+  const secs = Math.floor(elapsedMs / 1000);
   const statusLabel = progress.status === "thinking" ? "思考设定" : "生成正文";
   const chars = progress.totalChars > 0
     ? progress.chineseChars > 0 ? `已写 ${progress.totalChars} 字` : `${progress.totalChars} chars`
@@ -274,7 +277,7 @@ function PipelineExecution({ exec }: { exec: ToolExecution }) {
                     <div className="font-medium text-foreground/80">{stage.label}</div>
                     {stage.progress && (
                       <div className="mt-0.5 text-[11px] leading-5 text-muted-foreground/80">
-                        {formatProgress(stage.progress)}
+                        {formatProgress(stage.progress, stage.status === "active" && isActive ? elapsedMs : undefined)}
                       </div>
                     )}
                   </div>

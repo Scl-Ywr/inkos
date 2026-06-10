@@ -50,9 +50,6 @@ export function ChatMessage({
   const handleDelete = () => {
     void onDelete?.();
   };
-  const stopDeletePointer = (event: SyntheticEvent) => {
-    event.stopPropagation();
-  };
   const triggerDelete = (event: SyntheticEvent) => {
     event.preventDefault();
     event.stopPropagation();
@@ -74,9 +71,8 @@ export function ChatMessage({
               type="button"
               aria-label="删除消息"
               title="删除这条用户消息"
-              onPointerDown={stopDeletePointer}
-              onTouchStart={stopDeletePointer}
-              onPointerUp={triggerDelete}
+              onPointerDown={triggerDelete}
+              onTouchStart={triggerDelete}
               onClick={triggerDelete}
               className="mb-0.5 flex h-7 w-7 shrink-0 touch-manipulation items-center justify-center rounded-full text-muted-foreground/75 opacity-90 transition-colors hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100 focus-visible:opacity-100"
             >
@@ -133,9 +129,8 @@ export function ChatMessage({
               type="button"
               aria-label="删除这条 AI 回复"
               title="删除这条 AI 回复"
-              onPointerDown={stopDeletePointer}
-              onTouchStart={stopDeletePointer}
-              onPointerUp={triggerDelete}
+              onPointerDown={triggerDelete}
+              onTouchStart={triggerDelete}
               onClick={triggerDelete}
               className="inline-flex min-h-9 shrink-0 touch-manipulation items-center gap-1.5 rounded-full border border-border/35 bg-background/30 px-3 text-xs font-medium text-muted-foreground/85 opacity-95 transition-colors hover:border-destructive/35 hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100"
             >

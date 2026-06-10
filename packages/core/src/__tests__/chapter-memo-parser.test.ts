@@ -91,8 +91,13 @@ describe("parseMemo", () => {
     expect(() => parseMemo(SECTIONS, 12, false)).toThrow(/frontmatter/);
   });
 
-  it("throws when goal exceeds 50 chars", () => {
-    const longGoal = "把异常钉成实证".repeat(10);
+  it("allows a concise goal over the old 50-char limit", () => {
+    const goal = "把异常钉成实证并推进人物关系冲突升级到必须选择的局面";
+    expect(parseMemo(makeRaw({ goal }), 12, false).goal).toBe(goal);
+  });
+
+  it("throws when goal exceeds 80 chars", () => {
+    const longGoal = "把异常钉成实证".repeat(12);
     expect(() => parseMemo(makeRaw({ goal: longGoal }), 12, false)).toThrow(/goal too long/);
   });
 

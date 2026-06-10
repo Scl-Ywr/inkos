@@ -46,8 +46,14 @@ const UNKNOWN_MODEL_FALLBACK_MAX_TOKENS = 16_384;
 /** Dedicated max output tokens for creative writing agents (writer / settler). */
 export const WRITING_MAX_OUTPUT_TOKENS = 24_576;
 const TRANSIENT_LLM_RETRIES = 2;
+const RETRY_INITIAL_DELAY_MS = 1000;
+const RETRY_BACKOFF_MULTIPLIER = 2;
+const RETRY_MAX_ATTEMPTS_RATE_LIMIT = 5;
 const STABLE_PI_CONTEXT_TIMESTAMP = 0;
 const DEFAULT_LLM_CALL_TIMEOUT_MS = 60 * 60 * 1000;
+const BOOK_CREATE_TIMEOUT_MS = 90 * 60 * 1000;
+const CHAPTER_WRITE_TIMEOUT_MS = 75 * 60 * 1000;
+const AUDIT_TIMEOUT_MS = 30 * 60 * 1000;
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) return;
@@ -133,9 +139,15 @@ export interface LLMResponse {
   };
 }
 
-function resolveLLMCallTimeoutMs(): number {
-  const raw = Number(process.env.INKOS_LLM_CALL_TIMEOUT_MS ?? DEFAULT_LLM_CALL_TIMEOUT_MS);
-  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_LLM_CALL_TIMEOUT_MS;
+function resolveLLMCallTimeoutMs(taskType?: 'book-create' | 'chapter-write' | 'audit' | 'default'): number {
+  let defaultTimeout = DEFAULT_LLM_CALL_TIMEOUT_MS;
+
+  if (taskType === 'book-create') defaultTimeout = BOOK_CREATE_TIMEOUT_MS;
+  else if (taskType === 'chapter-write') defaultTimeout = CHAPTER_WRITE_TIMEOUT_MS;
+  else if (taskType === 'audit') defaultTimeout = AUDIT_TIMEOUT_MS;
+
+  const raw = Number(process.env.INKOS_LLM_CALL_TIMEOUT_MS ?? defaultTimeout);
+  if (!Number.isFinite(raw) || raw <= 0) return defaultTimeout;
   return Math.max(30_000, Math.trunc(raw));
 }
 
@@ -544,12 +556,24 @@ function wrapLLMError(error: unknown, context?: { readonly baseUrl?: string; rea
     );
   }
   if (msg.includes("403")) {
+    const normalized = msg.toLowerCase();
+    const likelyModelAccess =
+      normalized.includes("model")
+      || normalized.includes("not access")
+      || normalized.includes("permission")
+      || normalized.includes("forbidden")
+      || normalized.includes("无权")
+      || normalized.includes("权限")
+      || normalized.includes("未开通")
+      || normalized.includes("不可用");
     return new Error(
       `API 返回 403 (请求被拒绝)。可能原因：\n` +
-      `  1. API Key 无效或过期\n` +
+      (likelyModelAccess
+        ? `  1. 当前账号/API Key 没有访问该模型的权限，或该模型在服务商侧未开通/已下线\n`
+        : `  1. API Key 无效、过期，或当前账号没有访问该模型的权限\n`) +
       `  2. API 提供方的内容审查拦截了请求（公益/免费 API 常见）\n` +
-      `  3. 账户余额不足\n` +
-      `  建议：用 inkos doctor 测试 API 连通性，或换一个不限制内容的 API 提供方${ctxLine}`,
+      `  3. 账户余额不足或套餐不支持该模型\n` +
+      `  建议：在模型选择器换用同服务下的稳定文本模型，或到服务商控制台确认该模型已开通；也可用 inkos doctor 测试 API 连通性${ctxLine}`,
     );
   }
   if (msg.includes("401")) {
@@ -636,24 +660,51 @@ function isTransientLLMTransportError(error: unknown): boolean {
   ].some((needle) => text.includes(needle));
 }
 
+function shouldRetryError(error: unknown, attempt: number): { retry: boolean; delayMs: number } {
+  const errorStr = String(error);
+
+  if (errorStr.includes('429') || errorStr.toLowerCase().includes('rate limit')) {
+    const maxAttempts = RETRY_MAX_ATTEMPTS_RATE_LIMIT;
+    if (attempt >= maxAttempts) return { retry: false, delayMs: 0 };
+    const delayMs = RETRY_INITIAL_DELAY_MS * Math.pow(RETRY_BACKOFF_MULTIPLIER, attempt);
+    return { retry: true, delayMs: Math.min(delayMs, 30000) };
+  }
+
+  if (errorStr.includes('500') || errorStr.includes('502') || errorStr.includes('503')) {
+    if (attempt >= TRANSIENT_LLM_RETRIES) return { retry: false, delayMs: 0 };
+    return { retry: true, delayMs: RETRY_INITIAL_DELAY_MS * (attempt + 1) };
+  }
+
+  if (errorStr.includes('400') || errorStr.includes('401') || errorStr.includes('403')) {
+    return { retry: false, delayMs: 0 };
+  }
+
+  if (attempt >= TRANSIENT_LLM_RETRIES) return { retry: false, delayMs: 0 };
+  return { retry: isTransientLLMTransportError(error), delayMs: 0 };
+}
+
 async function withTransientLLMRetry<T>(
   run: () => Promise<T>,
   options?: { readonly enabled?: boolean },
 ): Promise<T> {
   const enabled = options?.enabled ?? true;
   let lastError: unknown;
-  for (let attempt = 0; attempt <= TRANSIENT_LLM_RETRIES; attempt++) {
+  for (let attempt = 0; attempt <= RETRY_MAX_ATTEMPTS_RATE_LIMIT; attempt++) {
     try {
       return await run();
     } catch (error) {
       lastError = error;
-      if (
-        !enabled
-        || attempt >= TRANSIENT_LLM_RETRIES
-        || error instanceof PartialResponseError
-        || !isTransientLLMTransportError(error)
-      ) {
+      if (!enabled || error instanceof PartialResponseError) {
         throw error;
+      }
+
+      const retryDecision = shouldRetryError(error, attempt);
+      if (!retryDecision.retry) {
+        throw error;
+      }
+
+      if (retryDecision.delayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, retryDecision.delayMs));
       }
     }
   }
@@ -1294,21 +1345,28 @@ export async function chatCompletion(
     readonly onTextDelta?: (text: string) => void;
     readonly signal?: AbortSignal;
     readonly tokenOptimization?: TokenOptimizationOptions;
+    readonly targetWordCount?: number;
+    readonly taskType?: 'book-create' | 'chapter-write' | 'audit' | 'default';
   },
 ): Promise<LLMResponse> {
   // C1 (v2.0.0)：删除 maxTokensCap 机制。per-call 显式传的 maxTokens 永远不被裁剪。
+  let effectiveMaxTokens = options?.maxTokens ?? client.defaults.maxTokens;
+  if (options?.targetWordCount && options.targetWordCount > 10000) {
+    const estimatedTokens = Math.ceil(options.targetWordCount * 2);
+    effectiveMaxTokens = Math.max(effectiveMaxTokens, Math.min(estimatedTokens * 1.2, 128000));
+  }
   const resolved = {
     temperature: clampTemperatureForModel(
       client.service,
       model,
       options?.temperature ?? client.defaults.temperature,
     ),
-    maxTokens: options?.maxTokens ?? client.defaults.maxTokens,
+    maxTokens: effectiveMaxTokens,
     extra: client.defaults.extra,
   };
   const onStreamProgress = options?.onStreamProgress;
   const onTextDelta = options?.onTextDelta;
-  const timeoutMs = resolveLLMCallTimeoutMs();
+  const timeoutMs = resolveLLMCallTimeoutMs(options?.taskType);
   const callAbort = createChildAbortSignal(options?.signal, timeoutMs, `LLM 调用 ${model}`);
   const signal = callAbort.signal;
   const errorCtx = { baseUrl: client._piModel?.baseUrl ?? "(unknown)", model, service: client.service };

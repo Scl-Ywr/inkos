@@ -15,6 +15,10 @@ interface CharacterInfo {
 
 const charactersCache = new Map<string, ReadonlyArray<CharacterInfo>>();
 
+export function invalidateCharactersCache(bookId: string): void {
+  charactersCache.delete(bookId);
+}
+
 interface TruthFile {
   readonly name: string;
 }

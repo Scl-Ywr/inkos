@@ -318,6 +318,8 @@ export class WriterAgent extends BaseAgent {
         temperature: creativeTemperature,
         maxTokens: WRITING_MAX_OUTPUT_TOKENS,
         tokenOptimization: { cacheRead: false },
+        targetWordCount: input.wordCountOverride ?? input.book.chapterWordCount,
+        taskType: 'chapter-write',
       },
     );
     const creativeUsage = creativeResponse.usage;
@@ -702,6 +704,7 @@ export class WriterAgent extends BaseAgent {
         temperature: 0.3,
         maxTokens: WRITING_MAX_OUTPUT_TOKENS,
         tokenOptimization: { cacheRead: false },
+        taskType: 'chapter-write',
       },
     );
 

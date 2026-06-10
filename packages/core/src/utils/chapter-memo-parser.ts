@@ -1,5 +1,5 @@
 import YAML from "js-yaml";
-import { ChapterMemoSchema, type ChapterMemo } from "../models/input-governance.js";
+import { CHAPTER_MEMO_GOAL_MAX_CHARS, ChapterMemoSchema, type ChapterMemo } from "../models/input-governance.js";
 
 export class PlannerParseError extends Error {
   constructor(message: string) {
@@ -74,7 +74,7 @@ function isMeaningfulSectionContent(content: string, section: RequiredSection): 
  * markdown body containing the seven required section headings.
  *
  * Strict on core fields (chapter integer + matches expected, goal non-empty
- * and ≤ 50 chars, required section headings present). Lenient on aux fields
+ * and within the memo goal character budget, required section headings present). Lenient on aux fields
  * (threadRefs coerced to string[], defaults to []).
  *
  * `isGoldenOpening` is authoritative from the caller — any value the LLM
@@ -118,9 +118,9 @@ export function parseMemo(
   if (typeof f.goal !== "string" || f.goal.length === 0) {
     throw new PlannerParseError("goal must be a non-empty string");
   }
-  if (f.goal.length > 50) {
+  if (f.goal.length > CHAPTER_MEMO_GOAL_MAX_CHARS) {
     throw new PlannerParseError(
-      `goal too long: ${f.goal.length} chars (max 50)`,
+      `goal too long: ${f.goal.length} chars (max ${CHAPTER_MEMO_GOAL_MAX_CHARS})`,
     );
   }
 

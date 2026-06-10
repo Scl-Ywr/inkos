@@ -149,7 +149,7 @@ export class ArchitectAgent extends BaseAgent {
     const response = await this.chat([
       { role: "system", content: langPrefix + systemPrompt + revisePrompt },
       { role: "user", content: userMessage },
-    ], { temperature: 0.8 });
+    ], { temperature: 0.8, taskType: 'book-create' });
 
     return this.parseSections(response.content, resolvedLanguage);
   }

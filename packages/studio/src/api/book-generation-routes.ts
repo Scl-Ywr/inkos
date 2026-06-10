@@ -34,6 +34,16 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
   } = deps;
   // --- Actions ---
 
+  const refreshDerivedFoundationFilesAfterSuccess = (bookId: string): void => {
+    void syncBookDerivedFoundationFiles(bookId).catch((error) => {
+      serverLog(
+        "info",
+        "foundation",
+        `核心文件聚合暂未刷新，不影响已完成的章节/状态补算：${bookId} (${error instanceof Error ? error.message : String(error)})`,
+      );
+    });
+  };
+
   app.post("/api/v1/books/:id/write-next", async (c) => {
     const id = c.req.param("id");
     const body = await c.req
@@ -87,9 +97,6 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
           }
           const message = `《${id}》第 ${resyncResult.chapterNumber} 章状态补算完成：${resyncResult.status}`;
           serverLog("info", "resync", message);
-          void syncBookDerivedFoundationFiles(id).catch((error) => {
-            serverLog("warn", "foundation", `同步 ${id} 核心文件失败: ${error instanceof Error ? error.message : String(error)}`);
-          });
           rememberRuntimeNotice({
             kind: "completed",
             title: "状态补算完成",
@@ -102,6 +109,7 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
             status: resyncResult.status,
             background: true,
           });
+          refreshDerivedFoundationFilesAfterSuccess(id);
         },
         (error) => {
           const msg = error instanceof Error ? error.message : String(error);
@@ -140,9 +148,7 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
           ? `书籍 ${id} 第 ${result.chapterNumber} 章正文已完成: ${result.title} (${result.wordCount} 字)，状态补算已转入后台`
           : `书籍 ${id} 第 ${result.chapterNumber} 章${modeLabel}写作完成: ${result.title} (${result.wordCount} 字)`;
         serverLog("info", "write", completionMessage);
-        void syncBookDerivedFoundationFiles(id).catch((error) => {
-          serverLog("warn", "foundation", `同步 ${id} 核心文件失败: ${error instanceof Error ? error.message : String(error)}`);
-        });
+        refreshDerivedFoundationFilesAfterSuccess(id);
         const runtimeTokenUsage = readRuntimeTokenUsage(result.tokenUsage);
         rememberRuntimeNotice({
           kind: "completed",
@@ -212,9 +218,7 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
         }
         const completionMessage = `书籍 ${id} 草稿完成: ${result.title} (${result.wordCount} 字)`;
         serverLog("info", "draft", completionMessage);
-        void syncBookDerivedFoundationFiles(id).catch((error) => {
-          serverLog("warn", "foundation", `同步 ${id} 核心文件失败: ${error instanceof Error ? error.message : String(error)}`);
-        });
+        refreshDerivedFoundationFilesAfterSuccess(id);
         const runtimeTokenUsage = readRuntimeTokenUsage(result.tokenUsage);
         rememberRuntimeNotice({
           kind: "completed",
@@ -375,9 +379,7 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
       );
       const completionMessage = `书籍 ${id} 第 ${chapterNum} 章修订完成`;
       serverLog("info", "revise", completionMessage);
-      void syncBookDerivedFoundationFiles(id).catch((error) => {
-        serverLog("warn", "foundation", `同步 ${id} 的核心文件聚合失败: ${String(error)}`);
-      });
+      refreshDerivedFoundationFilesAfterSuccess(id);
       clearOperation(operationKey, { status: "completed", message: completionMessage });
       broadcast("revise:complete", { bookId: id, chapter: chapterNum });
       return c.json(result);
@@ -464,9 +466,7 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
         }
           const completionMessage = `书籍 ${id} 第 ${result.chapterNumber} 章重写完成: ${result.title} (${result.wordCount} 字)`;
           serverLog("info", "rewrite", completionMessage);
-          void syncBookDerivedFoundationFiles(id).catch((error) => {
-            serverLog("warn", "foundation", `同步 ${id} 的核心文件聚合失败: ${String(error)}`);
-          });
+          refreshDerivedFoundationFilesAfterSuccess(id);
           clearOperation(operationKey, { status: "completed", message: completionMessage });
           broadcast("rewrite:complete", { bookId: id, chapterNumber: result.chapterNumber, title: result.title, wordCount: result.wordCount });
         },
@@ -510,9 +510,7 @@ export function registerBookGenerationRoutes(app: Hono, deps: BookChapterRoutesD
         externalContext: body.brief,
       }));
       const result = await pipeline.resyncChapterArtifacts(id, chapterNum);
-      void syncBookDerivedFoundationFiles(id).catch((error) => {
-        serverLog("warn", "foundation", `同步 ${id} 的核心文件聚合失败: ${String(error)}`);
-      });
+      refreshDerivedFoundationFilesAfterSuccess(id);
       return c.json(result);
     } catch (e) {
       return c.json({ error: String(e) }, 500);

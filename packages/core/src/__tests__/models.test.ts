@@ -585,11 +585,21 @@ describe("ChapterMemoSchema", () => {
     expect(result.threadRefs).toEqual([]);
   });
 
-  it("rejects goal longer than 50 chars", () => {
+  it("allows chapter memo goals up to 80 chars", () => {
+    const result = ChapterMemoSchema.parse({
+      chapter: 1,
+      goal: "a".repeat(80),
+      body: "## 当前任务\nx",
+    });
+
+    expect(result.goal).toHaveLength(80);
+  });
+
+  it("rejects goal longer than 80 chars", () => {
     expect(() =>
       ChapterMemoSchema.parse({
         chapter: 1,
-        goal: "a".repeat(51),
+        goal: "a".repeat(81),
         body: "## 当前任务\nx",
       }),
     ).toThrow();

@@ -6,6 +6,7 @@ export type ArtifactContentTarget =
 
 const artifactContentCache = new Map<string, string | null>();
 const artifactContentRequests = new Map<string, Promise<string | null>>();
+const artifactContentVersions = new Map<string, number>();
 
 function artifactContentKey(bookId: string, target: ArtifactContentTarget): string {
   return target.type === "chapter"
@@ -17,6 +18,25 @@ function artifactContentPath(bookId: string, target: ArtifactContentTarget): str
   return target.type === "chapter"
     ? `/books/${bookId}/chapters/${target.chapter}`
     : `/books/${bookId}/truth/${target.file}`;
+}
+
+function artifactContentVersion(bookId: string): number {
+  return artifactContentVersions.get(bookId) ?? 0;
+}
+
+export function invalidateBookArtifactContent(bookId: string): void {
+  const prefix = `${bookId}:`;
+  artifactContentVersions.set(bookId, artifactContentVersion(bookId) + 1);
+  for (const key of artifactContentCache.keys()) {
+    if (key.startsWith(prefix)) {
+      artifactContentCache.delete(key);
+    }
+  }
+  for (const key of artifactContentRequests.keys()) {
+    if (key.startsWith(prefix)) {
+      artifactContentRequests.delete(key);
+    }
+  }
 }
 
 export function getCachedArtifactContent(
@@ -48,14 +68,19 @@ export function loadArtifactContent(
   const existing = artifactContentRequests.get(key);
   if (existing) return existing;
 
+  const requestVersion = artifactContentVersion(bookId);
   const request = fetchJson<{ content: string | null }>(artifactContentPath(bookId, target))
     .then((data) => {
       const content = data.content ?? "";
-      artifactContentCache.set(key, content);
+      if (artifactContentVersion(bookId) === requestVersion) {
+        artifactContentCache.set(key, content);
+      }
       return content;
     })
     .catch(() => {
-      artifactContentCache.set(key, null);
+      if (artifactContentVersion(bookId) === requestVersion) {
+        artifactContentCache.set(key, null);
+      }
       return null;
     })
     .finally(() => {

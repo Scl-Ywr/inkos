@@ -641,7 +641,7 @@ ${chapterContent}`;
     // Use web search for fact verification when eraResearch is enabled
     const response = gp.eraResearch
       ? await this.chatWithSearch(chatMessages, chatOptions)
-      : await this.chat(chatMessages, chatOptions);
+      : await this.chat(chatMessages, { ...chatOptions, taskType: 'audit' });
 
     const result = this.parseAuditResult(response.content, resolvedLanguage);
     return { ...result, tokenUsage: response.usage };

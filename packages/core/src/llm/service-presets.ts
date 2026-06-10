@@ -178,9 +178,10 @@ export async function listModelsForService(
   if ((apiKey || canProbeWithoutApiKey) && probeBaseUrl) {
     const probed = await probeModelsFromUpstream(probeBaseUrl, apiKey ?? "", 10_000);
     if (probed.length > 0) {
-      const { lookupModel } = await import("./providers/lookup.js");
+      const { isActiveTextModel, lookupModel } = await import("./providers/lookup.js");
       for (const m of probed) {
         const card = lookupModel(service, m.id);
+        if (card && !isActiveTextModel(card)) continue;
         byId.set(m.id, card ? toModelInfo(card) : { id: m.id, name: m.name, contextWindow: m.contextWindow });
       }
     }
@@ -188,8 +189,9 @@ export async function listModelsForService(
 
   // 2) provider bank fallback / 补充
   if (provider) {
+    const { isActiveTextModel } = await import("./providers/lookup.js");
     for (const m of provider.models) {
-      if (m.enabled === false) continue;
+      if (!isActiveTextModel(m)) continue;
       if (byId.has(m.id)) continue;
       byId.set(m.id, toModelInfo(m));
     }

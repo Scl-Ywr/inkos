@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, type SyntheticEvent } from "react";
 import { fetchJson } from "../hooks/use-api";
 import { useServiceStore } from "../store/service";
 import { AlertTriangle, CheckCircle2, Eye, EyeOff, Info, Loader2, ArrowLeft, Trash2 } from "lucide-react";
@@ -57,6 +57,7 @@ function OfficialOptimizationDetailPage({ nav, onSaved }: { nav: Nav; onSaved: (
   const [saving, setSaving] = useState(false);
   const [showHeadroomKey, setShowHeadroomKey] = useState(false);
   const [showEmbeddingKey, setShowEmbeddingKey] = useState(false);
+  const lastDeleteTriggerAt = useRef(0);
   const [message, setMessage] = useState("");
   const [headroomEnabled, setHeadroomEnabled] = useState(false);
   const [headroomBaseUrl, setHeadroomBaseUrl] = useState("");
@@ -161,6 +162,16 @@ function OfficialOptimizationDetailPage({ nav, onSaved }: { nav: Nav; onSaved: (
       setMessage(error instanceof Error ? error.message : "删除失败");
       setSaving(false);
     }
+  };
+
+  const triggerDelete = (event: SyntheticEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (saving) return;
+    const now = Date.now();
+    if (now - lastDeleteTriggerAt.current < 350) return;
+    lastDeleteTriggerAt.current = now;
+    void handleDelete();
   };
 
   if (loading) return <DetailSkeleton />;
@@ -277,7 +288,7 @@ function OfficialOptimizationDetailPage({ nav, onSaved }: { nav: Nav; onSaved: (
             {saving && <Loader2 size={12} className="animate-spin" />}
             保存
           </button>
-          <button onClick={handleDelete} disabled={saving}
+          <button onPointerDown={triggerDelete} onTouchStart={triggerDelete} onClick={triggerDelete} disabled={saving}
             className="flex items-center gap-1.5 rounded-lg border border-destructive/30 px-3.5 py-2 text-xs text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50">
             <Trash2 size={12} />
             删除配置
@@ -383,6 +394,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
   const baseUrlRef = useRef<HTMLInputElement>(null);
   const modelRef = useRef<HTMLInputElement>(null);
   const apiKeyRef = useRef<HTMLInputElement>(null);
+  const lastDeleteTriggerAt = useRef(0);
   const dirtyFieldsRef = useRef<Set<ServiceDetailDirtyField>>(new Set());
   const textFieldRefs = {
     apiKey: apiKeyRef,
@@ -629,6 +641,16 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
     }
   };
 
+  const triggerDelete = (event: SyntheticEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (isBusy) return;
+    const now = Date.now();
+    if (now - lastDeleteTriggerAt.current < 350) return;
+    lastDeleteTriggerAt.current = now;
+    void handleDelete();
+  };
+
   const handleSave = async () => {
     const form = readForm();
     const currentEffectiveServiceId = isCustom ? `custom:${form.resolvedCustomName}` : serviceId;
@@ -790,7 +812,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
             保存
           </button>
           {(isConnected || isCustom) && (
-            <button onClick={handleDelete} disabled={isBusy}
+            <button onPointerDown={triggerDelete} onTouchStart={triggerDelete} onClick={triggerDelete} disabled={isBusy}
               className="flex items-center gap-1.5 px-3.5 py-2 text-xs rounded-lg border border-destructive/30 text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50">
               <Trash2 size={12} />
               删除配置

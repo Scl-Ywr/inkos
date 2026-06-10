@@ -236,7 +236,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
             content,
             toolCall,
             parts,
-            ...(tokenUsage ? { tokenUsage } : {}),
+            tokenUsage,
           };
         }),
       })),

@@ -10,15 +10,30 @@ import { readFile } from "node:fs/promises";
  */
 export class FileCache {
   private store = new Map<string, string | null>();
+  private accessOrder: string[] = [];
+  private maxSize: number;
+
+  constructor(maxSize: number = 100) {
+    this.maxSize = maxSize;
+  }
 
   /** Retrieve a cached file's content. Returns null if not cached. */
   get(filePath: string): string | null | undefined {
-    return this.store.get(filePath);
+    const value = this.store.get(filePath);
+    if (value !== undefined) {
+      this.updateAccessOrder(filePath);
+    }
+    return value;
   }
 
   /** Cache a file's content (null = file doesn't exist). */
   set(filePath: string, content: string | null): void {
+    if (this.store.size >= this.maxSize && !this.store.has(filePath)) {
+      const lru = this.accessOrder.shift();
+      if (lru) this.store.delete(lru);
+    }
     this.store.set(filePath, content);
+    this.updateAccessOrder(filePath);
   }
 
   /** Check if a file is already cached. */
@@ -29,6 +44,19 @@ export class FileCache {
   /** Clear all cached entries (call between chapters). */
   clear(): void {
     this.store.clear();
+    this.accessOrder = [];
+  }
+
+  size(): number {
+    return this.store.size;
+  }
+
+  private updateAccessOrder(path: string): void {
+    const index = this.accessOrder.indexOf(path);
+    if (index > -1) {
+      this.accessOrder.splice(index, 1);
+    }
+    this.accessOrder.push(path);
   }
 }
 

@@ -428,30 +428,37 @@ export function BookDetail({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex h-10 rounded-xl border border-border/60 bg-secondary/40 p-1">
+          <div className="relative grid h-10 w-40 grid-cols-2 overflow-hidden rounded-xl border border-border/60 bg-secondary/40 p-1">
+            <span
+              className={`pointer-events-none absolute bottom-1 top-1 rounded-lg border border-primary/30 bg-background shadow-sm transition-all duration-200 ${
+                writeMode === "quick"
+                  ? "left-1 w-[calc(50%-0.25rem)]"
+                  : "left-1/2 w-[calc(50%-0.25rem)]"
+              }`}
+            />
             <button
               type="button"
               onClick={() => setWriteMode("quick")}
               disabled={writing || drafting}
-              className={`px-3 text-xs font-bold rounded-lg transition-colors disabled:opacity-50 ${
+              className={`relative z-10 inline-flex h-full items-center justify-center rounded-lg px-3 text-center text-xs font-extrabold leading-none transition-colors disabled:opacity-50 ${
                 writeMode === "quick"
-                  ? "bg-background text-foreground shadow-sm"
+                  ? "text-foreground"
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              快速
+              <span className="-translate-y-[2px]">快速</span>
             </button>
             <button
               type="button"
               onClick={() => setWriteMode("full")}
               disabled={writing || drafting}
-              className={`px-3 text-xs font-bold rounded-lg transition-colors disabled:opacity-50 ${
+              className={`relative z-10 inline-flex h-full items-center justify-center rounded-lg px-3 text-center text-xs font-extrabold leading-none transition-colors disabled:opacity-50 ${
                 writeMode === "full"
-                  ? "bg-background text-foreground shadow-sm"
+                  ? "text-foreground"
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              完整
+              <span className="-translate-y-[2px]">完整</span>
             </button>
           </div>
           <button

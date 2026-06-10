@@ -25,6 +25,10 @@ interface TruthFileInfo {
 
 const truthFilesCache = new Map<string, ReadonlyArray<TruthFileInfo>>();
 
+export function invalidateFoundationFilesCache(bookId: string): void {
+  truthFilesCache.delete(bookId);
+}
+
 interface FoundationSectionProps {
   readonly bookId: string;
 }

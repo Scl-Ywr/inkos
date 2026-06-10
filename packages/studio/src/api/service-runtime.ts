@@ -64,8 +64,24 @@ export function isTextChatModelId(modelId: string): boolean {
   return !NON_TEXT_MODEL_ID_PARTS.some((part) => normalized.includes(part));
 }
 
+function isActiveTextModelCandidate(model: {
+  readonly id: string;
+  readonly enabled?: boolean;
+  readonly status?: string;
+  readonly capabilities?: {
+    readonly text?: boolean;
+    readonly imageOutput?: boolean;
+  };
+}): boolean {
+  if (model.enabled === false) return false;
+  if (model.status === "disabled" || model.status === "deprecated" || model.status === "nonText") return false;
+  if (model.capabilities?.text === false) return false;
+  if (model.capabilities?.imageOutput === true && model.capabilities?.text !== true) return false;
+  return isTextChatModelId(model.id);
+}
+
 export function filterTextChatModels<T extends { readonly id: string }>(models: ReadonlyArray<T>): T[] {
-  return models.filter((model) => isTextChatModelId(model.id));
+  return models.filter((model) => isActiveTextModelCandidate(model));
 }
 
 export function nonTextModelMessage(modelId: string): string {
@@ -228,8 +244,7 @@ function fallbackTextModelsForEndpoint(
   preset: ReturnType<typeof resolveServicePreset> | undefined,
 ): Array<{ id: string; name: string }> {
   const endpointModels = endpoint?.models
-    .filter((model) => model.enabled !== false)
-    .filter((model) => isTextChatModelId(model.id))
+    .filter(isActiveTextModelCandidate)
     .map((model) => ({ id: model.id, name: model.id }))
     ?? [];
   if (endpointModels.length > 0) return endpointModels;
@@ -395,7 +410,7 @@ export async function probeServiceCapabilities(
     discoveredFirstModel
     ?? endpoint?.checkModel
     ?? preset?.knownModels?.[0]
-    ?? endpoint?.models.find((model) => model.enabled !== false)?.id;
+    ?? endpoint?.models.find(isActiveTextModelCandidate)?.id;
   const useDynamicLocalModels = baseService === "ollama";
   const useEndpointCheckModel = !useDynamicLocalModels
     && !isCustomServiceId(args.service)

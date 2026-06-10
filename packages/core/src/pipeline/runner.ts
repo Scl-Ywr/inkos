@@ -1436,6 +1436,25 @@ export class PipelineRunner {
     await this.assertNoPendingStateRepair(bookId);
     const chapterNumber = await this.state.getNextChapterNumber(bookId);
     const stageLanguage = await this.resolveBookLanguage(book);
+
+    // 内存检查
+    const { checkMemoryThreshold, triggerGC } = await import("../utils/memory-monitor.js");
+    const memCheck = checkMemoryThreshold();
+    if (memCheck.exceeded) {
+      this.logStage(stageLanguage, { zh: `⚠️ ${memCheck.message}，触发 GC`, en: `⚠️ ${memCheck.message}, triggering GC` });
+      triggerGC();
+    }
+
+    // 预检查
+    const { validateWriteRequest } = await import("../utils/pre-write-validation.js");
+    const validation = validateWriteRequest(book, chapterNumber, this.config.client, wordCount);
+    for (const warning of validation.warnings) {
+      if (warning.severity === "error") {
+        throw new Error(`${warning.message} ${warning.suggestion ?? ""}`);
+      }
+      this.logStage(stageLanguage, { zh: `⚠️ ${warning.message}`, en: `⚠️ ${warning.message}` });
+    }
+
     const writeMode: WritePipelineMode = options.mode ?? "full";
     const quickMode = writeMode === "quick";
     this.logStage(stageLanguage, quickMode

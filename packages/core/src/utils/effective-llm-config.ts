@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { ProjectConfigSchema, type LLMConfig, type ProjectConfig } from "../models/project.js";
 import { loadSecrets } from "../llm/secrets.js";
 import { getEndpoint } from "../llm/providers/index.js";
+import { isActiveTextModel } from "../llm/providers/lookup.js";
 import { guessServiceFromBaseUrl, resolveServicePreset, resolveServiceProviderFamily } from "../llm/service-presets.js";
 import { isApiKeyOptionalForEndpoint } from "./llm-endpoint-auth.js";
 import { cliOverlayEnv, legacyEnv, studioIgnoredEnv, type LLMEnvLayers, type LLMEnvMap } from "./llm-env.js";
@@ -442,7 +443,7 @@ function resolveServiceModel(
   if (candidate) return candidate;
 
   return endpoint?.checkModel
-    ?? endpoint?.models.find((model) => model.enabled !== false)?.id
+    ?? endpoint?.models.find(isActiveTextModel)?.id
     ?? defaultModel
     ?? currentModel
     ?? "noop-model";

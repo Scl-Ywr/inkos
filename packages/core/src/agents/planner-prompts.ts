@@ -97,7 +97,7 @@ defer:
 
 ## 输出要求
 
-- goal 字段不超过 50 字
+- goal 字段不超过 80 字
 - YAML frontmatter 的 chapter 字段必须等于当前请求章节号；例如请求第 2 章时必须写 chapter: 2，不要沿用上一章或示例章号
 - threadRefs 是 YAML 数组，内容是从输入的 pending_hooks/subplot_board 中挑出的 id
 - 每个二级标题（##）必须出现，内容不能为空
@@ -203,7 +203,7 @@ defer:
 
 ## Output requirements
 
-- goal field is no more than 50 characters
+- goal field is no more than 80 characters
 - The YAML frontmatter chapter field must equal the requested chapter number; for chapter 2, write chapter: 2, never reuse the previous chapter or example number
 - threadRefs is a YAML array of ids picked from the input pending_hooks / subplot_board
 - Every level-2 heading (##) must appear; none may be empty

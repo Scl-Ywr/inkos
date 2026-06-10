@@ -73,10 +73,22 @@ export function registerBookCrudRoutes(app: Hono, deps: BookChapterRoutesDeps): 
     broadcast("book:creating", { bookId, title: body.title });
     bookCreateStatus.set(bookId, { status: "creating" });
 
-    const pipeline = new PipelineRunner(await buildPipelineConfig());
+    const operationKey = `book-create:${bookId}`;
+    const { setOperation, touchOperation, clearOperation, createOperationController } = deps;
+    setOperation(operationKey, {
+      type: "book-create",
+      bookId,
+      label: "创建书籍",
+      message: `正在创建《${body.title}》，生成基础设定和世界观。`,
+    });
+    const operationController = createOperationController(operationKey);
+
+    const pipeline = new PipelineRunner(await buildPipelineConfig({ bookId, operationKey, signal: operationController.signal }));
     const tools = createInteractionToolsFromDeps(pipeline, state, {
       onFileAudit: (event) => emitStudioFileAudit(event, { bookId }),
     });
+
+    touchOperation(operationKey, `正在为《${body.title}》生成世界观和基础设定。`);
     processProjectInteractionRequest({
       projectRoot: root,
       request: {
@@ -96,17 +108,20 @@ export function registerBookCrudRoutes(app: Hono, deps: BookChapterRoutesDeps): 
         readonly details?: Readonly<Record<string, unknown>>;
       }) => {
         const createdBookId = (result.details?.bookId as string | undefined) ?? result.session.activeBookId ?? bookId;
+        touchOperation(operationKey, `正在同步《${body.title}》的核心文件。`);
         await syncBookDerivedFoundationFiles(createdBookId).catch((error) => {
           serverLog("warn", "foundation", `同步 ${createdBookId} 核心文件失败: ${error instanceof Error ? error.message : String(error)}`);
         });
         const book = await loadStudioBookListSummary(state, createdBookId).catch(() => undefined);
         bookCreateStatus.delete(bookId);
         bookCreateStatus.delete(createdBookId);
+        clearOperation(operationKey, { status: "completed", message: `书籍《${body.title}》创建完成。` });
         broadcast("book:created", { bookId: createdBookId, ...(book ? { book } : {}) });
       },
       (e: unknown) => {
         const error = e instanceof Error ? e.message : String(e);
         bookCreateStatus.set(bookId, { status: "error", error });
+        clearOperation(operationKey, { status: "error", message: `书籍创建失败：${error}`, error });
         broadcast("book:error", { bookId, error });
       },
     );

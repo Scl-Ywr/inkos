@@ -31,6 +31,8 @@ export abstract class BaseAgent {
       readonly temperature?: number;
       readonly maxTokens?: number;
       readonly tokenOptimization?: Omit<TokenOptimizationOptions, "projectRoot" | "bookId">;
+      readonly targetWordCount?: number;
+      readonly taskType?: 'book-create' | 'chapter-write' | 'audit' | 'default';
     },
   ): Promise<LLMResponse> {
     const { tokenOptimization, ...chatOptions } = options ?? {};
@@ -44,6 +46,8 @@ export abstract class BaseAgent {
         projectRoot: this.ctx.projectRoot,
         bookId: this.ctx.bookId,
       },
+      targetWordCount: options?.targetWordCount,
+      taskType: options?.taskType,
     });
   }
 

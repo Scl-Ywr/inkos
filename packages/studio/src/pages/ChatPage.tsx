@@ -104,6 +104,28 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const composerTextSnapshotRef = useRef(useChatStore.getState().input);
+  const composerFocusedRef = useRef(false);
+  const composerPollFrameRef = useRef<number | null>(null);
+  const composerSelectionRef = useRef<{
+    readonly start: number;
+    readonly end: number;
+    readonly direction: "forward" | "backward" | "none";
+    readonly valueLength: number;
+    readonly value: string;
+  } | null>(null);
+  const composerInputAnchorRef = useRef<{
+    readonly start: number;
+    readonly end: number;
+    readonly direction: "forward" | "backward" | "none";
+    readonly valueLength: number;
+    readonly value: string;
+  } | null>(null);
+  const composerCompositionRef = useRef<{
+    readonly start: number;
+    readonly end: number;
+    readonly value: string;
+    readonly insertedText?: string;
+  } | null>(null);
   const [followingLatest, setFollowingLatest] = useState(true);
   const [composerHasText, setComposerHasText] = useState(() => composerTextSnapshotRef.current.trim().length > 0);
   const [tokenSavingsLabel, setTokenSavingsLabel] = useState<string | null>(null);
@@ -432,13 +454,18 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     };
   }, [activeBookId, activateSession, createDraftSession, createSession, loadSessionDetail, loadSessionList, mode]);
 
-  const commitComposerText = useCallback((text: string) => {
+  const updateComposerTextSnapshot = useCallback((text: string) => {
     composerTextSnapshotRef.current = text;
     setComposerHasText(text.trim().length > 0);
+    resizeComposer();
+  }, [resizeComposer]);
+
+  const commitComposerText = useCallback((text: string) => {
+    updateComposerTextSnapshot(text);
     if (text !== useChatStore.getState().input) {
       setInput(text);
     }
-  }, [setInput]);
+  }, [setInput, updateComposerTextSnapshot]);
 
   const setComposerText = (text: string) => {
     commitComposerText(text);
@@ -470,13 +497,14 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   };
 
   const getComposerText = () => textareaRef.current?.value ?? composerTextSnapshotRef.current;
-  const syncComposerTextFromElement = useCallback((el: HTMLTextAreaElement) => {
+  const syncComposerTextFromElement = useCallback((el: HTMLTextAreaElement, options?: { readonly commitStore?: boolean }) => {
     const nextText = el.value;
-    preserveTextSelectionAfterUpdate(el);
-    composerTextSnapshotRef.current = nextText;
-    setComposerHasText(nextText.trim().length > 0);
-    resizeComposer();
-  }, [resizeComposer]);
+    if (options?.commitStore) {
+      commitComposerText(nextText);
+      return;
+    }
+    updateComposerTextSnapshot(nextText);
+  }, [commitComposerText, updateComposerTextSnapshot]);
   const syncComposerTextAfterDomUpdate = useCallback((el: HTMLTextAreaElement) => {
     window.setTimeout(() => syncComposerTextFromElement(el), 0);
     window.requestAnimationFrame(() => syncComposerTextFromElement(el));
@@ -484,12 +512,357 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   const syncComposerText = useCallback(() => {
     const el = textareaRef.current;
     if (el) {
-      syncComposerTextFromElement(el);
+      syncComposerTextFromElement(el, { commitStore: true });
       return;
     }
     const nextText = getComposerText();
     commitComposerText(nextText);
   }, [commitComposerText, syncComposerTextFromElement]);
+
+  const clearComposerSelectionAnchor = useCallback(() => {
+    composerSelectionRef.current = null;
+    composerInputAnchorRef.current = null;
+  }, []);
+
+  const rememberComposerSelection = useCallback((el: HTMLTextAreaElement, options?: { readonly allowEndOverwrite?: boolean; readonly updateInputAnchor?: boolean }) => {
+    if (document.activeElement !== el) return;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    if (start === null || end === null) return;
+    const previous = composerSelectionRef.current;
+    const isCollapsedAtEnd = start === el.value.length && end === el.value.length;
+    const previousWasInsideText = previous
+      && previous.valueLength === el.value.length
+      && (previous.start < el.value.length || previous.end < el.value.length);
+    if (isCollapsedAtEnd && previousWasInsideText) {
+      return;
+    }
+    const snapshot = {
+      start,
+      end,
+      direction: (el.selectionDirection ?? "none") as "forward" | "backward" | "none",
+      valueLength: el.value.length,
+      value: el.value,
+    };
+    composerSelectionRef.current = snapshot;
+    if (options?.updateInputAnchor) {
+      composerInputAnchorRef.current = snapshot;
+    }
+  }, []);
+
+  const restoreComposerSelectionBeforeInput = useCallback((el: HTMLTextAreaElement) => {
+    const selection = composerSelectionRef.current;
+    if (!selection || document.activeElement !== el) return;
+    if (selection.valueLength !== el.value.length) return;
+    const currentStart = el.selectionStart;
+    const currentEnd = el.selectionEnd;
+    if (currentStart === selection.start && currentEnd === selection.end) return;
+    const currentLooksForcedToEnd = currentStart === el.value.length && currentEnd === el.value.length;
+    const rememberedWasInsideText = selection.start < el.value.length || selection.end < el.value.length;
+    if (!currentLooksForcedToEnd || !rememberedWasInsideText) return;
+    try {
+      el.setSelectionRange(selection.start, selection.end, selection.direction);
+    } catch {
+      // Android WebView can transiently reject selection changes during IME updates.
+    }
+  }, []);
+
+  const manuallyApplyComposerBeforeInput = useCallback((el: HTMLTextAreaElement, event: InputEvent): boolean => {
+    const selection = composerInputAnchorRef.current ?? composerSelectionRef.current;
+    if (!selection || document.activeElement !== el) return false;
+    if (selection.valueLength !== el.value.length) return false;
+    if (!(selection.start < el.value.length || selection.end < el.value.length)) return false;
+    if (!(el.selectionStart === el.value.length && el.selectionEnd === el.value.length)) return false;
+    if (event.isComposing) return false;
+    const inputType = event.inputType;
+    if (inputType === "deleteContentBackward" || inputType === "deleteContentForward") {
+      event.preventDefault();
+      const sourceText = selection.value;
+      let deleteStart = selection.start;
+      let deleteEnd = selection.end;
+      if (deleteStart === deleteEnd && inputType === "deleteContentBackward" && deleteStart > 0) {
+        const previousChar = Array.from(sourceText.slice(0, deleteStart)).at(-1) ?? "";
+        deleteStart = Math.max(0, deleteStart - previousChar.length);
+      } else if (deleteStart === deleteEnd && inputType === "deleteContentForward" && deleteEnd < sourceText.length) {
+        const nextChar = Array.from(sourceText.slice(deleteEnd)).at(0) ?? "";
+        deleteEnd = Math.min(sourceText.length, deleteEnd + nextChar.length);
+      }
+      const nextText = `${sourceText.slice(0, deleteStart)}${sourceText.slice(deleteEnd)}`;
+      el.value = nextText;
+      try {
+        el.setSelectionRange(deleteStart, deleteStart, "none");
+      } catch {
+        // Ignore transient Android WebView selection errors.
+      }
+      updateComposerTextSnapshot(nextText);
+      composerSelectionRef.current = {
+        start: deleteStart,
+        end: deleteStart,
+        direction: "none",
+        valueLength: nextText.length,
+        value: nextText,
+      };
+      composerInputAnchorRef.current = composerSelectionRef.current;
+      return true;
+    }
+    if (inputType !== "insertText" && inputType !== "insertReplacementText") return false;
+    const insertedText = event.data ?? "";
+    if (!insertedText) return false;
+
+    event.preventDefault();
+    const before = selection.value.slice(0, selection.start);
+    const after = selection.value.slice(selection.end);
+    const nextText = `${before}${insertedText}${after}`;
+    const nextCursor = selection.start + insertedText.length;
+    el.value = nextText;
+    try {
+      el.setSelectionRange(nextCursor, nextCursor, "none");
+    } catch {
+      // Ignore transient Android WebView selection errors.
+    }
+    updateComposerTextSnapshot(nextText);
+    composerSelectionRef.current = {
+      start: nextCursor,
+      end: nextCursor,
+      direction: "none",
+      valueLength: nextText.length,
+      value: nextText,
+    };
+    composerInputAnchorRef.current = composerSelectionRef.current;
+    return true;
+  }, [updateComposerTextSnapshot]);
+
+  const repairAppendedComposerInput = useCallback((el: HTMLTextAreaElement): boolean => {
+    const selection = composerInputAnchorRef.current ?? composerSelectionRef.current;
+    if (!selection || document.activeElement !== el) return false;
+    const selectionWasInsideText = selection.start < selection.value.length || selection.end < selection.value.length;
+    if (!selectionWasInsideText) return false;
+    const currentValue = el.value;
+    if (currentValue === selection.value) return false;
+    if (!currentValue.startsWith(selection.value)) return false;
+    const appendedText = currentValue.slice(selection.value.length);
+    if (!appendedText) return false;
+
+    const repairedText = `${selection.value.slice(0, selection.start)}${appendedText}${selection.value.slice(selection.end)}`;
+    const nextCursor = selection.start + appendedText.length;
+    el.value = repairedText;
+    try {
+      el.setSelectionRange(nextCursor, nextCursor, "none");
+    } catch {
+      // Some Android IMEs briefly reject selection changes during commit.
+    }
+    updateComposerTextSnapshot(repairedText);
+    composerSelectionRef.current = {
+      start: nextCursor,
+      end: nextCursor,
+      direction: "none",
+      valueLength: repairedText.length,
+      value: repairedText,
+    };
+    composerInputAnchorRef.current = composerSelectionRef.current;
+    return true;
+  }, [updateComposerTextSnapshot]);
+
+  const startComposerComposition = useCallback((el: HTMLTextAreaElement) => {
+    const remembered = composerInputAnchorRef.current ?? composerSelectionRef.current;
+    const currentStart = el.selectionStart ?? el.value.length;
+    const currentEnd = el.selectionEnd ?? currentStart;
+    const currentLooksForcedToEnd = currentStart === el.value.length && currentEnd === el.value.length;
+    const rememberedWasInsideText = remembered
+      && remembered.valueLength === el.value.length
+      && (remembered.start < el.value.length || remembered.end < el.value.length);
+    composerCompositionRef.current = {
+      start: currentLooksForcedToEnd && rememberedWasInsideText ? remembered.start : currentStart,
+      end: currentLooksForcedToEnd && rememberedWasInsideText ? remembered.end : currentEnd,
+      value: el.value,
+    };
+  }, []);
+
+  const repairComposerCompositionCommit = useCallback((el: HTMLTextAreaElement, options?: { readonly finish?: boolean; readonly committedText?: string }) => {
+    const composition = composerCompositionRef.current;
+    if (!composition || document.activeElement !== el) return;
+    const committedValue = el.value;
+    if (committedValue === composition.value) return;
+
+    const insertedAtEnd = committedValue.startsWith(composition.value)
+      ? committedValue.slice(composition.value.length)
+      : options?.committedText ?? "";
+    if (!insertedAtEnd) {
+      if (options?.finish) composerCompositionRef.current = null;
+      syncComposerTextFromElement(el);
+      rememberComposerSelection(el);
+      return;
+    }
+
+    const expectedAtCursor = `${composition.value.slice(0, composition.start)}${insertedAtEnd}${composition.value.slice(composition.end)}`;
+    if (committedValue === expectedAtCursor) {
+      composerCompositionRef.current = {
+        ...composition,
+        insertedText: insertedAtEnd,
+      };
+      if (options?.finish) composerCompositionRef.current = null;
+      syncComposerTextFromElement(el);
+      rememberComposerSelection(el);
+      return;
+    }
+
+    el.value = expectedAtCursor;
+    const nextCursor = composition.start + insertedAtEnd.length;
+    try {
+      el.setSelectionRange(nextCursor, nextCursor, "none");
+    } catch {
+      // Android WebView can transiently reject selection changes after IME commit.
+    }
+    updateComposerTextSnapshot(expectedAtCursor);
+    composerSelectionRef.current = {
+      start: nextCursor,
+      end: nextCursor,
+      direction: "none",
+      valueLength: expectedAtCursor.length,
+      value: expectedAtCursor,
+    };
+    composerInputAnchorRef.current = composerSelectionRef.current;
+    composerCompositionRef.current = options?.finish
+      ? null
+      : {
+          ...composition,
+          insertedText: insertedAtEnd,
+        };
+  }, [rememberComposerSelection, syncComposerTextFromElement, updateComposerTextSnapshot]);
+
+  const startComposerPolling = useCallback(() => {
+    if (composerPollFrameRef.current !== null) return;
+    const poll = () => {
+      const el = textareaRef.current;
+      if (!el || !composerFocusedRef.current) {
+        composerPollFrameRef.current = null;
+        return;
+      }
+      repairAppendedComposerInput(el);
+      repairComposerCompositionCommit(el);
+      if (el.value !== composerTextSnapshotRef.current) {
+        syncComposerTextFromElement(el);
+      }
+      rememberComposerSelection(el);
+      composerPollFrameRef.current = window.requestAnimationFrame(poll);
+    };
+    composerPollFrameRef.current = window.requestAnimationFrame(poll);
+  }, [rememberComposerSelection, repairAppendedComposerInput, repairComposerCompositionCommit, syncComposerTextFromElement]);
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return undefined;
+
+    const repairThenSync = () => {
+      repairAppendedComposerInput(el);
+      repairComposerCompositionCommit(el);
+      syncComposerTextFromElement(el);
+    };
+    const scheduleSync = () => {
+      repairThenSync();
+      window.setTimeout(repairThenSync, 0);
+      window.requestAnimationFrame(repairThenSync);
+      startComposerPolling();
+    };
+    const handleBeforeInput = (event: InputEvent) => {
+      if (manuallyApplyComposerBeforeInput(el, event)) return;
+      restoreComposerSelectionBeforeInput(el);
+      scheduleSync();
+    };
+    const handleCompositionStart = () => {
+      startComposerComposition(el);
+    };
+    const handleCompositionEnd = (event: CompositionEvent) => {
+      const committedText = event.data ?? "";
+      window.setTimeout(() => repairComposerCompositionCommit(el, { finish: true, committedText }), 0);
+      window.requestAnimationFrame(() => repairComposerCompositionCommit(el, { finish: true, committedText }));
+    };
+    const handleSelectionChange = () => {
+      rememberComposerSelection(el, { updateInputAnchor: true });
+    };
+    const handleDelayedSelectionChange = () => {
+      handleSelectionChange();
+      window.setTimeout(handleSelectionChange, 0);
+      window.setTimeout(handleSelectionChange, 32);
+      window.setTimeout(handleSelectionChange, 96);
+      window.requestAnimationFrame(handleSelectionChange);
+    };
+    const handlePointerStart = () => {
+      clearComposerSelectionAnchor();
+    };
+    const handleFocus = () => {
+      composerFocusedRef.current = true;
+      rememberComposerSelection(el, { updateInputAnchor: true });
+      scheduleSync();
+    };
+    const handleBlur = () => {
+      composerFocusedRef.current = false;
+      composerSelectionRef.current = null;
+      composerInputAnchorRef.current = null;
+      if (composerPollFrameRef.current !== null) {
+        window.cancelAnimationFrame(composerPollFrameRef.current);
+        composerPollFrameRef.current = null;
+      }
+      syncComposerTextFromElement(el, { commitStore: true });
+    };
+
+    el.addEventListener("beforeinput", handleBeforeInput);
+    el.addEventListener("input", scheduleSync);
+    el.addEventListener("change", scheduleSync);
+    el.addEventListener("compositionstart", handleCompositionStart);
+    el.addEventListener("compositionupdate", scheduleSync);
+    el.addEventListener("compositionend", handleCompositionEnd);
+    el.addEventListener("keyup", scheduleSync);
+    el.addEventListener("select", handleSelectionChange);
+    el.addEventListener("selectionchange", handleSelectionChange);
+    el.addEventListener("touchstart", handlePointerStart);
+    el.addEventListener("pointerdown", handlePointerStart);
+    el.addEventListener("click", handleDelayedSelectionChange);
+    el.addEventListener("touchend", handleDelayedSelectionChange);
+    el.addEventListener("pointerup", handleDelayedSelectionChange);
+    el.addEventListener("paste", scheduleSync);
+    el.addEventListener("cut", scheduleSync);
+    el.addEventListener("drop", scheduleSync);
+    el.addEventListener("focus", handleFocus);
+    el.addEventListener("blur", handleBlur);
+
+    return () => {
+      el.removeEventListener("beforeinput", handleBeforeInput);
+      el.removeEventListener("input", scheduleSync);
+      el.removeEventListener("change", scheduleSync);
+      el.removeEventListener("compositionstart", handleCompositionStart);
+      el.removeEventListener("compositionupdate", scheduleSync);
+      el.removeEventListener("compositionend", handleCompositionEnd);
+      el.removeEventListener("keyup", scheduleSync);
+      el.removeEventListener("select", handleSelectionChange);
+      el.removeEventListener("selectionchange", handleSelectionChange);
+      el.removeEventListener("touchstart", handlePointerStart);
+      el.removeEventListener("pointerdown", handlePointerStart);
+      el.removeEventListener("click", handleDelayedSelectionChange);
+      el.removeEventListener("touchend", handleDelayedSelectionChange);
+      el.removeEventListener("pointerup", handleDelayedSelectionChange);
+      el.removeEventListener("paste", scheduleSync);
+      el.removeEventListener("cut", scheduleSync);
+      el.removeEventListener("drop", scheduleSync);
+      el.removeEventListener("focus", handleFocus);
+      el.removeEventListener("blur", handleBlur);
+      if (composerPollFrameRef.current !== null) {
+        window.cancelAnimationFrame(composerPollFrameRef.current);
+        composerPollFrameRef.current = null;
+      }
+    };
+  }, [
+    rememberComposerSelection,
+    clearComposerSelectionAnchor,
+    manuallyApplyComposerBeforeInput,
+    repairAppendedComposerInput,
+    repairComposerCompositionCommit,
+    restoreComposerSelectionBeforeInput,
+    startComposerPolling,
+    startComposerComposition,
+    syncComposerTextAfterDomUpdate,
+    syncComposerTextFromElement,
+  ]);
 
   const handleQuickAction = (command: string) => {
     const sessionId = activeSessionId ?? createDraftSession(activeBookId ?? null);
@@ -500,6 +873,10 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     if (!activeSessionId) return;
     const message = messages[messageIndex];
     if (!message) return;
+    textareaRef.current?.blur();
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
     setPendingDelete({
       sessionId: activeSessionId,
       messageIndex,
@@ -587,7 +964,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                         }
                       }
 
-                      return items.map((item) => {
+                      const rendered = items.map((item) => {
                         if (item.kind === "thinking") {
                           return (
                             <div key={`t-${item.pi}`} className="mb-2">
@@ -617,6 +994,21 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                         }
                         return null;
                       });
+                      const hasTextContent = items.some((item) => item.kind === "text" && item.part.content.trim().length > 0);
+                      if (!hasTextContent && activeSessionId) {
+                        rendered.push(
+                          <div key="delete-tool-only-message" className="mt-2 flex justify-start">
+                            <button
+                              type="button"
+                              onClick={() => requestDeleteMessage(i)}
+                              className="inline-flex min-h-9 shrink-0 touch-manipulation items-center gap-1.5 rounded-full border border-border/35 bg-background/30 px-3 text-xs font-medium text-muted-foreground/85 transition-colors hover:border-destructive/35 hover:bg-destructive/10 hover:text-destructive"
+                            >
+                              删除
+                            </button>
+                          </div>,
+                        );
+                      }
+                      return rendered;
                     })()}
                   </>
                 ) : (
@@ -705,10 +1097,10 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                   ref={textareaRef}
                   defaultValue={composerTextSnapshotRef.current}
                   onInput={(e) => {
-                    syncComposerTextFromElement(e.currentTarget);
+                    syncComposerTextAfterDomUpdate(e.currentTarget);
                   }}
                   onChange={(e) => {
-                    syncComposerTextFromElement(e.currentTarget);
+                    syncComposerTextAfterDomUpdate(e.currentTarget);
                   }}
                   onCompositionUpdate={(e) => {
                     syncComposerTextAfterDomUpdate(e.currentTarget);
@@ -794,7 +1186,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
           role="dialog"
           aria-modal="true"
           aria-label="确认删除消息"
-          onClick={() => setPendingDelete(null)}
+          onClick={(event) => event.stopPropagation()}
         >
           <div
             className="glass-panel w-full max-w-sm rounded-[1.75rem] border border-border/70 bg-card/95 p-5 shadow-2xl shadow-primary/10"

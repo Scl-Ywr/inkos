@@ -231,6 +231,15 @@ function updateActiveStageProgress(
   });
 }
 
+function settleStagesAfterError(stages: PipelineStage[] | undefined): PipelineStage[] | undefined {
+  if (!stages || stages.length === 0) return stages;
+  return stages.map((stage) => ({
+    ...stage,
+    status: stage.status === "completed" ? stage.status : "completed",
+    progress: undefined,
+  }));
+}
+
 function createTextDeltaBatcher(apply: (text: string) => void): {
   push: (text: string) => void;
   flush: () => void;
@@ -453,7 +462,7 @@ export function attachSessionStreamListeners({
           });
 
           const flat = deriveFlat(parts);
-          return { messages: replaceLast(messages, { ...stream, ...flat, parts }) };
+          return { messages: replaceLast(messages, { ...stream, ...flat, parts, tokenUsage: undefined }) };
         }),
       }));
     } catch {
@@ -475,7 +484,7 @@ export function attachSessionStreamListeners({
             execution.status = data.isError ? "error" : "completed";
             execution.completedAt = Date.now();
             execution.stages = data.isError
-              ? execution.stages?.map((stage) => ({ ...stage, progress: undefined }))
+              ? settleStagesAfterError(execution.stages)
               : execution.stages?.map((stage) =>
                   stage.status !== "completed"
                     ? { ...stage, status: "completed" as const, progress: undefined }
@@ -489,7 +498,7 @@ export function attachSessionStreamListeners({
             return { type: "tool" as const, execution };
           });
           const flat = deriveFlat(parts);
-          const tokenUsage = sumTokenUsages(flat.toolExecutions ?? []) ?? stream.tokenUsage;
+          const tokenUsage = sumTokenUsages(flat.toolExecutions ?? []);
           return { messages: replaceLast(messages, { ...stream, ...flat, parts, tokenUsage }) };
         }),
       }));
@@ -523,7 +532,7 @@ export function attachSessionStreamListeners({
                 status: "error" as const,
                 error,
                 completedAt: Date.now(),
-                stages: part.execution.stages?.map((stage) => ({ ...stage, progress: undefined })),
+                stages: settleStagesAfterError(part.execution.stages),
               },
             };
           });

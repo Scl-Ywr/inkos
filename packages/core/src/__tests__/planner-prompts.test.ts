@@ -11,7 +11,7 @@ describe("PLANNER_MEMO_SYSTEM_PROMPT", () => {
     expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("1 主线 + 1 支线");
     expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("三连问");
     expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("YAML frontmatter");
-    expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("goal 字段不超过 50 字");
+    expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("goal 字段不超过 80 字");
     expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("## 当前任务");
     expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("## 不要做");
   });
