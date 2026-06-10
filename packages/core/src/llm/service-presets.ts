@@ -181,6 +181,7 @@ export async function listModelsForService(
       const { isActiveTextModel, lookupModel } = await import("./providers/lookup.js");
       for (const m of probed) {
         const card = lookupModel(service, m.id);
+        if (provider && provider.id !== "ollama" && provider.models.length > 0 && !card) continue;
         if (card && !isActiveTextModel(card)) continue;
         byId.set(m.id, card ? toModelInfo(card) : { id: m.id, name: m.name, contextWindow: m.contextWindow });
       }

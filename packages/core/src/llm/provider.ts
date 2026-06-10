@@ -41,7 +41,7 @@ export interface StreamProgress {
 
 export type OnStreamProgress = (progress: StreamProgress) => void;
 
-const INKOS_USER_AGENT = "InkOS/1.3.5";
+const INKOS_USER_AGENT = "curl/8.0.1";
 const UNKNOWN_MODEL_FALLBACK_MAX_TOKENS = 16_384;
 /** Dedicated max output tokens for creative writing agents (writer / settler). */
 export const WRITING_MAX_OUTPUT_TOKENS = 24_576;

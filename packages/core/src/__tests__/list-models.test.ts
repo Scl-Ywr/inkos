@@ -80,6 +80,18 @@ describe("listModelsForService (B8)", () => {
     expect(models.some((m) => m.id === "claude-sonnet-4-6")).toBe(true);
   });
 
+  it("known provider 不展示 live /models 返回的未知模型，避免无权限模型 403", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ id: "claude-sonnet-4-6" }, { id: "provider-private-model" }] }),
+    } as any) as typeof fetch;
+
+    const models = await listModelsForService("anthropic", "sk-test");
+
+    expect(models.some((m) => m.id === "claude-sonnet-4-6")).toBe(true);
+    expect(models.some((m) => m.id === "provider-private-model")).toBe(false);
+  });
+
   it("bailian 不用 OpenAI 兼容 /models 污染 Anthropic 通道模型列表", async () => {
     const fetchMock = vi.fn().mockImplementation(async (input: string | URL | Request) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;

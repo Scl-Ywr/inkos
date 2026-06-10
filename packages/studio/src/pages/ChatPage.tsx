@@ -103,6 +103,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const composerEditableRef = useRef<HTMLDivElement>(null);
   const composerTextSnapshotRef = useRef(useChatStore.getState().input);
   const composerFocusedRef = useRef(false);
   const composerPollFrameRef = useRef<number | null>(null);
@@ -318,19 +319,21 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   }, [configuredModelSelection, groupedModels, modelPickerStatus, selectedModel, selectedService, serviceConfigLoaded, setSelectedModel]);
 
   const resizeComposer = useCallback(() => {
-    const el = textareaRef.current;
+    const el = textareaRef.current ?? composerEditableRef.current;
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, []);
 
   useEffect(() => {
-    const el = textareaRef.current;
+    const textarea = textareaRef.current;
+    const editable = composerEditableRef.current;
+    const elementValue = textarea?.value ?? editable?.innerText.replace(/\n$/, "") ?? null;
     const storeInput = useChatStore.getState().input;
     const result = resolveComposerTextSync({
       storeInput,
       composerText: composerTextSnapshotRef.current,
-      elementValue: el?.value ?? null,
+      elementValue,
       elementFocused: false,
     });
     composerTextSnapshotRef.current = result.text;
@@ -338,8 +341,11 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     if (result.syncStoreText !== null && storeInput !== result.syncStoreText) {
       setInput(result.syncStoreText);
     }
-    if (el && el.value !== result.text) {
-      el.value = result.text;
+    if (textarea && textarea.value !== result.text) {
+      textarea.value = result.text;
+    }
+    if (editable && editable.innerText.replace(/\n$/, "") !== result.text) {
+      editable.textContent = result.text;
     }
     resizeComposer();
   }, [activeSessionId, resizeComposer, setInput]);
@@ -473,6 +479,9 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
       preserveTextSelectionAfterUpdate(textareaRef.current);
       textareaRef.current.value = text;
     }
+    if (composerEditableRef.current && composerEditableRef.current.innerText.replace(/\n$/, "") !== text) {
+      composerEditableRef.current.textContent = text;
+    }
     resizeComposer();
   };
 
@@ -496,7 +505,11 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     }
   };
 
-  const getComposerText = () => textareaRef.current?.value ?? composerTextSnapshotRef.current;
+  const getEditableComposerText = (el: HTMLDivElement) => el.innerText.replace(/\u00a0/g, " ").replace(/\n$/, "");
+  const getComposerText = () => {
+    if (composerEditableRef.current) return getEditableComposerText(composerEditableRef.current);
+    return textareaRef.current?.value ?? composerTextSnapshotRef.current;
+  };
   const syncComposerTextFromElement = useCallback((el: HTMLTextAreaElement, options?: { readonly commitStore?: boolean }) => {
     const nextText = el.value;
     if (options?.commitStore) {
@@ -509,15 +522,33 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     window.setTimeout(() => syncComposerTextFromElement(el), 0);
     window.requestAnimationFrame(() => syncComposerTextFromElement(el));
   }, [syncComposerTextFromElement]);
+  const syncComposerTextFromEditable = useCallback((el: HTMLDivElement, options?: { readonly commitStore?: boolean }) => {
+    const nextText = getEditableComposerText(el);
+    if (options?.commitStore) {
+      commitComposerText(nextText);
+      return;
+    }
+    updateComposerTextSnapshot(nextText);
+  }, [commitComposerText, updateComposerTextSnapshot]);
+  const syncComposerEditableAfterDomUpdate = useCallback((el: HTMLDivElement) => {
+    syncComposerTextFromEditable(el);
+    window.setTimeout(() => syncComposerTextFromEditable(el), 0);
+    window.requestAnimationFrame(() => syncComposerTextFromEditable(el));
+  }, [syncComposerTextFromEditable]);
   const syncComposerText = useCallback(() => {
-    const el = textareaRef.current;
-    if (el) {
-      syncComposerTextFromElement(el, { commitStore: true });
+    const editable = composerEditableRef.current;
+    if (editable) {
+      syncComposerTextFromEditable(editable, { commitStore: true });
+      return;
+    }
+    const textarea = textareaRef.current;
+    if (textarea) {
+      syncComposerTextFromElement(textarea, { commitStore: true });
       return;
     }
     const nextText = getComposerText();
     commitComposerText(nextText);
-  }, [commitComposerText, syncComposerTextFromElement]);
+  }, [commitComposerText, syncComposerTextFromEditable, syncComposerTextFromElement]);
 
   const clearComposerSelectionAnchor = useCallback(() => {
     composerSelectionRef.current = null;
@@ -667,10 +698,12 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     const remembered = composerInputAnchorRef.current ?? composerSelectionRef.current;
     const currentStart = el.selectionStart ?? el.value.length;
     const currentEnd = el.selectionEnd ?? currentStart;
+
+    // 优先使用实际光标位置，如果光标被强制到末尾才使用记忆的位置
     const currentLooksForcedToEnd = currentStart === el.value.length && currentEnd === el.value.length;
-    const rememberedWasInsideText = remembered
-      && remembered.valueLength === el.value.length
-      && (remembered.start < el.value.length || remembered.end < el.value.length);
+    const hasRememberedPosition = remembered && remembered.valueLength === el.value.length;
+    const rememberedWasInsideText = hasRememberedPosition && (remembered.start < el.value.length || remembered.end < el.value.length);
+
     composerCompositionRef.current = {
       start: currentLooksForcedToEnd && rememberedWasInsideText ? remembered.start : currentStart,
       end: currentLooksForcedToEnd && rememberedWasInsideText ? remembered.end : currentEnd,
@@ -687,32 +720,24 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     const insertedAtEnd = committedValue.startsWith(composition.value)
       ? committedValue.slice(composition.value.length)
       : options?.committedText ?? "";
-    if (!insertedAtEnd) {
-      if (options?.finish) composerCompositionRef.current = null;
-      syncComposerTextFromElement(el);
-      rememberComposerSelection(el);
-      return;
-    }
 
+    // 总是尝试修复，即使 insertedAtEnd 为空
     const expectedAtCursor = `${composition.value.slice(0, composition.start)}${insertedAtEnd}${composition.value.slice(composition.end)}`;
+
+    // 如果已经正确就不改
     if (committedValue === expectedAtCursor) {
-      composerCompositionRef.current = {
-        ...composition,
-        insertedText: insertedAtEnd,
-      };
-      if (options?.finish) composerCompositionRef.current = null;
+      composerCompositionRef.current = options?.finish ? null : { ...composition, insertedText: insertedAtEnd };
       syncComposerTextFromElement(el);
       rememberComposerSelection(el);
       return;
     }
 
+    // 强制修正
     el.value = expectedAtCursor;
     const nextCursor = composition.start + insertedAtEnd.length;
     try {
       el.setSelectionRange(nextCursor, nextCursor, "none");
-    } catch {
-      // Android WebView can transiently reject selection changes after IME commit.
-    }
+    } catch {}
     updateComposerTextSnapshot(expectedAtCursor);
     composerSelectionRef.current = {
       start: nextCursor,
@@ -722,12 +747,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
       value: expectedAtCursor,
     };
     composerInputAnchorRef.current = composerSelectionRef.current;
-    composerCompositionRef.current = options?.finish
-      ? null
-      : {
-          ...composition,
-          insertedText: insertedAtEnd,
-        };
+    composerCompositionRef.current = options?.finish ? null : { ...composition, insertedText: insertedAtEnd };
   }, [rememberComposerSelection, syncComposerTextFromElement, updateComposerTextSnapshot]);
 
   const startComposerPolling = useCallback(() => {
@@ -774,6 +794,28 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     };
     const handleCompositionEnd = (event: CompositionEvent) => {
       const committedText = event.data ?? "";
+      // 强制使用当前记忆的光标位置
+      const remembered = composerInputAnchorRef.current ?? composerSelectionRef.current;
+      if (remembered && el.value.endsWith(committedText)) {
+        // 文本被追加到末尾，强制移到光标位置
+        const before = remembered.value.slice(0, remembered.start);
+        const after = remembered.value.slice(remembered.end);
+        const corrected = `${before}${committedText}${after}`;
+        el.value = corrected;
+        const newCursor = remembered.start + committedText.length;
+        try {
+          el.setSelectionRange(newCursor, newCursor, "none");
+        } catch {}
+        updateComposerTextSnapshot(corrected);
+        composerSelectionRef.current = {
+          start: newCursor,
+          end: newCursor,
+          direction: "none",
+          valueLength: corrected.length,
+          value: corrected,
+        };
+        composerInputAnchorRef.current = composerSelectionRef.current;
+      }
       window.setTimeout(() => repairComposerCompositionCommit(el, { finish: true, committedText }), 0);
       window.requestAnimationFrame(() => repairComposerCompositionCommit(el, { finish: true, committedText }));
     };
@@ -1093,35 +1135,36 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
               }}
             >
               <div className="flex items-end gap-2 px-3 py-2.5">
-                <textarea
-                  ref={textareaRef}
-                  defaultValue={composerTextSnapshotRef.current}
+                <div
+                  ref={composerEditableRef}
+                  contentEditable={!loading ? "plaintext-only" : "false"}
+                  suppressContentEditableWarning
+                  role="textbox"
+                  aria-multiline="true"
+                  aria-label={isZh ? "输入消息" : "Message InkOS"}
+                  data-placeholder={isZh ? "输入消息..." : "Message InkOS..."}
                   onInput={(e) => {
-                    syncComposerTextAfterDomUpdate(e.currentTarget);
-                  }}
-                  onChange={(e) => {
-                    syncComposerTextAfterDomUpdate(e.currentTarget);
+                    syncComposerEditableAfterDomUpdate(e.currentTarget);
                   }}
                   onCompositionUpdate={(e) => {
-                    syncComposerTextAfterDomUpdate(e.currentTarget);
+                    syncComposerEditableAfterDomUpdate(e.currentTarget);
                   }}
                   onCompositionEnd={(e) => {
-                    syncComposerTextAfterDomUpdate(e.currentTarget);
+                    syncComposerEditableAfterDomUpdate(e.currentTarget);
                   }}
                   onKeyUp={(e) => {
-                    syncComposerTextAfterDomUpdate(e.currentTarget);
+                    syncComposerEditableAfterDomUpdate(e.currentTarget);
                   }}
                   onPaste={(e) => {
-                    syncComposerTextAfterDomUpdate(e.currentTarget);
+                    syncComposerEditableAfterDomUpdate(e.currentTarget);
                   }}
                   onBlur={(e) => {
-                    commitComposerText(e.currentTarget.value);
+                    commitComposerText(getEditableComposerText(e.currentTarget));
                   }}
                   onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); syncComposerText(); void onSend(getComposerText()); } }}
-                  placeholder={isZh ? "输入消息..." : "Message InkOS..."}
-                  disabled={loading}
-                  rows={1}
-                  className="max-h-[40dvh] min-h-11 flex-1 resize-none overflow-y-auto border-none! bg-transparent text-base leading-6 placeholder:text-muted-foreground/60 shadow-none outline-none! ring-0! focus:border-none! focus:outline-none! focus:ring-0! disabled:opacity-50 sm:max-h-[200px] sm:min-h-0 sm:text-sm"
+                  className={`max-h-[40dvh] min-h-11 flex-1 overflow-y-auto whitespace-pre-wrap break-words border-none! bg-transparent text-base leading-6 shadow-none outline-none! ring-0! empty:before:pointer-events-none empty:before:text-muted-foreground/60 empty:before:content-[attr(data-placeholder)] focus:border-none! focus:outline-none! focus:ring-0! sm:max-h-[200px] sm:min-h-0 sm:text-sm ${
+                    loading ? "pointer-events-none opacity-50" : ""
+                  }`}
                 />
                 <button
                   type={loading ? "button" : "submit"}

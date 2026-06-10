@@ -22,18 +22,18 @@ export function validateWriteRequest(
   const targetWordCount = wordCountOverride ?? book.chapterWordCount;
   const modelMaxTokens = client.defaults.maxTokens;
 
-  // 检查字数是否超出模型能力
+  // 检查字数是否超出模型能力（宽松模式：允许2倍buffer）
   const estimatedOutputTokens = targetWordCount * 2;
-  if (estimatedOutputTokens > modelMaxTokens) {
+  if (estimatedOutputTokens > modelMaxTokens * 2) {
     warnings.push({
       severity: "error",
-      message: `目标字数 ${targetWordCount} 字需要约 ${estimatedOutputTokens.toLocaleString()} tokens，超出模型最大输出限制 ${modelMaxTokens.toLocaleString()} tokens。`,
-      suggestion: `建议将单章字数降低到 ${Math.floor(modelMaxTokens / 2.5)} 字以内，或切换支持更大输出的模型。`,
+      message: `目标字数 ${targetWordCount} 字需要约 ${estimatedOutputTokens.toLocaleString()} tokens，远超模型输出限制 ${modelMaxTokens.toLocaleString()} tokens。`,
+      suggestion: `建议将单章字数降低到 ${Math.floor(modelMaxTokens / 4)} 字以内，或切换支持更大输出的模型。`,
     });
-  } else if (estimatedOutputTokens > modelMaxTokens * 0.9) {
+  } else if (estimatedOutputTokens > modelMaxTokens) {
     warnings.push({
       severity: "warning",
-      message: `目标字数 ${targetWordCount} 字接近模型输出限制（使用约 ${Math.round((estimatedOutputTokens / modelMaxTokens) * 100)}%）。`,
+      message: `目标字数 ${targetWordCount} 字接近模型输出限制（估算 ${estimatedOutputTokens.toLocaleString()} tokens vs ${modelMaxTokens.toLocaleString()} tokens）。`,
       suggestion: "生成可能会被截断，建议适当降低字数或使用更大输出能力的模型。",
     });
   }
