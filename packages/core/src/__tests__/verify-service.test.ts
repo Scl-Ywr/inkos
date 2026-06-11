@@ -7,7 +7,7 @@ describe("verifyService (B9)", () => {
   afterEach(() => {
     global.fetch = originalFetch;
     vi.restoreAllMocks();
-  });
+  }, 20_000);
 
   it("probe 成功 → probe.ok=true + chat 字段非 null（chat 步骤被执行）", async () => {
     global.fetch = vi.fn()

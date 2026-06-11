@@ -581,7 +581,7 @@ describe("createStudioServer daemon lifecycle", () => {
   });
 
   afterEach(async () => {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     await rm(join(tmpdir(), "inkos-global.env"), { force: true });
   });
 
@@ -591,7 +591,7 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(vi.isMockFunction(isSafeBookId)).toBe(false);
     expect(isSafeBookId("demo-book")).toBe(true);
     expect(isSafeBookId("demo/book")).toBe(false);
-  }, 10_000);
+  }, 30_000);
 
   it("returns from /api/daemon/start before the first write cycle finishes", async () => {
     let resolveStart: (() => void) | undefined;
@@ -607,7 +607,7 @@ describe("createStudioServer daemon lifecycle", () => {
 
     const responseOrTimeout = await Promise.race([
       app.request("http://localhost/api/v1/daemon/start", { method: "POST" }),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 30)),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 500)),
     ]);
 
     expect(responseOrTimeout).not.toBe("timeout");

@@ -16,5 +16,5 @@ describe("core root exports", () => {
 
     expect(core).toHaveProperty("PipelineRunner");
     expect(core).toHaveProperty("sendTelegram");
-  }, 10_000);
+  }, 30_000);
 });

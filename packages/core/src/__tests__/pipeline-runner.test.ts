@@ -836,15 +836,17 @@ describe("PipelineRunner", () => {
       inputGovernanceMode: "v2",
     });
 
+    const runtimeDir = join(state.bookDir(bookId), "story", "runtime");
+    await mkdir(runtimeDir, { recursive: true });
+
     await Promise.all([
-      mkdir(join(state.bookDir(bookId), "story", "runtime"), { recursive: true }),
       writeFile(join(state.bookDir(bookId), "story", "current_focus.md"), "# Current Focus\n\nTrack the merchant guild trail.\n", "utf-8"),
       writeFile(join(state.bookDir(bookId), "story", "volume_outline.md"), "# Volume Outline\n\n## Chapter 1\nTrack the merchant guild trail.\n", "utf-8"),
       writeFile(join(state.bookDir(bookId), "story", "current_state.md"), "# Current State\n\n- Lin Yue still hides the broken oath token.\n", "utf-8"),
       writeFile(join(state.bookDir(bookId), "story", "story_bible.md"), "# Story Bible\n\n- The jade seal cannot be destroyed.\n", "utf-8"),
       writeFile(join(state.bookDir(bookId), "story", "pending_hooks.md"), "# Pending Hooks\n\n- Why the mentor vanished after the trial.\n", "utf-8"),
       writeFile(
-        join(state.bookDir(bookId), "story", "runtime", "chapter-0001.intent.md"),
+        join(runtimeDir, "chapter-0001.intent.md"),
         [
           "# Chapter Intent",
           "",

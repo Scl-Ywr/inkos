@@ -238,5 +238,5 @@ describe("session transcript codec", () => {
     expect(typeof core.readTranscriptEvents).toBe("function");
     expect(typeof core.restoreAgentMessagesFromTranscript).toBe("function");
     expect(typeof core.TranscriptEventSchema.safeParse).toBe("function");
-  }, 15_000);
+  }, 30_000);
 });

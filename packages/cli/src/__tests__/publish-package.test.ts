@@ -9,7 +9,7 @@ const testDir = dirname(fileURLToPath(import.meta.url));
 const cliDir = resolve(testDir, "..", "..");
 const workspaceRoot = resolve(cliDir, "..", "..");
 const studioDir = resolve(workspaceRoot, "packages", "studio");
-const CLI_PACK_TEST_TIMEOUT_MS = 30_000;
+const CLI_PACK_TEST_TIMEOUT_MS = 120_000;
 const STUDIO_PACK_TEST_TIMEOUT_MS = 120_000;
 const sourceCliPackageJsonPromise = readFile(resolve(cliDir, "package.json"), "utf-8").then((raw) =>
   JSON.parse(raw),

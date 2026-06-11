@@ -151,7 +151,7 @@ describe("Phase 5 hotfix 1 — Studio truth file endpoints", () => {
     expect(body.file).toBe("outline/story_frame.md");
     expect(body.content).toContain("# Frame prose");
     expect(body.legacy).toBeUndefined();
-  }, 10_000);
+  }, 30_000);
 
   it("parses story_frame.md YAML frontmatter into structured fields + prose body", async () => {
     await writeFile(

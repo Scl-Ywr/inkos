@@ -34,6 +34,7 @@ import {
   isApiKeyOptionalForEndpoint,
   getAllEndpoints,
   probeModelsFromUpstream,
+  verifyService,
   fetchWithProxy,
   chatCompletion,
   buildExportArtifact,
@@ -1112,6 +1113,37 @@ function mergeServiceConfig(existing: ServiceConfigEntry[], updates: ServiceConf
     merged.set(serviceConfigKey(update), update);
   }
   return [...merged.values()];
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return normalized === "localhost" || normalized === "::1" || normalized === "[::1]" || /^127(?:\.\d{1,3}){3}$/.test(normalized);
+}
+
+function isCleartextExternalUrl(rawUrl: string | null | undefined): boolean {
+  if (!rawUrl?.trim()) return false;
+  try {
+    const url = new URL(rawUrl.trim());
+    return url.protocol === "http:" && !isLoopbackHostname(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function validateSecureServiceBaseUrls(services: readonly ServiceConfigEntry[]): string | null {
+  const invalid = services.find((service) => isCleartextExternalUrl(service.baseUrl));
+  if (!invalid) return null;
+  return `服务 ${serviceConfigKey(invalid)} 的 Base URL 必须使用 HTTPS；只有 localhost/127.0.0.1 本地端点允许 HTTP。`;
+}
+
+function officialVerifierAuthError(verification: {
+  readonly probe?: { readonly ok?: boolean; readonly error?: string };
+  readonly chat?: { readonly ok?: boolean; readonly error?: string } | null;
+}): string | null {
+  const probeError = verification.probe?.ok === false ? verification.probe.error ?? "" : "";
+  const chatError = verification.chat?.ok === false ? verification.chat.error ?? "" : "";
+  const error = [probeError, chatError].find((value) => /\b(?:401|403)\b/i.test(value));
+  return error ?? null;
 }
 
 function normalizeCoverConfig(raw: unknown): {
@@ -2443,6 +2475,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     const explicitService = env.values.service?.trim();
     const guessedService = env.values.baseUrl ? guessServiceFromBaseUrl(env.values.baseUrl) : null;
     const service = explicitService || guessedService || "custom";
+    if (isCleartextExternalUrl(env.values.baseUrl)) {
+      return c.json({
+        error: "Base URL 必须使用 HTTPS；只有 localhost/127.0.0.1 本地端点允许 HTTP。",
+      }, 400);
+    }
 
     const entry: ServiceConfigEntry = service === "custom"
       ? {
@@ -2480,6 +2517,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     if (body.services !== undefined) {
       const existingServices = normalizeServiceConfig(llm.services);
       const incomingServices = normalizeServiceConfig(body.services);
+      const securityError = validateSecureServiceBaseUrls(incomingServices);
+      if (securityError) {
+        return c.json({ error: securityError }, 400);
+      }
       llm.services = mergeServiceConfig(existingServices, incomingServices);
     }
     if (body.defaultModel !== undefined) {
@@ -2651,6 +2692,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     if (!resolvedBaseUrl) {
       return c.json({ ok: false, error: `未知服务商: ${service}` }, 400);
     }
+    if (isCleartextExternalUrl(resolvedBaseUrl)) {
+      return c.json({
+        ok: false,
+        error: "Base URL 必须使用 HTTPS；只有 localhost/127.0.0.1 本地端点允许 HTTP。",
+      }, 400);
+    }
 
     const baseService = isCustomServiceId(service) ? "custom" : service;
     const apiKeyOptional = isApiKeyOptionalForEndpoint({
@@ -2666,6 +2713,31 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
 
     const rawConfig = await loadRawConfig(root).catch(() => ({} as Record<string, unknown>));
     const llm = (rawConfig.llm as Record<string, unknown> | undefined) ?? {};
+    const proxyUrl = typeof llm.proxyUrl === "string" ? llm.proxyUrl : undefined;
+    if (!isCustomServiceId(service) && apiKey?.trim()) {
+      const endpoint = getAllEndpoints().find((ep) => ep.id === baseService);
+      const official = await verifyService(baseService, apiKey.trim(), {
+        ...(typeof model === "string" && model.trim()
+          ? { checkModel: model.trim() }
+          : endpoint?.checkModel ? { checkModel: endpoint.checkModel } : {}),
+        baseUrl: resolvedBaseUrl,
+        proxyUrl,
+      });
+      const authError = officialVerifierAuthError(official);
+      if (authError) {
+        return c.json({
+          ok: false,
+          error: `官方连接验证失败：${authError}`,
+          official,
+          probe: {
+            ok: false,
+            models: official.probe?.models ?? 0,
+            error: authError,
+          },
+          chat: official.chat ?? null,
+        }, 400);
+      }
+    }
     const probe = await probeServiceCapabilities({
       root,
       service,
@@ -2674,7 +2746,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       preferredApiFormat: apiFormat,
       preferredStream: stream,
       preferredModel: typeof model === "string" && model.trim() ? model.trim() : undefined,
-      proxyUrl: typeof llm.proxyUrl === "string" ? llm.proxyUrl : undefined,
+      proxyUrl,
     });
 
     // B12: 升级响应 shape 为 { probe, chat, ... }，同时保留老字段供 UI 过渡期兼容
