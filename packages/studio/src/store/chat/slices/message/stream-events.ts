@@ -309,6 +309,21 @@ export function attachSessionStreamListeners({
       sessions: updateSession(state.sessions, sessionId, (runtime) => {
         const [messages, stream] = getOrCreateStream(runtime.messages, streamTs);
         const parts = [...(stream.parts ?? [])];
+        const runningTool = findRunningToolPart(parts);
+        if (runningTool) {
+          const nextParts = parts.map((part) => {
+            if (part.type !== "tool" || part.execution.id !== runningTool.execution.id) return part;
+            return {
+              type: "tool" as const,
+              execution: {
+                ...part.execution,
+                streamingText: appendBoundedText(part.execution.streamingText, text, 50_000),
+              },
+            };
+          });
+          const flat = deriveFlat(nextParts);
+          return { messages: replaceLast(messages, { ...stream, ...flat, parts: nextParts }) };
+        }
         const last = parts[parts.length - 1];
         if (last?.type === "text") {
           parts[parts.length - 1] = { ...last, content: last.content + text };
