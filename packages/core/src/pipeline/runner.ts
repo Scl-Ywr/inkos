@@ -262,12 +262,16 @@ export interface PipelineConfig {
   readonly notifyChannels?: ReadonlyArray<NotifyChannel>;
   readonly radarSources?: ReadonlyArray<RadarSource>;
   readonly externalContext?: string;
-  readonly modelOverrides?: Record<string, string | AgentLLMOverride>;
+  readonly modelOverrides?: Record<string, string | RuntimeAgentLLMOverride>;
   readonly inputGovernanceMode?: InputGovernanceMode;
   readonly logger?: Logger;
   readonly onStreamProgress?: OnStreamProgress;
   readonly onTextDelta?: (text: string, agent?: string) => void;
   readonly onContextCompression?: ContextCompressionCallback;
+}
+
+export interface RuntimeAgentLLMOverride extends AgentLLMOverride {
+  readonly apiKey?: string;
 }
 
 export interface TokenUsageSummary {
@@ -580,9 +584,11 @@ export class PipelineRunner {
     const provider = override.provider ?? base?.provider ?? "custom";
     const apiKeySource = override.apiKeyEnv
       ? `env:${override.apiKeyEnv}`
-      : `base:${base?.apiKey ?? ""}`;
+      : override.apiKey !== undefined
+        ? `service:${override.service ?? override.baseUrl}`
+        : `base:${base?.apiKey ?? ""}`;
     const stream = override.stream ?? base?.stream ?? true;
-    const apiFormat = base?.apiFormat ?? "chat";
+    const apiFormat = override.apiFormat ?? base?.apiFormat ?? "chat";
     const cacheKey = [
       provider,
       override.baseUrl,
@@ -594,10 +600,10 @@ export class PipelineRunner {
     if (!client) {
       const apiKey = override.apiKeyEnv
         ? process.env[override.apiKeyEnv] ?? ""
-        : base?.apiKey ?? "";
+        : override.apiKey ?? base?.apiKey ?? "";
       client = createLLMClient({
         provider,
-        service: base?.service ?? "custom",
+        service: override.service ?? base?.service ?? "custom",
         configSource: base?.configSource ?? "env",
         baseUrl: override.baseUrl,
         apiKey,
@@ -1725,8 +1731,16 @@ export class PipelineRunner {
         analyzeAITells: (content) => analyzeAITells(content, pipelineLang),
         analyzeSensitiveWords: (content) => analyzeSensitiveWords(content, undefined, pipelineLang),
         runPostWriteChecks: (content) => {
+          const revisionRules = new Set([
+            "章内重复",
+            "相邻段落复读",
+            "句子复读",
+            "In-chapter repetition",
+            "Near-duplicate paragraphs",
+            "Repeated sentence",
+          ]);
           const baseIssues = postWriteValidate(content, gp, parsedBookRules, pipelineLang)
-            .filter((v) => v.severity === "error")
+            .filter((v) => v.severity === "error" || revisionRules.has(v.rule))
             .map((v) => ({
               severity: "critical" as const,
               category: v.rule,

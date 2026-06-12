@@ -2748,7 +2748,7 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("degrades to state-degraded when state validation errors instead of aborting", async () => {
+  it("keeps writing usable when state validation errors instead of aborting", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
       inputGovernanceMode: "legacy",
     });
@@ -2771,12 +2771,13 @@ describe("PipelineRunner", () => {
     );
 
     const result = await runner.writeNextChapter(bookId);
-    expect(result.status).toBe("state-degraded");
+    expect(result.status).toBe("ready-for-review");
 
-    // Chapter should be saved (content is fine, only truth files are degraded)
+    // Chapter should be saved; validator outage is recorded as an audit warning.
     const index = await state.loadChapterIndex(bookId);
     expect(index).toHaveLength(1);
-    expect(index[0]!.status).toBe("state-degraded");
+    expect(index[0]!.status).toBe("ready-for-review");
+    expect(index[0]!.auditIssues.some((issue) => issue.includes("状态校验不可用"))).toBe(true);
 
     await rm(root, { recursive: true, force: true });
   });
@@ -2827,7 +2828,7 @@ describe("PipelineRunner", () => {
       .mockResolvedValueOnce({
         passed: false,
         warnings: [{
-          category: "unsupported_change",
+          category: "contradiction",
           description: "状态写成铜牌未带在身上，但正文明确写了怀里的铜牌。",
         }],
       })
@@ -2901,14 +2902,14 @@ describe("PipelineRunner", () => {
       .mockResolvedValueOnce({
         passed: false,
         warnings: [{
-          category: "unsupported_change",
+          category: "contradiction",
           description: "settler 把铜牌写没了，但正文仍然明确带在身上。",
         }],
       })
       .mockResolvedValueOnce({
         passed: false,
         warnings: [{
-          category: "unsupported_change",
+          category: "contradiction",
           description: "重试后仍然把铜牌写没了。",
         }],
       });

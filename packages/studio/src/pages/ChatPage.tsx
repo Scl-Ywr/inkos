@@ -4,6 +4,7 @@ import type { TFunction } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
 import { fetchJson } from "../hooks/use-api";
 import { useCompositionInput } from "../hooks/use-composition-input";
+import { useAndroidImeBridge } from "../hooks/use-android-ime-bridge";
 import { appAlert, appConfirm } from "../lib/app-dialog";
 import { chatSelectors, useChatStore } from "../store/chat";
 import type { ChatSessionKind } from "../store/chat";
@@ -383,8 +384,11 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [compositionInput.value]);
 
-  // Keep the textarea uncontrolled so Android IMEs own the selection/caret.
-  // Only write into the DOM when an external action restores or clears a draft.
+  // Keep the textarea fully uncontrolled so Android IMEs own the
+  // selection/caret. In particular, do not pass a changing defaultValue:
+  // some Android WebViews apply it again after an IME commit and move the
+  // caret to the end. Only write into the DOM when an external action
+  // restores or clears a draft.
   useEffect(() => {
     const el = textareaRef.current;
     if (
@@ -397,83 +401,13 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     compositionInput.setValue(input);
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-  }, [input, compositionInput.isComposing, compositionInput.setValue]);
+  }, [activeSessionId, input, compositionInput.isComposing, compositionInput.setValue]);
 
-  // Some Android WebViews/IMEs mutate textarea.value without promptly
-  // dispatching React's synthetic input/composition events. Bridge the native
-  // events and, while focused, compare the real DOM value as a final fallback.
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    let focused = document.activeElement === el;
-    let nativeComposing = false;
-    let timer: number | null = null;
-    let lastValue = el.value;
-
-    const syncFromDom = () => {
-      if (nativeComposing) return;
-      const next = el.value;
-      if (next === lastValue) return;
-      lastValue = next;
-      compositionInput.setValue(next);
-      el.style.height = "auto";
-      el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-    };
-    const syncAfterImeCommit = () => {
-      syncFromDom();
-      queueMicrotask(syncFromDom);
-      window.setTimeout(syncFromDom, 0);
-      window.setTimeout(syncFromDom, 32);
-    };
-    const poll = () => {
-      if (!focused) {
-        timer = null;
-        return;
-      }
-      syncFromDom();
-      timer = window.setTimeout(poll, 50);
-    };
-    const onFocus = () => {
-      focused = true;
-      lastValue = el.value;
-      if (timer === null) timer = window.setTimeout(poll, 50);
-    };
-    const onBlur = () => {
-      syncAfterImeCommit();
-      focused = false;
-      if (timer !== null) window.clearTimeout(timer);
-      timer = null;
-    };
-    const onCompositionStart = () => {
-      nativeComposing = true;
-    };
-    const onCompositionEnd = () => {
-      nativeComposing = false;
-      syncAfterImeCommit();
-    };
-
-    el.addEventListener("focus", onFocus);
-    el.addEventListener("blur", onBlur);
-    el.addEventListener("compositionstart", onCompositionStart);
-    el.addEventListener("beforeinput", syncAfterImeCommit);
-    el.addEventListener("input", syncAfterImeCommit);
-    el.addEventListener("compositionupdate", syncAfterImeCommit);
-    el.addEventListener("compositionend", onCompositionEnd);
-    el.addEventListener("textInput", syncAfterImeCommit);
-    if (focused) timer = window.setTimeout(poll, 50);
-
-    return () => {
-      if (timer !== null) window.clearTimeout(timer);
-      el.removeEventListener("focus", onFocus);
-      el.removeEventListener("blur", onBlur);
-      el.removeEventListener("compositionstart", onCompositionStart);
-      el.removeEventListener("beforeinput", syncAfterImeCommit);
-      el.removeEventListener("input", syncAfterImeCommit);
-      el.removeEventListener("compositionupdate", syncAfterImeCommit);
-      el.removeEventListener("compositionend", onCompositionEnd);
-      el.removeEventListener("textInput", syncAfterImeCommit);
-    };
-  }, [activeSessionId, compositionInput.setValue]);
+  useAndroidImeBridge({
+    textareaRef,
+    sessionId: activeSessionId,
+    setValue: compositionInput.setValue,
+  });
 
   const scrollToLatest = (behavior: ScrollBehavior = "smooth") => {
     if (!scrollRef.current) return;
@@ -1091,7 +1025,6 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                 <textarea
                   key={activeSessionId ?? "no-session"}
                   ref={textareaRef}
-                  defaultValue={compositionInput.value}
                   onChange={compositionInput.handleChange}
                   onInput={compositionInput.handleInput}
                   onCompositionStart={compositionInput.handleCompositionStart}

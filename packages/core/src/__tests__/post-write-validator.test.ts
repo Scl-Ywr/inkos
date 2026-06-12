@@ -1,10 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
   detectDuplicateTitle,
+  detectInChapterRepetition,
   detectParagraphLengthDrift,
   detectParagraphShapeWarnings,
   resolveDuplicateTitle,
   normalizePostWriteSurface,
+  removeRepeatedParagraphs,
   validatePostWrite,
   type PostWriteViolation,
 } from "../agents/post-write-validator.js";
@@ -321,6 +323,50 @@ describe("validatePostWrite", () => {
     const result = detectParagraphShapeWarnings(current, "zh");
     expect(findRule(result, "段落过碎")).toBeDefined();
     expect(findRule(result, "连续短段")).toBeDefined();
+  });
+
+  it("detects repeated paragraphs inside the same chapter", () => {
+    const repeated = "他把铜牌压在掌心，沿着柜台后面的暗缝慢慢摸过去。暗缝里有一点潮气，像有人刚把湿布塞进去，又急着抽走。";
+    const content = [
+      repeated,
+      "",
+      "外面的脚步声停在门口，老板娘把账本合上，眼神朝后厨那边偏了一下。",
+      "",
+      repeated,
+    ].join("\n");
+
+    const result = validatePostWrite(content, baseProfile, null);
+
+    expect(findRule(result, "章内重复")).toBeDefined();
+  });
+
+  it("removes substantial exact duplicate paragraphs before persistence", () => {
+    const repeated = "他把铜牌压在掌心，沿着柜台后面的暗缝慢慢摸过去。暗缝里有一点潮气，像有人刚把湿布塞进去，又急着抽走。";
+    const content = [
+      repeated,
+      "",
+      "外面的脚步声停在门口，老板娘把账本合上。",
+      "",
+      repeated,
+    ].join("\n");
+
+    const normalized = removeRepeatedParagraphs(content, "zh");
+    expect(normalized.split(repeated)).toHaveLength(2);
+    expect(normalized).toContain("老板娘把账本合上");
+  });
+
+  it("detects nearby near-duplicate paragraphs without blocking ordinary new beats", () => {
+    const content = [
+      "他把铜牌压在掌心，沿着柜台后面的暗缝慢慢摸过去。暗缝里有一点潮气，像有人刚把湿布塞进去，又急着抽走。",
+      "",
+      "他把铜牌压在掌心，沿着柜台后面的暗缝一点点摸过去。暗缝里还有潮气，像有人刚把湿布塞进去，又急着抽走。",
+      "",
+      "门外的脚步声停了，老板娘把账本合上，没再看他。",
+    ].join("\n");
+
+    const result = detectInChapterRepetition(content, "zh");
+
+    expect(findRule(result, "相邻段落复读")).toBeDefined();
   });
 
   it("detects duplicate chapter titles", () => {

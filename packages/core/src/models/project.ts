@@ -107,9 +107,11 @@ export type WritingConfig = z.infer<typeof WritingConfigSchema>;
 
 export const AgentLLMOverrideSchema = z.object({
   model: z.string().min(1),
+  service: z.string().min(1).optional(),
   provider: z.enum(["anthropic", "openai", "custom"]).optional(),
   baseUrl: z.string().url().optional(),
   apiKeyEnv: z.string().optional(),
+  apiFormat: z.enum(["chat", "responses"]).optional(),
   stream: z.boolean().optional(),
 });
 

@@ -1,22 +1,29 @@
-import { useEffect, useState } from "react";
-import { Bell, Bot, Radar, Settings2, Plus, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Bell, Bot, Radar, Settings2, Plus, Trash2, RotateCcw } from "lucide-react";
 import { fetchJson, putApi, useApi } from "../hooks/use-api";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import {
+  AGENT_MODEL_ROUTES,
+  buildAgentModelOverrides,
   buildDetectionConfig,
   buildNotifyChannel,
   DEFAULT_DETECTION,
   detectionDraftFromConfig,
+  fixedAgentOverrideRows,
+  modelRouteValue,
   notifyDraftFromChannel,
   NOTIFY_TYPES,
+  parseModelRouteValue,
+  type AgentModelRouteKey,
   type DetectionDraft,
   type NotifyChannelDraft,
   type NotifyType,
   type OverrideRow,
 } from "./project-settings-model";
 import { StudioSelect } from "../components/StudioSelect";
+import { useServiceStore } from "../store/service/store";
 
 interface Nav {
   toDashboard: () => void;
@@ -69,6 +76,7 @@ function ParameterLabel({ label, hint }: { label: React.ReactNode; hint: string 
 }
 
 const fieldClass = "w-full rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm outline-none focus:border-primary/50";
+const DEFAULT_MODEL_SENTINEL = "__default__";
 
 export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunction }) {
   const c = useColors(theme);
@@ -82,6 +90,17 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
   const [det, setDet] = useState<DetectionDraft>({ ...DEFAULT_DETECTION });
   const [notice, setNotice] = useState<{ tone: NoticeTone; message: string } | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
+  const services = useServiceStore((state) => state.services);
+  const modelsByService = useServiceStore((state) => state.modelsByService);
+  const fetchServices = useServiceStore((state) => state.fetchServices);
+  const fetchBankModels = useServiceStore((state) => state.fetchBankModels);
+  const fetchCustomModels = useServiceStore((state) => state.fetchCustomModels);
+
+  useEffect(() => {
+    void fetchServices();
+    void fetchBankModels();
+    void fetchCustomModels();
+  }, [fetchBankModels, fetchCustomModels, fetchServices]);
 
   useEffect(() => {
     if (modeData?.mode) setMode(modeData.mode);
@@ -89,11 +108,7 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
 
   useEffect(() => {
     if (!overridesData) return;
-    setOverrideRows(Object.entries(overridesData.overrides ?? {}).map(([agent, val]) => {
-      if (typeof val === "string") return { agent, model: val };
-      const { model, ...rest } = (val ?? {}) as { model?: string };
-      return { agent, model: model ?? "", rest };
-    }));
+    setOverrideRows(fixedAgentOverrideRows(overridesData.overrides));
   }, [overridesData]);
 
   useEffect(() => {
@@ -122,6 +137,43 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
   const updateChannel = (index: number, patch: Partial<NotifyChannelDraft>) => {
     setNotifyChannels((prev) => prev.map((ch, i) => (i === index ? { ...ch, ...patch } : ch)));
   };
+
+  const updateOverrideModel = (agent: AgentModelRouteKey, service: string | undefined, model: string) => {
+    setOverrideRows((prev) => {
+      const rows = prev.length > 0 ? prev : fixedAgentOverrideRows({});
+      return rows.map((row) => row.agent === agent ? { ...row, service, model } : row);
+    });
+  };
+
+  const modelOptions = useMemo(() => {
+    const known = new Map<string, string>();
+    for (const serviceInfo of services.filter((item) => item.connected)) {
+      for (const model of modelsByService[serviceInfo.service] ?? []) {
+        const id = model.id.trim();
+        const service = serviceInfo.service.trim();
+        if (!id || !service) continue;
+        const value = modelRouteValue(service, id);
+        if (!known.has(value)) known.set(value, `${serviceInfo.label} · ${model.name ?? id}`);
+      }
+    }
+    return [
+      { value: DEFAULT_MODEL_SENTINEL, label: "使用默认模型" },
+      ...Array.from(known, ([value, label]) => ({ value, label })),
+    ];
+  }, [modelsByService, services]);
+
+  useEffect(() => {
+    if (modelOptions.length <= 1) return;
+    setOverrideRows((rows) => rows.map((row) => {
+      if (!row.model.trim() || row.service?.trim()) return row;
+      const matches = modelOptions
+        .map((option) => parseModelRouteValue(option.value))
+        .filter((selection) => selection?.model === row.model);
+      return matches.length === 1
+        ? { ...row, service: matches[0]!.service }
+        : row;
+    }));
+  }, [modelOptions]);
 
   return (
     <div className="space-y-8">
@@ -182,59 +234,68 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
 
       {/* Model routing — per-agent model overrides */}
       <SettingsCard title={t("settings.modelOverrides")} description={t("settings.modelOverridesHint")} icon={<Bot size={18} />}>
-        <div className="space-y-2">
-          {overrideRows.length > 0 && (
-            <div className="grid grid-cols-[1fr_auto_1fr_2.25rem] items-center gap-2 px-1 text-[11px] text-muted-foreground/55">
-              <span>Agent：需要单独指定模型的执行角色</span>
-              <span />
-              <span>Model ID：服务商返回的精确模型标识</span>
-              <span />
-            </div>
-          )}
-          {overrideRows.length === 0 && (
-            <p className="text-xs text-muted-foreground italic">{t("settings.noOverrides")}</p>
-          )}
-          {overrideRows.map((row, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <input
-                value={row.agent}
-                onChange={(e) => setOverrideRows((prev) => prev.map((r, j) => (j === i ? { ...r, agent: e.target.value } : r)))}
-                placeholder={t("settings.agentName")}
-                className={`${fieldClass} flex-1`}
-              />
-              <span className="text-muted-foreground">→</span>
-              <input
-                value={row.model}
-                onChange={(e) => setOverrideRows((prev) => prev.map((r, j) => (j === i ? { ...r, model: e.target.value } : r)))}
-                placeholder={t("settings.modelId")}
-                className={`${fieldClass} flex-1 font-mono`}
-              />
-              <button
-                onClick={() => setOverrideRows((prev) => prev.filter((_, j) => j !== i))}
-                className="shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
-                aria-label="remove"
-              >
-                <Trash2 size={15} />
-              </button>
-            </div>
-          ))}
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          {AGENT_MODEL_ROUTES.map((route) => {
+            const index = overrideRows.findIndex((row) => row.agent === route.agent);
+            const row = index >= 0 ? overrideRows[index] : { agent: route.agent, model: "" };
+            const selectedValue = row.model.trim() && row.service?.trim()
+              ? modelRouteValue(row.service, row.model)
+              : DEFAULT_MODEL_SENTINEL;
+            return (
+              <div key={route.agent} className="rounded-xl border border-border/60 bg-secondary/20 p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-bold text-foreground">{route.label} Agent</div>
+                    <div className="mt-0.5 font-mono text-[11px] text-muted-foreground/60">{route.agent}</div>
+                  </div>
+                  {row.model.trim() && (
+                    <button
+                      onClick={() => setOverrideRows((prev) => {
+                        const rows = prev.length > 0 ? prev : fixedAgentOverrideRows({});
+                        return rows.map((item) => item.agent === route.agent ? { ...item, service: undefined, model: "" } : item);
+                      })}
+                      className="rounded-lg p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                      aria-label="reset"
+                      title="恢复默认模型"
+                    >
+                      <RotateCcw size={14} />
+                    </button>
+                  )}
+                </div>
+                <p className="mt-2 min-h-10 text-xs leading-5 text-muted-foreground/65">{route.hint}</p>
+                <StudioSelect<string>
+                  value={selectedValue}
+                  onValueChange={(value) => {
+                    if (value === DEFAULT_MODEL_SENTINEL) {
+                      updateOverrideModel(route.agent, undefined, "");
+                      return;
+                    }
+                    const selection = parseModelRouteValue(value);
+                    if (selection) updateOverrideModel(route.agent, selection.service, selection.model);
+                  }}
+                  options={modelOptions}
+                  triggerClassName="mt-3 min-h-10 bg-background/70"
+                  contentClassName="min-w-[18rem]"
+                />
+              </div>
+            );
+          })}
         </div>
+        {modelOptions.length === 1 && (
+          <div className="rounded-lg border border-dashed border-border/70 bg-secondary/20 px-4 py-3 text-sm text-muted-foreground">
+            暂无可选模型。请先前往模型配置连接服务并完成模型测试。
+          </div>
+        )}
         <div className="flex flex-wrap gap-2">
           <button
-            onClick={() => setOverrideRows((prev) => [...prev, { agent: "", model: "" }])}
+            onClick={() => setOverrideRows(fixedAgentOverrideRows({}))}
             className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium ${c.btnSecondary}`}
           >
-            <Plus size={14} /> {t("settings.addOverride")}
+            <RotateCcw size={14} /> 全部使用默认模型
           </button>
           <button
             onClick={() => runSave("overrides", async () => {
-              const overrides: Record<string, unknown> = {};
-              for (const r of overrideRows) {
-                const agent = r.agent.trim();
-                const model = r.model.trim();
-                if (!agent || !model) continue;
-                overrides[agent] = r.rest && Object.keys(r.rest).length > 0 ? { ...r.rest, model } : model;
-              }
+              const overrides = buildAgentModelOverrides(overrideRows);
               await putApi("/project/model-overrides", { overrides });
               await refetchOverrides();
             }, t("settings.saved"))}

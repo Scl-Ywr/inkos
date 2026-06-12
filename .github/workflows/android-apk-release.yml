@@ -90,6 +90,7 @@ jobs:
       - name: Verify official baseline and release checks
         run: |
           git fetch https://github.com/Narcooo/inkos.git refs/tags/v1.5.0:refs/tags/v1.5.0 --force
+          pnpm audit --prod --audit-level=high
           pnpm audit:upstream
           pnpm audit:semantic-patterns
           pnpm typecheck

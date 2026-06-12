@@ -24,8 +24,10 @@ function choiceSetFromExecution(
   const choices = actionsFromExecution(exec);
   const resolvedChoices = choices.length > 0 ? choices : [...fallbackChoices];
   if (resolvedChoices.length === 0) return null;
+  const sourceKey = typeof exec.id === "string" && exec.id.trim() ? exec.id.trim() : "no-tool-id";
+  const choiceSignature = JSON.stringify(resolvedChoices.map((choice) => choice.trim()));
   return {
-    key: typeof exec.id === "string" && exec.id.trim() ? exec.id : fallbackKey,
+    key: `${fallbackKey}:${sourceKey}:${choiceSignature}`,
     choices: resolvedChoices,
   };
 }

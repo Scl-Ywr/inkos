@@ -78,6 +78,8 @@ import {
   type LogSink,
   type LogEntry,
   type RequestedIntent,
+  type LLMRequestDiagnostics,
+  type AgentRequestDiagnostics,
   type SessionKind,
 } from "@actalk/inkos-core";
 import { access, appendFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -117,6 +119,8 @@ const AGENT_LABELS: Record<string, string> = {
   architect: "建书", writer: "写作", auditor: "审计",
   reviser: "修订", exporter: "导出", "state-repair": "恢复章节状态",
 };
+const LARGE_MODEL_PROMPT_WARN_CHARS = 60_000;
+const HUGE_MODEL_PROMPT_WARN_CHARS = 120_000;
 const TOOL_LABELS: Record<string, string> = {
   read: "读取文件", edit: "编辑文件", grep: "搜索", ls: "列目录",
   propose_action: "确认动作",
@@ -1813,11 +1817,44 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
 
   function createStudioLLMClient(
     llm: ProjectConfig["llm"],
+    options?: { readonly sessionId?: string },
   ) {
     return createLLMClient({
       ...llm,
       configSource: "studio",
+      onRequestDiagnostics: (diagnostics) => emitModelRequestDiagnostics(diagnostics, options?.sessionId),
     });
+  }
+
+  async function resolvePipelineModelOverrides(
+    currentConfig: ProjectConfig,
+  ): Promise<PipelineConfig["modelOverrides"]> {
+    if (!currentConfig.modelOverrides) return undefined;
+    const secrets = await loadSecrets(root);
+    const resolved: NonNullable<PipelineConfig["modelOverrides"]> = {};
+
+    for (const [agent, override] of Object.entries(currentConfig.modelOverrides)) {
+      if (typeof override === "string" || !override.service) {
+        resolved[agent] = override;
+        continue;
+      }
+
+      const serviceId = override.service;
+      const baseService = isCustomServiceId(serviceId) ? "custom" : serviceId;
+      const entry = await resolveConfiguredServiceEntry(root, serviceId);
+      const baseUrl = await resolveConfiguredServiceBaseUrl(root, serviceId, override.baseUrl);
+      resolved[agent] = {
+        ...override,
+        service: baseService,
+        provider: override.provider ?? resolveServiceProviderFamily(baseService) ?? "openai",
+        ...(baseUrl ? { baseUrl } : {}),
+        apiKey: secrets.services[serviceId]?.apiKey ?? "",
+        apiFormat: override.apiFormat ?? entry?.apiFormat ?? currentConfig.llm.apiFormat,
+        stream: override.stream ?? entry?.stream ?? currentConfig.llm.stream,
+      };
+    }
+
+    return resolved;
   }
 
   function emitRuntimeLog(entry: Pick<LogEntry, "level" | "tag" | "message"> & { readonly sessionId?: string }): void {
@@ -1839,6 +1876,32 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     if (normalized.level === "warn") console.warn(prefix, normalized.message);
     else if (normalized.level === "error") console.error(prefix, normalized.message);
     else console.log(prefix, normalized.message);
+  }
+
+  function emitModelRequestDiagnostics(
+    diagnostics: LLMRequestDiagnostics | AgentRequestDiagnostics,
+    sessionId?: string,
+  ): void {
+    if (diagnostics.promptChars < LARGE_MODEL_PROMPT_WARN_CHARS) return;
+    const estimatedTokens = Math.ceil(diagnostics.promptChars / 2);
+    const level = diagnostics.promptChars >= HUGE_MODEL_PROMPT_WARN_CHARS ? "warn" : "info";
+    const endpoint = "endpoint" in diagnostics ? diagnostics.endpoint : diagnostics.api;
+    const service = "service" in diagnostics && diagnostics.service ? `${diagnostics.service}/` : "";
+    emitRuntimeLog({
+      level,
+      tag: "context",
+      ...(sessionId ? { sessionId } : {}),
+      message: [
+        diagnostics.promptChars >= HUGE_MODEL_PROMPT_WARN_CHARS ? "极大上下文请求" : "大上下文请求",
+        `模型 ${service}${diagnostics.model}`,
+        `接口 ${endpoint}`,
+        `stream=${diagnostics.stream}`,
+        `maxTokens=${diagnostics.maxTokens}`,
+        `prompt=${diagnostics.promptChars.toLocaleString()} 字符`,
+        `约 ${estimatedTokens.toLocaleString()} tokens`,
+        "可能导致首字等待较久或上游超时",
+      ].join(" · "),
+    });
   }
 
   registerRuntimeRoutes(app, { root, state, broadcast });
@@ -1875,14 +1938,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       : sseSink;
     const logger = createLogger({ tag: "studio", sinks: [scopedSseSink, consoleSink] });
     return {
-      client: overrides?.client ?? createStudioLLMClient(currentConfig.llm),
+      client: overrides?.client ?? createStudioLLMClient(currentConfig.llm, { sessionId: overrides?.sessionIdForSSE }),
       model: overrides?.model ?? currentConfig.llm.model,
       projectRoot: root,
       defaultLLMConfig: currentConfig.llm,
       foundationReviewRetries: currentConfig.foundation?.reviewRetries ?? 2,
       writingReviewRetries: currentConfig.writing?.reviewRetries ?? 1,
       chapterReviewMode: (currentConfig.writing as { readonly reviewMode?: string } | undefined)?.reviewMode === "manual" ? "manual" : "auto",
-      modelOverrides: currentConfig.modelOverrides,
+      modelOverrides: await resolvePipelineModelOverrides(currentConfig),
       notifyChannels: currentConfig.notify,
       logger,
       onContextCompression: (event) => {
@@ -2119,12 +2182,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
   // edits won't land where the user expects.
   const LEGACY_SHIM_FILES = new Set(["story_bible.md", "book_rules.md"]);
   const RUNTIME_DIAGNOSTIC_FILE_RE = /^runtime\/chapter-\d{4}\.(?:intent\.md|plan\.md|context\.json|rule-stack\.yaml|trace\.json)$/;
+  const RUNTIME_STATE_FILE_RE = /^state\/(?:manifest|current_state|hooks|chapter_summaries)\.json$/;
 
   /**
    * Validate a requested truth-file path:
    *   1. Must be one of the declared flat files, an outline/* allow-listed
-   *      entry, a runtime chapter trace file, or a roles/**\/*.md file under
-   *      主要角色/ | 次要角色/.
+   *      entry, a runtime chapter trace file, a structured runtime state file,
+   *      or a roles/**\/*.md file under 主要角色/ | 次要角色/.
    *   2. Must resolve to a path inside bookDir/story/ (no `..`, no absolute
    *      paths, no traversal via the tier-name segment).
    */
@@ -2142,6 +2206,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       TRUTH_FLAT_FILES.includes(file)
       || TRUTH_OUTLINE_FILES.includes(file)
       || RUNTIME_DIAGNOSTIC_FILE_RE.test(file)
+      || RUNTIME_STATE_FILE_RE.test(file)
       || /^roles\/(主要角色|次要角色|major|minor)\/[^/]+\.md$/.test(file);
 
     if (!allowed) return null;
@@ -2153,6 +2218,71 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       return null;
     }
     return resolved;
+  }
+
+  function resolveSnapshotTruthFilePath(bookDir: string, chapter: number, file: string): string | null {
+    if (!Number.isInteger(chapter) || chapter < 0) return null;
+    if (!resolveTruthFilePath(bookDir, file)) return null;
+
+    const snapshotDir = resolve(bookDir, "story", "snapshots", String(chapter));
+    const resolved = resolve(snapshotDir, file);
+    const relativePath = relative(snapshotDir, resolved);
+    if (relativePath === "" || relativePath.startsWith("..") || isAbsolute(relativePath)) {
+      return null;
+    }
+    return resolved;
+  }
+
+  async function listTruthFileHistory(bookDir: string, file: string): Promise<ReadonlyArray<{ chapter: number; size: number; preview: string }>> {
+    if (!resolveTruthFilePath(bookDir, file)) return [];
+    const snapshotsDir = join(bookDir, "story", "snapshots");
+    try {
+      const entries = await readdir(snapshotsDir, { withFileTypes: true });
+      const versions = await Promise.all(entries
+        .filter((entry) => entry.isDirectory() && /^\d+$/.test(entry.name))
+        .map(async (entry) => {
+          const chapter = Number(entry.name);
+          const snapshotPath = resolveSnapshotTruthFilePath(bookDir, chapter, file);
+          if (!snapshotPath) return null;
+          try {
+            const content = await readFile(snapshotPath, "utf-8");
+            return {
+              chapter,
+              size: content.length,
+              preview: content.slice(0, 200),
+            };
+          } catch {
+            return null;
+          }
+        }));
+      return versions
+        .filter((version): version is { chapter: number; size: number; preview: string } => version !== null)
+        .sort((a, b) => b.chapter - a.chapter);
+    } catch {
+      return [];
+    }
+  }
+
+  async function readTruthFileHistory(bookDir: string, file: string, chapter: number): Promise<{
+    readonly file: string;
+    readonly chapter: number;
+    readonly content: string | null;
+    readonly frontmatter?: unknown;
+    readonly body?: string;
+  }> {
+    const snapshotPath = resolveSnapshotTruthFilePath(bookDir, chapter, file);
+    if (!snapshotPath) {
+      return { file, chapter, content: null };
+    }
+    try {
+      const content = await readFile(snapshotPath, "utf-8");
+      const { tryParseBookRulesFrontmatter } = await import("@actalk/inkos-core");
+      const parsed = tryParseBookRulesFrontmatter(content);
+      const structured = parsed ? { frontmatter: parsed.rules, body: parsed.body } : {};
+      return { file, chapter, content, ...structured };
+    } catch {
+      return { file, chapter, content: null };
+    }
   }
 
   async function fileExists(path: string): Promise<boolean> {
@@ -2170,6 +2300,25 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     const id = c.req.param("id");
 
     const bookDir = state.bookDir(id);
+    const historyMatch = file.match(/^(.+)\/history(?:\/(\d+))?$/);
+    if (historyMatch) {
+      const truthFile = historyMatch[1]!;
+      const chapterText = historyMatch[2];
+      if (!resolveTruthFilePath(bookDir, truthFile)) {
+        return c.json({ error: "Invalid truth file" }, 400);
+      }
+      if (chapterText === undefined) {
+        const versions = await listTruthFileHistory(bookDir, truthFile);
+        return c.json({ file: truthFile, versions });
+      }
+      const chapter = Number(chapterText);
+      if (!Number.isInteger(chapter) || chapter < 0) {
+        return c.json({ error: "Invalid snapshot chapter" }, 400);
+      }
+      const history = await readTruthFileHistory(bookDir, truthFile, chapter);
+      return c.json(history, history.content === null ? 404 : 200);
+    }
+
     const resolved = resolveTruthFilePath(bookDir, file);
     if (!resolved) {
       return c.json({ error: "Invalid truth file" }, 400);
@@ -2194,20 +2343,24 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       const parsed = tryParseBookRulesFrontmatter(content);
       const structured = parsed ? { frontmatter: parsed.rules, body: parsed.body } : {};
       const runtimeDiagnostic = RUNTIME_DIAGNOSTIC_FILE_RE.test(file);
+      const runtimeState = RUNTIME_STATE_FILE_RE.test(file);
       return c.json({
         file,
         content,
         ...structured,
         ...(legacy ? { legacy: true } : {}),
         ...(runtimeDiagnostic ? { readonly: true, readonlyReason: "runtime-diagnostic" } : {}),
+        ...(runtimeState ? { readonly: true, readonlyReason: "runtime-state" } : {}),
       });
     } catch {
       const runtimeDiagnostic = RUNTIME_DIAGNOSTIC_FILE_RE.test(file);
+      const runtimeState = RUNTIME_STATE_FILE_RE.test(file);
       return c.json({
         file,
         content: null,
         ...(legacy ? { legacy: true } : {}),
         ...(runtimeDiagnostic ? { readonly: true, readonlyReason: "runtime-diagnostic" } : {}),
+        ...(runtimeState ? { readonly: true, readonlyReason: "runtime-state" } : {}),
       });
     }
   });
@@ -3031,12 +3184,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
         const content = await readFile(join(storyDir, relPath), "utf-8");
         const isShim = LEGACY_SHIM_FILES.has(relPath) && newLayout;
         const isRuntimeDiagnostic = RUNTIME_DIAGNOSTIC_FILE_RE.test(relPath);
+        const isRuntimeState = RUNTIME_STATE_FILE_RE.test(relPath);
         const entry: { readonly name: string; readonly size: number; readonly preview: string; readonly legacy?: true; readonly readonly?: true; readonly readonlyReason?: string } =
           isShim
             ? { name: relPath, size: content.length, preview: content.slice(0, 200), legacy: true }
             : isRuntimeDiagnostic
               ? { name: relPath, size: content.length, preview: content.slice(0, 200), readonly: true, readonlyReason: "runtime-diagnostic" }
-              : { name: relPath, size: content.length, preview: content.slice(0, 200) };
+              : isRuntimeState
+                ? { name: relPath, size: content.length, preview: content.slice(0, 200), readonly: true, readonlyReason: "runtime-state" }
+                : { name: relPath, size: content.length, preview: content.slice(0, 200) };
         return entry;
       } catch {
         return null;
@@ -3057,6 +3213,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       const runtimeFiles = (await listDir("runtime"))
         .map((f) => `runtime/${f}`)
         .filter((f) => RUNTIME_DIAGNOSTIC_FILE_RE.test(f));
+      const stateFiles = (await listDir("state"))
+        .map((f) => `state/${f}`)
+        .filter((f) => RUNTIME_STATE_FILE_RE.test(f));
 
       const all = [
         ...flatFiles,
@@ -3065,6 +3224,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
         ...minorRolesZh,
         ...majorRolesEn,
         ...minorRolesEn,
+        ...stateFiles,
         ...runtimeFiles,
       ];
       const described = await Promise.all(all.map(describe));
@@ -3499,7 +3659,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     try {
       // Load config + create LLM client (pipeline created after model resolution)
       const config = await loadCurrentProjectConfig({ requireApiKey: false });
-      const client = createStudioLLMClient(config.llm);
+      const client = createStudioLLMClient(config.llm, { sessionId });
 
       const loadedBookSession = await loadBookSession(root, sessionId);
       if (!loadedBookSession) {
@@ -3694,7 +3854,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
             ...(configuredEntry?.apiFormat ? { apiFormat: configuredEntry.apiFormat } : {}),
             ...(configuredEntry?.stream !== undefined ? { stream: configuredEntry.stream } : {}),
             baseUrl: configuredEntry?.baseUrl ?? "",
-          } as any)
+          } as any, { sessionId: bookSession.sessionId })
         : client;
       const pipeline = new PipelineRunner(await buildPipelineConfig({
         client: pipelineClient,
@@ -4065,6 +4225,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
               sessionId: streamSessionId,
               ...event,
             });
+          },
+          onRequestDiagnostics: (diagnostics) => {
+            emitModelRequestDiagnostics(diagnostics, streamSessionId);
           },
           onEvent: (event) => {
             if (event.type === "message_update") {
@@ -4604,6 +4767,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     }
     if (RUNTIME_DIAGNOSTIC_FILE_RE.test(file)) {
       return c.json({ error: "Runtime diagnostic files are read-only" }, 400);
+    }
+    if (RUNTIME_STATE_FILE_RE.test(file)) {
+      return c.json({ error: "Runtime state files are read-only" }, 400);
     }
     const { content } = await c.req.json<{ content: string }>();
     const { writeFile: writeFileFs, mkdir: mkdirFs } = await import("node:fs/promises");

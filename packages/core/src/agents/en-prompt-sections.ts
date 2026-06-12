@@ -39,6 +39,7 @@ export function buildEnglishCoreRules(_book: BookConfig): string {
 - **A forward hook roughly every ~350 words**: a small "what happens next?" pull. You don't have to resolve it, you have to plant it.
 - **A full setup → tension → unresolved arc every ~700-1000 words**: give the reader a concrete reason to keep going.
 - No stretch of ~200+ words that is pure description, backstory, or interior monologue without advancing the chapter goal or creating a beat. If it doesn't pull, cut it or rewrite it.
+- Do not restate a completed action, judgment, or emotion in the next paragraph with different wording. Every paragraph must add a new action, consequence, information change, or pressure shift.
 - **Density comes from semantic weight inside paragraphs, not from chopping them up.** Most narrative (non-dialogue) paragraphs should carry real weight — a few sentences, roughly 30-100 words. Dialogue lines are naturally short and do not count as "short paragraphs."
 - **One-line paragraphs are punctuation, not default rhythm.** Reserve them for: (1) an opening reversal line, (2) the final cliffhanger line, (3) a rare hammer-blow beat. Cap at ~5 per chapter.
 - **Never stack 3+ one-line paragraphs in a row.** After two short beats, the next paragraph must be a full narrative paragraph that re-gathers the action, detail, or emotion and resets the reader's breathing.

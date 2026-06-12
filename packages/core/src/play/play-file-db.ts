@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   PlayEdgeSchema,
@@ -15,6 +15,7 @@ import {
   type PlayStateSlotInput,
 } from "../models/play.js";
 import type { PlayReducerDB } from "./play-reducer.js";
+import { atomicWriteFileSync, readJsonWithBackupSync } from "../utils/atomic-file.js";
 
 interface PlayFileDBData {
   readonly entities: Record<string, PlayEntity>;
@@ -153,15 +154,21 @@ export class PlayFileDB implements PlayReducerDB {
   private load(): PlayFileDBData {
     if (!existsSync(this.filePath)) return emptyData();
     try {
-      const parsed = JSON.parse(readFileSync(this.filePath, "utf-8")) as Partial<PlayFileDBData>;
+      const parsed = readJsonWithBackupSync(
+        this.filePath,
+        (value) => value as Partial<PlayFileDBData>,
+      );
       return {
         entities: parseRecord(parsed.entities, PlayEntitySchema),
         edges: parseRecord(parsed.edges, PlayEdgeSchema),
         stateSlots: parseRecord(parsed.stateSlots, PlayStateSlotSchema),
         events: parseRecord(parsed.events, PlayEventSchema),
       };
-    } catch {
-      return emptyData();
+    } catch (error) {
+      throw new Error(
+        `Cannot load play world database "${this.filePath}". The damaged file was preserved.`,
+        { cause: error },
+      );
     }
   }
 
@@ -170,7 +177,7 @@ export class PlayFileDB implements PlayReducerDB {
   }
 
   private persist(): void {
-    writeFileSync(this.filePath, `${JSON.stringify(this.data, null, 2)}\n`, "utf-8");
+    atomicWriteFileSync(this.filePath, `${JSON.stringify(this.data, null, 2)}\n`);
   }
 }
 

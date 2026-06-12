@@ -7,6 +7,7 @@ import type { Logger } from "../utils/logger.js";
 import type { LengthLanguage } from "../utils/length-metrics.js";
 import {
   buildStateDegradedPersistenceOutput,
+  hasBlockingStateValidationWarnings,
   retrySettlementAfterValidationFailure,
 } from "./chapter-state-recovery.js";
 
@@ -68,19 +69,14 @@ export async function validateChapterTruthPersistence(params: {
       category: "state-validation",
       description: errorDescription,
       suggestion: params.language === "en"
-        ? "Repair chapter state from the persisted body before continuing."
-        : "请先基于已保存正文修复本章 state，再继续后续章节。",
+        ? "State validation was skipped for this chapter. If later continuity looks wrong, run state repair from the chapter body."
+        : "本章已跳过状态校验。如果后续连续性看起来不对，可基于章节正文手动恢复 state。",
     };
     return {
       validation: { passed: true, warnings: [] },
-      chapterStatus: "state-degraded",
-      degradedIssues: [errorIssue],
-      persistenceOutput: buildStateDegradedPersistenceOutput({
-        output: persistenceOutput,
-        oldState: params.previousTruth.oldState,
-        oldHooks: params.previousTruth.oldHooks,
-        oldLedger: params.previousTruth.oldLedger,
-      }),
+      chapterStatus: null,
+      degradedIssues: [],
+      persistenceOutput,
       auditResult: {
         ...params.auditResult,
         issues: [...params.auditResult.issues, errorIssue],
@@ -99,6 +95,23 @@ export async function validateChapterTruthPersistence(params: {
   }
 
   if (!validation.passed) {
+    if (!hasBlockingStateValidationWarnings(validation.warnings)) {
+      const softIssues = buildStateValidationAuditIssues(validation.warnings, params.language);
+      return {
+        validation: {
+          ...validation,
+          passed: true,
+        },
+        chapterStatus: null,
+        degradedIssues: [],
+        persistenceOutput,
+        auditResult: {
+          ...auditResult,
+          issues: [...auditResult.issues, ...softIssues],
+        },
+      };
+    }
+
     const recovery = await retrySettlementAfterValidationFailure({
       writer: params.writer,
       validator: params.validator,
@@ -142,4 +155,18 @@ export async function validateChapterTruthPersistence(params: {
     persistenceOutput,
     auditResult,
   };
+}
+
+function buildStateValidationAuditIssues(
+  warnings: ReadonlyArray<{ readonly category: string; readonly description: string }>,
+  language: LengthLanguage,
+): ReadonlyArray<AuditIssue> {
+  return warnings.map((warning) => ({
+    severity: "warning" as const,
+    category: `state-validation:${warning.category}`,
+    description: warning.description,
+    suggestion: language === "en"
+      ? "Review the truth-file update when convenient; this warning does not block continuing."
+      : "可在方便时检查本章 truth 文件更新；该警告不会阻塞继续写作。",
+  }));
 }

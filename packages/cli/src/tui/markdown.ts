@@ -22,7 +22,6 @@ const BOLD_OFF = "\x1b[22m";
 
 /** Strip ALL ANSI escape sequences from a string. */
 function stripAnsi(text: string): string {
-  // eslint-disable-next-line no-control-regex
   return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
 }
 

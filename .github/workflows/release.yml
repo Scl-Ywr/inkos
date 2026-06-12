@@ -28,6 +28,7 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --prod --audit-level=high
       - run: pnpm build
       - run: pnpm --filter @actalk/inkos-core typecheck
       - run: pnpm --filter @actalk/inkos typecheck

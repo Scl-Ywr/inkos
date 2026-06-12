@@ -167,7 +167,6 @@ function logDroppedMutationItems(raw: unknown, mutation: PlayMutation, turn: num
   const keptEd = mutation.edges.upsert.length;
   const keptS = mutation.stateSlots.upsert.length;
   if (rawE > keptE || rawEd > keptEd || rawS > keptS) {
-    // eslint-disable-next-line no-console -- intentional degradation observability
     console.warn(
       `[play-mutator] turn ${turn}: dropped malformed items — entities ${rawE}->${keptE}, edges ${rawEd}->${keptEd}, slots ${rawS}->${keptS}`,
     );

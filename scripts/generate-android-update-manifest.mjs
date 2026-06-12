@@ -61,6 +61,13 @@ const { versionCode, versionName } = readGradleVersion(await readFile(gradlePath
 const apkStat = await stat(apkPath);
 const apkSha256 = await sha256File(apkPath);
 const releaseBase = `https://github.com/${repo}/releases/download/${encodeReleasePathPart(tag)}`;
+const apkUrl = `${releaseBase}/${encodeReleasePathPart(assetName)}`;
+const mirrorPrefixes = [
+  "https://ghproxy.net/",
+  "https://ghfast.top/",
+  "https://gh-proxy.com/",
+  "https://githubproxy.cc/",
+];
 const rawNotes = String(args.notes ?? process.env.RELEASE_NOTES ?? "").trim();
 const notes = rawNotes
   ? rawNotes.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
@@ -71,7 +78,8 @@ const manifest = {
   versionName,
   versionCode,
   minVersionCode,
-  apkUrl: `${releaseBase}/${encodeReleasePathPart(assetName)}`,
+  apkUrl,
+  apkMirrorUrls: mirrorPrefixes.map((prefix) => `${prefix}${apkUrl}`),
   apkSha256,
   size: apkStat.size,
   notes,

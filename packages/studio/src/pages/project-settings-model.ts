@@ -13,8 +13,39 @@ export interface NotifyChannelDraft {
 export interface OverrideRow {
   agent: string;
   model: string;
+  service?: string;
   rest?: Record<string, unknown>;
 }
+
+export const AGENT_MODEL_ROUTES = [
+  {
+    agent: "architect",
+    label: "建书",
+    hint: "创建书籍、世界观、角色与基础设定。",
+  },
+  {
+    agent: "writer",
+    label: "写作",
+    hint: "生成正文与章节内容，建议使用文风最稳定的模型。",
+  },
+  {
+    agent: "auditor",
+    label: "审计",
+    hint: "检查逻辑、伏笔、状态文件与前后矛盾。",
+  },
+  {
+    agent: "reviser",
+    label: "修订",
+    hint: "根据审计意见改稿，可与写作模型相同。",
+  },
+  {
+    agent: "exporter",
+    label: "导出",
+    hint: "整理导出内容，通常可使用默认或轻量模型。",
+  },
+] as const;
+
+export type AgentModelRouteKey = typeof AGENT_MODEL_ROUTES[number]["agent"];
 
 export interface DetectionDraft {
   enabled: boolean;
@@ -128,4 +159,50 @@ export function buildDetectionConfig(det: DetectionDraft): Record<string, unknow
     autoRewrite: det.autoRewrite,
     maxRetries: det.maxRetries,
   };
+}
+
+export function fixedAgentOverrideRows(overrides: Record<string, unknown> | undefined): OverrideRow[] {
+  const raw = overrides ?? {};
+  return AGENT_MODEL_ROUTES.map(({ agent }) => {
+    const value = raw[agent];
+    if (typeof value === "string") return { agent, model: value };
+    const { model, service, ...rest } = asRecord(value);
+    return {
+      agent,
+      model: stringField(model) ?? "",
+      service: stringField(service),
+      ...(Object.keys(rest).length > 0 ? { rest } : {}),
+    };
+  });
+}
+
+export function buildAgentModelOverrides(rows: ReadonlyArray<OverrideRow>): Record<string, unknown> {
+  const allowed = new Set<string>(AGENT_MODEL_ROUTES.map((route) => route.agent));
+  const overrides: Record<string, unknown> = {};
+  for (const row of rows) {
+    const agent = row.agent.trim();
+    const model = row.model.trim();
+    if (!allowed.has(agent) || !model) continue;
+    const service = row.service?.trim();
+    overrides[agent] = service || (row.rest && Object.keys(row.rest).length > 0)
+      ? { ...(row.rest ?? {}), ...(service ? { service } : {}), model }
+      : model;
+  }
+  return overrides;
+}
+
+export function modelRouteValue(service: string, model: string): string {
+  return `${encodeURIComponent(service)}::${encodeURIComponent(model)}`;
+}
+
+export function parseModelRouteValue(value: string): { service: string; model: string } | null {
+  const separator = value.indexOf("::");
+  if (separator < 0) return null;
+  try {
+    const service = decodeURIComponent(value.slice(0, separator)).trim();
+    const model = decodeURIComponent(value.slice(separator + 2)).trim();
+    return service && model ? { service, model } : null;
+  } catch {
+    return null;
+  }
 }

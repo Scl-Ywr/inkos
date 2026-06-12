@@ -4,6 +4,13 @@ import { copyFile, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const DEFAULT_UPDATE_MANIFEST_URL = "https://github.com/Scl-Ywr/inkos/releases/latest/download/update.json";
+const UPDATE_SOURCE_TIMEOUT_MS = 8_000;
+const GITHUB_UPDATE_MIRROR_PREFIXES = [
+  "https://ghproxy.net/",
+  "https://ghfast.top/",
+  "https://gh-proxy.com/",
+  "https://githubproxy.cc/",
+] as const;
 const PROJECT_DIRS = [".inkos", ".inkos/sessions", ".inkos/backups", "books", "genres", "radar", "covers", "shorts", "exports", "logs"];
 
 const NODE_TOOL_CAPABILITIES = [
@@ -26,6 +33,7 @@ interface AndroidUpdateManifest {
   readonly versionCode: number;
   readonly minVersionCode: number;
   readonly apkUrl: string;
+  readonly apkMirrorUrls?: string[];
   readonly apkSha256: string;
   readonly size: number;
   readonly notes: string[];
@@ -62,6 +70,11 @@ function parseUpdateManifest(value: unknown): AndroidUpdateManifest {
   const versionName = String(record.versionName ?? "").trim();
   const channel = String(record.channel ?? "stable").trim() || "stable";
   const apkUrl = String(record.apkUrl ?? "").trim();
+  const apkMirrorUrls = Array.isArray(record.apkMirrorUrls)
+    ? record.apkMirrorUrls
+      .map((url) => String(url).trim())
+      .filter((url) => /^https:\/\//i.test(url))
+    : [];
   const apkSha256 = String(record.apkSha256 ?? "").trim().toLowerCase();
   const publishedAt = String(record.publishedAt ?? "").trim();
   const notes = Array.isArray(record.notes)
@@ -75,7 +88,53 @@ function parseUpdateManifest(value: unknown): AndroidUpdateManifest {
   if (!/^[a-f0-9]{64}$/i.test(apkSha256)) throw new Error("Update manifest apkSha256 must be a SHA-256 digest.");
   if (!Number.isFinite(size) || size <= 0) throw new Error("Update manifest size must be positive.");
 
-  return { channel, versionName, versionCode, minVersionCode, apkUrl, apkSha256, size: Math.floor(size), notes, publishedAt };
+  return {
+    channel,
+    versionName,
+    versionCode,
+    minVersionCode,
+    apkUrl,
+    ...(apkMirrorUrls.length > 0 ? { apkMirrorUrls: [...new Set(apkMirrorUrls)] } : {}),
+    apkSha256,
+    size: Math.floor(size),
+    notes,
+    publishedAt,
+  };
+}
+
+export function buildUpdateManifestCandidates(primaryUrl: string): string[] {
+  const configured = String(process.env.INKOS_UPDATE_MANIFEST_URLS ?? "")
+    .split(/[\r\n,;]+/)
+    .map((url) => url.trim())
+    .filter((url) => /^https:\/\//i.test(url));
+  const candidates = [primaryUrl, ...configured];
+  if (/^https:\/\/github\.com\//i.test(primaryUrl)) {
+    candidates.push(...GITHUB_UPDATE_MIRROR_PREFIXES.map((prefix) => `${prefix}${primaryUrl}`));
+  }
+  return [...new Set(candidates)];
+}
+
+async function fetchUpdateManifest(
+  candidates: ReadonlyArray<string>,
+): Promise<{ readonly manifestUrl: string; readonly update: AndroidUpdateManifest }> {
+  const attempts = candidates.map(async (manifestUrl) => {
+    const response = await fetch(manifestUrl, {
+      headers: { Accept: "application/json", "User-Agent": "InkOS-Studio-Android/1.5" },
+      signal: AbortSignal.timeout(UPDATE_SOURCE_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      throw new Error(`${manifestUrl} returned HTTP ${response.status}`);
+    }
+    return { manifestUrl, update: parseUpdateManifest(await response.json()) };
+  });
+  try {
+    return await Promise.any(attempts);
+  } catch (error) {
+    const details = error instanceof AggregateError
+      ? error.errors.map((item) => item instanceof Error ? item.message : String(item)).join(" | ")
+      : error instanceof Error ? error.message : String(error);
+    throw new Error(`无法连接在线更新源。已尝试 ${candidates.length} 个地址。${details ? ` ${details}` : ""}`);
+  }
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -122,36 +181,32 @@ export function registerRuntimeRoutes(app: Hono, deps: RuntimeRoutesDeps): void 
   }));
 
   app.get("/api/v1/runtime/update/check", async (c) => {
-    const manifestUrl = String(process.env.INKOS_UPDATE_MANIFEST_URL ?? DEFAULT_UPDATE_MANIFEST_URL).trim();
+    const configuredManifestUrl = String(process.env.INKOS_UPDATE_MANIFEST_URL ?? DEFAULT_UPDATE_MANIFEST_URL).trim();
     const current = { versionCode: readAndroidVersionCode(), versionName: readAndroidVersionName() };
-    if (!/^https:\/\//i.test(manifestUrl)) {
-      return c.json({ ok: false, manifestUrl, current, error: "Update manifest URL must use HTTPS." }, 400);
+    if (!/^https:\/\//i.test(configuredManifestUrl)) {
+      return c.json({ ok: false, manifestUrl: configuredManifestUrl, current, error: "Update manifest URL must use HTTPS." }, 400);
     }
+    const manifestCandidates = buildUpdateManifestCandidates(configuredManifestUrl);
     try {
-      const response = await fetch(manifestUrl, { headers: { Accept: "application/json", "User-Agent": "InkOS-Studio-Android/1.5" } });
-      if (response.status === 404) {
-        return c.json({
-          ok: true,
-          manifestUrl,
-          current,
-          supported: current.versionCode > 0,
-          available: false,
-          error: "Update manifest was not found. No online update has been published for this channel yet.",
-        });
-      }
-      if (!response.ok) return c.json({ ok: false, manifestUrl, current, error: `Update manifest returned HTTP ${response.status}.` }, 502);
-      const update = parseUpdateManifest(await response.json());
+      const { manifestUrl, update } = await fetchUpdateManifest(manifestCandidates);
       const supported = current.versionCode > 0;
       return c.json({
         ok: true,
         manifestUrl,
+        manifestCandidates,
         current,
         supported,
         available: supported && update.versionCode > current.versionCode && current.versionCode >= update.minVersionCode,
         update,
       });
     } catch (error) {
-      return c.json({ ok: false, manifestUrl, current, error: error instanceof Error ? error.message : String(error) }, 502);
+      return c.json({
+        ok: false,
+        manifestUrl: configuredManifestUrl,
+        manifestCandidates,
+        current,
+        error: error instanceof Error ? error.message : String(error),
+      }, 502);
     }
   });
 

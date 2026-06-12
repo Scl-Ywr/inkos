@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -65,5 +65,20 @@ describe("PlayFileDB", () => {
     })).toThrow("fail");
 
     expect(db.getEntity("temp")).toBeNull();
+  });
+
+  it("recovers a truncated world database from the last valid backup", async () => {
+    const db = new PlayFileDB(dir);
+    db.upsertEntity({ id: "player", type: "actor", label: "宋词" });
+    db.upsertEntity({ id: "guide", type: "actor", label: "向导" });
+    db.close();
+
+    const filePath = join(dir, "play-graph.json");
+    await writeFile(filePath, "{\"entities\":", "utf-8");
+
+    const recovered = new PlayFileDB(dir);
+    expect(recovered.getEntity("player")?.label).toBe("宋词");
+    expect(JSON.parse(await readFile(filePath, "utf-8"))).toHaveProperty("entities.player");
+    expect((await readdir(dir)).some((name) => name.startsWith("play-graph.json.corrupt-"))).toBe(true);
   });
 });

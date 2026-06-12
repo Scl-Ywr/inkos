@@ -152,7 +152,6 @@ export function Sidebar({ nav, activePage, sse, t, onClose, mobileOpen }: {
     if (projectChatExpanded) {
       void loadSessionList(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookDataVersion, loadSessionList, projectChatExpanded, refetchBooks]);
 
   useEffect(() => {

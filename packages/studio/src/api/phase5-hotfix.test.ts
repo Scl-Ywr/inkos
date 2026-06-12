@@ -153,6 +153,73 @@ describe("Phase 5 hotfix 1 — Studio truth file endpoints", () => {
     expect(body.legacy).toBeUndefined();
   }, 30_000);
 
+  it("lists and reads truth file history from chapter snapshots", async () => {
+    await mkdir(join(storyDir, "snapshots", "1"), { recursive: true });
+    await mkdir(join(storyDir, "snapshots", "2"), { recursive: true });
+    await writeFile(join(storyDir, "current_state.md"), "current state", "utf-8");
+    await writeFile(join(storyDir, "snapshots", "1", "current_state.md"), "state after chapter 1", "utf-8");
+    await writeFile(join(storyDir, "snapshots", "2", "current_state.md"), "state after chapter 2", "utf-8");
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const listResponse = await app.request(
+      "http://localhost/api/v1/books/hotfix-book/truth/current_state.md/history",
+    );
+    expect(listResponse.status).toBe(200);
+    const listBody = await listResponse.json() as {
+      versions: ReadonlyArray<{ chapter: number; size: number; preview: string }>;
+    };
+    expect(listBody.versions.map((version) => version.chapter)).toEqual([2, 1]);
+    expect(listBody.versions[0]?.preview).toContain("chapter 2");
+
+    const readResponse = await app.request(
+      "http://localhost/api/v1/books/hotfix-book/truth/current_state.md/history/1",
+    );
+    expect(readResponse.status).toBe(200);
+    const readBody = await readResponse.json() as { file: string; chapter: number; content: string };
+    expect(readBody.file).toBe("current_state.md");
+    expect(readBody.chapter).toBe(1);
+    expect(readBody.content).toBe("state after chapter 1");
+  }, 30_000);
+
+  it("lists structured runtime state files as read-only truth files", async () => {
+    await mkdir(join(storyDir, "state"), { recursive: true });
+    await writeFile(
+      join(storyDir, "state", "hooks.json"),
+      JSON.stringify({
+        hooks: [
+          {
+            id: "mentor-oath",
+            type: "relationship",
+            summary: "陈烬与林月的师债关系尚未偿还",
+          },
+        ],
+      }, null, 2),
+      "utf-8",
+    );
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const listResponse = await app.request("http://localhost/api/v1/books/hotfix-book/truth");
+    expect(listResponse.status).toBe(200);
+    const listBody = await listResponse.json() as { files: ReadonlyArray<{ name: string; readonly?: true; readonlyReason?: string }> };
+    const stateEntry = listBody.files.find((file) => file.name === "state/hooks.json");
+    expect(stateEntry?.readonly).toBe(true);
+    expect(stateEntry?.readonlyReason).toBe("runtime-state");
+
+    const readResponse = await app.request(
+      "http://localhost/api/v1/books/hotfix-book/truth/state/hooks.json",
+    );
+    expect(readResponse.status).toBe(200);
+    const readBody = await readResponse.json() as { content: string; readonly?: true; readonlyReason?: string };
+    expect(readBody.content).toContain("relationship");
+    expect(readBody.content).toContain("师债关系");
+    expect(readBody.readonly).toBe(true);
+    expect(readBody.readonlyReason).toBe("runtime-state");
+  }, 30_000);
+
   it("parses story_frame.md YAML frontmatter into structured fields + prose body", async () => {
     await writeFile(
       join(storyDir, "outline/story_frame.md"),

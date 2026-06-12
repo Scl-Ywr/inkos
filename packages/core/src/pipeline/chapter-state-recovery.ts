@@ -101,6 +101,17 @@ export async function retrySettlementAfterValidationFailure(
     };
   }
 
+  if (!hasBlockingStateValidationWarnings(retryValidation.warnings)) {
+    return {
+      kind: "recovered",
+      output: retryOutput,
+      validation: {
+        ...retryValidation,
+        passed: true,
+      },
+    };
+  }
+
   return {
     kind: "degraded",
     issues: buildStateDegradedIssues(retryValidation.warnings, params.language),
@@ -128,6 +139,31 @@ export function buildStateValidationFeedback(
     "上一次状态结算未通过校验。请对照正文修正以下矛盾：",
     ...warnings.map((warning) => `- [${warning.category}] ${warning.description}`),
   ].join("\n");
+}
+
+const BLOCKING_STATE_VALIDATION_CATEGORIES = [
+  "contradiction",
+  "hard_contradiction",
+  "temporal_impossibility",
+  "temporal",
+  "retroactive_edit",
+  "retroactive",
+  "cross-truth",
+  "cross_truth",
+  "key-setting",
+  "key_setting",
+  "identity_conflict",
+  "location_conflict",
+  "rank_conflict",
+] as const;
+
+export function hasBlockingStateValidationWarnings(
+  warnings: ReadonlyArray<ValidationWarning>,
+): boolean {
+  return warnings.some((warning) => {
+    const category = warning.category.trim().toLowerCase();
+    return BLOCKING_STATE_VALIDATION_CATEGORIES.some((blocked) => category.includes(blocked));
+  });
 }
 
 export function buildStateDegradedIssues(

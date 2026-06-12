@@ -137,6 +137,7 @@ describe("chapter-state-recovery", () => {
 
   it("returns localized degraded issues when settlement retry still fails", async () => {
     const validatorWarning = createValidationWarning({
+      category: "contradiction",
       description: "挂坠状态仍与正文冲突",
     });
     const result = await retrySettlementAfterValidationFailure({

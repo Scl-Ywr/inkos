@@ -27,7 +27,7 @@
     "test:unit": "pnpm -r --if-present test:unit",
     "test:integration": "pnpm -r --if-present test:integration",
     "test:packaging": "pnpm -r --if-present test:packaging",
-    "lint": "pnpm -r lint",
+    "lint": "eslint packages scripts eslint.config.mjs",
     "typecheck": "pnpm -r typecheck",
     "verify": "pnpm typecheck && pnpm test:unit",
     "audit:semantic-patterns": "node scripts/audit-semantic-patterns.mjs",
@@ -47,10 +47,25 @@
     ],
     "overrides": {
       "@mariozechner/pi-ai": "0.67.1",
-      "@mariozechner/pi-agent-core": "0.67.1"
+      "@mariozechner/pi-agent-core": "0.67.1",
+      "basic-ftp": "5.3.1",
+      "fast-xml-builder": "1.1.7",
+      "fast-uri": "3.1.2",
+      "hono": "4.12.25",
+      "picomatch": "4.0.4",
+      "protobufjs": "7.5.8",
+      "qs": "6.15.2",
+      "undici": "6.24.1",
+      "ws": "8.21.0"
     }
   },
   "dependencies": {
     "use-chat-submit": "^1.0.8"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.2",
+    "eslint": "9.39.2",
+    "eslint-plugin-react-hooks": "^6.1.1",
+    "typescript-eslint": "8.46.4"
   }
 }

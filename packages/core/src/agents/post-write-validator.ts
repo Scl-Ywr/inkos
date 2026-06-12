@@ -24,7 +24,29 @@ export function normalizePostWriteSurface(
   if (languageOverride !== "en") {
     normalized = normalized.replace(/——+/g, "，");
   }
+  normalized = removeRepeatedParagraphs(normalized, languageOverride ?? "zh");
   return normalized.trimEnd();
+}
+
+export function removeRepeatedParagraphs(
+  content: string,
+  language: "zh" | "en" = "zh",
+): string {
+  const blocks = content.split(/(\r?\n\s*\r?\n)/);
+  const seen = new Set<string>();
+  const output: string[] = [];
+
+  for (let index = 0; index < blocks.length; index += 2) {
+    const paragraph = blocks[index] ?? "";
+    const separator = blocks[index + 1] ?? "";
+    const comparable = normalizeRepeatUnit(paragraph, language);
+    const substantial = comparable.length >= (language === "en" ? 120 : 45);
+    if (substantial && seen.has(comparable)) continue;
+    if (substantial) seen.add(comparable);
+    output.push(paragraph, separator);
+  }
+
+  return output.join("").replace(/(?:\r?\n\s*){3,}/g, "\n\n");
 }
 
 function stripPostWriteMetaLines(content: string): string {
@@ -273,6 +295,7 @@ export function validatePostWrite(
     });
   }
 
+  violations.push(...detectInChapterRepetition(content, "zh"));
   violations.push(...detectParagraphShapeWarnings(content, "zh"));
 
   // 11. Book-level prohibitions
@@ -490,6 +513,7 @@ function validatePostWriteEnglish(
   }
 
   violations.push(...detectParagraphShapeWarnings(content, "en"));
+  violations.push(...detectInChapterRepetition(content, "en"));
 
   // 2.5. Multi-character scene with almost no direct exchange
   const quotedLines = content.match(/"[^"]+"/g) ?? [];
@@ -592,6 +616,176 @@ export function detectParagraphShapeWarnings(
   const violations: PostWriteViolation[] = [];
   appendParagraphShapeWarnings(violations, content, language);
   return violations;
+}
+
+export function detectInChapterRepetition(
+  content: string,
+  language: "zh" | "en" = "zh",
+): ReadonlyArray<PostWriteViolation> {
+  const paragraphs = extractParagraphs(content)
+    .map((paragraph) => normalizeRepeatUnit(paragraph, language))
+    .filter((paragraph) => paragraph.length >= (language === "en" ? 90 : 35));
+  const violations: PostWriteViolation[] = [];
+
+  const exactCounts = new Map<string, number>();
+  for (const paragraph of paragraphs) {
+    exactCounts.set(paragraph, (exactCounts.get(paragraph) ?? 0) + 1);
+  }
+
+  const exactDuplicate = [...exactCounts.entries()]
+    .find(([paragraph, count]) => count >= 2 && paragraph.length >= (language === "en" ? 120 : 45));
+  if (exactDuplicate) {
+    violations.push(
+      language === "en"
+        ? {
+            rule: "In-chapter repetition",
+            severity: "warning",
+            description: `A substantial paragraph repeats inside the same chapter (${exactDuplicate[0].slice(0, 80)}...).`,
+            suggestion: "Delete the repeated paragraph or replace it with a new beat that changes action, information, or emotion.",
+          }
+        : {
+            rule: "章内重复",
+            severity: "warning",
+            description: `同一章内出现大段重复段落：“${exactDuplicate[0].slice(0, 36)}……”`,
+            suggestion: "删除重复段落，或改成推进动作、信息或情绪变化的新段落。",
+          },
+    );
+  }
+
+  const nearDuplicate = findNearDuplicateParagraphs(paragraphs, language);
+  if (nearDuplicate) {
+    violations.push(
+      language === "en"
+        ? {
+            rule: "Near-duplicate paragraphs",
+            severity: "warning",
+            description: `Two nearby paragraphs are highly similar (${nearDuplicate.percent}% overlap): "${nearDuplicate.preview}".`,
+            suggestion: "Keep one paragraph as the beat anchor; rewrite the other so it adds new action, conflict, or information instead of restating the same moment.",
+          }
+        : {
+            rule: "相邻段落复读",
+            severity: "warning",
+            description: `相邻段落高度相似（重合约${nearDuplicate.percent}%）：“${nearDuplicate.preview}”`,
+            suggestion: "保留一个段落作为情绪或动作锚点，另一个必须改成新的动作、冲突或信息，不要换词复述同一件事。",
+          },
+    );
+  }
+
+  const sentenceRepeat = detectRepeatedSentence(content, language);
+  if (sentenceRepeat) {
+    violations.push(
+      language === "en"
+        ? {
+            rule: "Repeated sentence",
+            severity: "warning",
+            description: `The same sentence appears repeatedly: "${sentenceRepeat}".`,
+            suggestion: "Use the sentence once, then advance the scene with a concrete consequence.",
+          }
+        : {
+            rule: "句子复读",
+            severity: "warning",
+            description: `同一句或高度相同的长句重复出现：“${sentenceRepeat}”`,
+            suggestion: "同一句只保留一次，后续改写为具体后果或新动作。",
+          },
+    );
+  }
+
+  return violations;
+}
+
+function normalizeRepeatUnit(text: string, language: "zh" | "en"): string {
+  const normalized = text
+    .replace(/[`*_>#-]/g, "")
+    .replace(/\s+/g, language === "en" ? " " : "")
+    .trim();
+  return language === "en" ? normalized.toLowerCase() : normalized;
+}
+
+function findNearDuplicateParagraphs(
+  paragraphs: ReadonlyArray<string>,
+  language: "zh" | "en",
+): { readonly preview: string; readonly percent: number } | null {
+  const windowSize = 3;
+  for (let left = 0; left < paragraphs.length; left += 1) {
+    for (let right = left + 1; right <= Math.min(left + windowSize, paragraphs.length - 1); right += 1) {
+      const first = paragraphs[left]!;
+      const second = paragraphs[right]!;
+      const shorter = Math.min(first.length, second.length);
+      const longer = Math.max(first.length, second.length);
+      if (shorter < (language === "en" ? 90 : 35)) continue;
+      if (shorter / longer < 0.55) continue;
+
+      const firstShingles = language === "en" ? wordShingles(first, 4) : charShingles(first, 6);
+      const secondShingles = language === "en" ? wordShingles(second, 4) : charShingles(second, 6);
+      const similarity = Math.max(
+        jaccard(firstShingles, secondShingles),
+        overlapCoefficient(firstShingles, secondShingles),
+      );
+      if (similarity >= 0.65) {
+        return {
+          preview: `${first.slice(0, language === "en" ? 80 : 36)}...`,
+          percent: Math.round(similarity * 100),
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function detectRepeatedSentence(content: string, language: "zh" | "en"): string | null {
+  const sentences = content
+    .split(language === "en" ? /(?<=[.!?])\s+/ : /[。！？!?；;]/)
+    .map((sentence) => normalizeRepeatUnit(sentence, language))
+    .filter((sentence) => sentence.length >= (language === "en" ? 70 : 28));
+  const counts = new Map<string, number>();
+  for (const sentence of sentences) {
+    counts.set(sentence, (counts.get(sentence) ?? 0) + 1);
+  }
+  const repeated = [...counts.entries()].find(([, count]) => count >= 2);
+  if (!repeated) return null;
+  return repeated[0].slice(0, language === "en" ? 90 : 42);
+}
+
+function charShingles(text: string, size: number): ReadonlySet<string> {
+  const shingles = new Set<string>();
+  for (let index = 0; index <= text.length - size; index += 1) {
+    const shingle = text.slice(index, index + size);
+    if (/^[\u4e00-\u9fff\d，。！？、：；“”‘’]+$/.test(shingle)) {
+      shingles.add(shingle);
+    }
+  }
+  return shingles;
+}
+
+function wordShingles(text: string, size: number): ReadonlySet<string> {
+  const words = text
+    .toLowerCase()
+    .replace(/[^\w\s']/g, " ")
+    .split(/\s+/)
+    .filter((word) => word.length > 1);
+  const shingles = new Set<string>();
+  for (let index = 0; index <= words.length - size; index += 1) {
+    shingles.add(words.slice(index, index + size).join(" "));
+  }
+  return shingles;
+}
+
+function jaccard(left: ReadonlySet<string>, right: ReadonlySet<string>): number {
+  if (left.size === 0 || right.size === 0) return 0;
+  let intersection = 0;
+  for (const item of left) {
+    if (right.has(item)) intersection += 1;
+  }
+  return intersection / (left.size + right.size - intersection);
+}
+
+function overlapCoefficient(left: ReadonlySet<string>, right: ReadonlySet<string>): number {
+  if (left.size === 0 || right.size === 0) return 0;
+  let intersection = 0;
+  for (const item of left) {
+    if (right.has(item)) intersection += 1;
+  }
+  return intersection / Math.min(left.size, right.size);
 }
 
 function isDialogueParagraph(paragraph: string): boolean {

@@ -159,6 +159,17 @@ package.json.tmp-*
 graphify-out/
 **/graphify-out/
 .graphify_*.json
+.qoder/
+
+# Local repair artifacts
+/*.patch
+/*_diff.txt
+/diff_*.txt
+/apply_diff.js
+/patch.js
+/packages/studio/src/pages/*.backup
+/packages/studio/src/pages/ChatPage-fixed.tsx
+/packages/studio/src/pages/ChatPage-simple-input.tsx
 
 # Local runtime/toolchain caches
 .conda-envs/

@@ -70,7 +70,7 @@ describe("validateChapterTruthPersistence", () => {
         .mockResolvedValueOnce(createValidationResult({
           passed: false,
           warnings: [{
-            category: "unsupported_change",
+            category: "contradiction",
             description: "正文写铜牌在怀里，但 state 说未携带。",
           }],
         }))
@@ -122,10 +122,10 @@ describe("validateChapterTruthPersistence", () => {
     expect(result.persistenceOutput.updatedState).toBe("fixed state");
     expect(result.persistenceOutput.updatedHooks).toBe("fixed hooks");
     expect(result.auditResult.issues).toEqual([]);
-    expect(logger.warn).toHaveBeenCalledWith("  [unsupported_change] 正文写铜牌在怀里，但 state 说未携带。");
+    expect(logger.warn).toHaveBeenCalledWith("  [contradiction] 正文写铜牌在怀里，但 state 说未携带。");
   });
 
-  it("degrades gracefully when validator throws (e.g. LLM returned empty response)", async () => {
+  it("keeps the chapter usable when validator throws (e.g. LLM returned empty response)", async () => {
     const validator = {
       validate: vi.fn().mockRejectedValue(new Error("LLM returned empty response")),
     };
@@ -159,11 +159,12 @@ describe("validateChapterTruthPersistence", () => {
       logger,
     });
 
-    expect(result.chapterStatus).toBe("state-degraded");
-    expect(result.persistenceOutput.updatedState).toBe("old state");
-    expect(result.persistenceOutput.updatedHooks).toBe("old hooks");
-    expect(result.persistenceOutput.updatedLedger).toBe("old ledger");
-    expect(result.degradedIssues).toEqual([
+    expect(result.chapterStatus).toBeNull();
+    expect(result.persistenceOutput.updatedState).toBe("new state");
+    expect(result.persistenceOutput.updatedHooks).toBe("new hooks");
+    expect(result.persistenceOutput.updatedLedger).toBe("new ledger");
+    expect(result.degradedIssues).toEqual([]);
+    expect(result.auditResult.issues).toEqual([
       expect.objectContaining({
         severity: "warning",
         category: "state-validation",
@@ -179,14 +180,14 @@ describe("validateChapterTruthPersistence", () => {
         .mockResolvedValueOnce(createValidationResult({
           passed: false,
           warnings: [{
-            category: "unsupported_change",
+            category: "contradiction",
             description: "第一次校验失败。",
           }],
         }))
         .mockResolvedValueOnce(createValidationResult({
           passed: false,
           warnings: [{
-            category: "unsupported_change",
+            category: "contradiction",
             description: "重试后仍然失败。",
           }],
         })),
@@ -247,6 +248,51 @@ describe("validateChapterTruthPersistence", () => {
       expect.objectContaining({
         category: "state-validation",
         description: "重试后仍然失败。",
+      }),
+    ]);
+  });
+
+  it("turns non-blocking validator FAIL into an audit warning without degrading", async () => {
+    const validator = {
+      validate: vi.fn().mockResolvedValue(createValidationResult({
+        passed: false,
+        warnings: [{
+          category: "unsupported_change",
+          description: "state 略微超前，但没有与正文直接冲突。",
+        }],
+      })),
+    };
+    const writer = {
+      settleChapterState: vi.fn(),
+    };
+
+    const result = await validateChapterTruthPersistence({
+      writer,
+      validator,
+      book: BOOK,
+      bookDir: "/tmp/book",
+      chapterNumber: 5,
+      title: "Test Chapter",
+      content: "Healthy chapter body.",
+      persistenceOutput: createWriterOutput({ updatedState: "new state" }),
+      auditResult: createAuditResult(),
+      previousTruth: {
+        oldState: "old state",
+        oldHooks: "old hooks",
+        oldLedger: "old ledger",
+      },
+      language: "zh",
+      logWarn: vi.fn(),
+      logger: { warn: vi.fn() },
+    });
+
+    expect(writer.settleChapterState).not.toHaveBeenCalled();
+    expect(result.chapterStatus).toBeNull();
+    expect(result.persistenceOutput.updatedState).toBe("new state");
+    expect(result.auditResult.issues).toEqual([
+      expect.objectContaining({
+        category: "state-validation:unsupported_change",
+        description: "state 略微超前，但没有与正文直接冲突。",
       }),
     ]);
   });

@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   ChapterSummariesStateSchema,
@@ -13,6 +13,7 @@ import { renderChapterSummariesProjection, renderCurrentStateProjection, renderH
 import { applyRuntimeStateDelta, type RuntimeStateSnapshot } from "./state-reducer.js";
 import { validateRuntimeState } from "./state-validator.js";
 import { arbitrateRuntimeStateDeltaHooks } from "../utils/hook-arbiter.js";
+import { atomicWriteFile, readJsonWithBackup } from "../utils/atomic-file.js";
 
 export interface RuntimeStateArtifacts {
   readonly snapshot: RuntimeStateSnapshot;
@@ -93,10 +94,10 @@ export async function saveRuntimeStateSnapshot(
   await mkdir(stateDir, { recursive: true });
 
   await Promise.all([
-    writeFile(join(stateDir, "manifest.json"), JSON.stringify(snapshot.manifest, null, 2), "utf-8"),
-    writeFile(join(stateDir, "current_state.json"), JSON.stringify(snapshot.currentState, null, 2), "utf-8"),
-    writeFile(join(stateDir, "hooks.json"), JSON.stringify(snapshot.hooks, null, 2), "utf-8"),
-    writeFile(join(stateDir, "chapter_summaries.json"), JSON.stringify(snapshot.chapterSummaries, null, 2), "utf-8"),
+    atomicWriteFile(join(stateDir, "manifest.json"), `${JSON.stringify(snapshot.manifest, null, 2)}\n`),
+    atomicWriteFile(join(stateDir, "current_state.json"), `${JSON.stringify(snapshot.currentState, null, 2)}\n`),
+    atomicWriteFile(join(stateDir, "hooks.json"), `${JSON.stringify(snapshot.hooks, null, 2)}\n`),
+    atomicWriteFile(join(stateDir, "chapter_summaries.json"), `${JSON.stringify(snapshot.chapterSummaries, null, 2)}\n`),
   ]);
 }
 
@@ -148,8 +149,7 @@ async function readJson<T>(
   path: string,
   schema: { parse(value: unknown): T },
 ): Promise<T> {
-  const raw = await readFile(path, "utf-8");
-  return schema.parse(JSON.parse(raw));
+  return readJsonWithBackup(path, (value) => schema.parse(value));
 }
 
 async function readJsonOrNull<T>(

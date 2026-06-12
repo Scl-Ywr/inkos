@@ -177,11 +177,24 @@ export function useSSE(url = "/events") {
   useEffect(() => restoreActiveOperations(), [restoreActiveOperations, reconnectNonce]);
 
   useEffect(() => {
-    const interval = window.setInterval(() => {
+    let timer: number | null = null;
+    let cancelled = false;
+    const poll = () => {
+      if (cancelled) return;
       void restoreActiveOperations();
-    }, document.visibilityState === "visible" ? 3000 : 8000);
-    return () => window.clearInterval(interval);
-  }, [restoreActiveOperations]);
+      const delay = document.visibilityState !== "visible"
+        ? 30_000
+        : connected
+          ? 15_000
+          : 3_000;
+      timer = window.setTimeout(poll, delay);
+    };
+    timer = window.setTimeout(poll, connected ? 15_000 : 3_000);
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [connected, restoreActiveOperations]);
 
   useEffect(() => {
     const reconnect = () => {

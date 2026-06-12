@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm, writeFile, readFile, mkdir, stat } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, mkdir, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StateManager } from "../state/manager.js";
@@ -54,6 +54,17 @@ describe("StateManager", () => {
     it("throws when loading a non-existent book", async () => {
       await expect(manager.loadBookConfig("nope")).rejects.toThrow();
     });
+
+    it("recovers book.json from its last valid backup after an interrupted write", async () => {
+      await manager.saveBookConfig("test-book", bookConfig);
+      await manager.saveBookConfig("test-book", { ...bookConfig, title: "Updated Novel" });
+      const configPath = join(manager.bookDir("test-book"), "book.json");
+      await writeFile(configPath, "{\"title\":", "utf-8");
+
+      const loaded = await manager.loadBookConfig("test-book");
+      expect(loaded.title).toBe("Test Novel");
+      expect((await readdir(manager.bookDir("test-book"))).some((name) => name.startsWith("book.json.corrupt-"))).toBe(true);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -83,6 +94,18 @@ describe("StateManager", () => {
         lengthWarnings: [],
       },
     ];
+
+    it("recovers index.json from backup instead of returning an empty chapter list", async () => {
+      await manager.saveChapterIndex("test-book", chapters.slice(0, 1));
+      await manager.saveChapterIndex("test-book", chapters);
+      const indexPath = join(manager.bookDir("test-book"), "chapters", "index.json");
+      await writeFile(indexPath, "[{\"number\":", "utf-8");
+
+      const loaded = await manager.loadChapterIndex("test-book");
+      expect(loaded.map((chapter) => chapter.number)).toEqual([1]);
+      expect((await readdir(join(manager.bookDir("test-book"), "chapters")))
+        .some((name) => name.startsWith("index.json.corrupt-"))).toBe(true);
+    });
 
     it("round-trips chapter index through save and load", async () => {
       await manager.saveChapterIndex("book-a", chapters);
@@ -432,6 +455,22 @@ describe("StateManager", () => {
         "utf-8",
       );
       expect(snapshotManifest).toContain("\"schemaVersion\": 2");
+    });
+
+    it("copies outline and role truth files into chapter snapshots", async () => {
+      const storyDir = join(manager.bookDir(bookId), "story");
+      await mkdir(join(storyDir, "outline"), { recursive: true });
+      await mkdir(join(storyDir, "roles", "主要角色"), { recursive: true });
+      await writeFile(join(storyDir, "outline", "story_frame.md"), "# Story frame", "utf-8");
+      await writeFile(join(storyDir, "roles", "主要角色", "陈烬.md"), "# 陈烬\n关系：与林月互相试探", "utf-8");
+
+      await manager.snapshotState(bookId, 1);
+
+      const snapshotDir = join(manager.bookDir(bookId), "story", "snapshots", "1");
+      await expect(readFile(join(snapshotDir, "outline", "story_frame.md"), "utf-8"))
+        .resolves.toContain("Story frame");
+      await expect(readFile(join(snapshotDir, "roles", "主要角色", "陈烬.md"), "utf-8"))
+        .resolves.toContain("互相试探");
     });
 
     it("restores state from a previous snapshot", async () => {
@@ -1276,6 +1315,22 @@ describe("StateManager", () => {
       await setupRollbackBook();
 
       await expect(manager.rollbackToChapter(bookId, 99)).rejects.toThrow("Cannot restore snapshot");
+    });
+
+    it("falls back to the nearest snapshot and marks retained unsnapshotted chapters degraded", async () => {
+      await setupRollbackBook();
+      const bookDir = manager.bookDir(bookId);
+      await rm(join(bookDir, "story", "snapshots", "2"), { recursive: true, force: true });
+
+      const discarded = await manager.rollbackToChapter(bookId, 2);
+
+      expect(discarded).toEqual([3]);
+      const state = await readFile(join(bookDir, "story", "current_state.md"), "utf-8");
+      expect(state).toContain("After chapter 1");
+      const index = await manager.loadChapterIndex(bookId);
+      expect(index.map((chapter) => chapter.number)).toEqual([1, 2]);
+      expect(index[1]?.status).toBe("state-degraded");
+      expect(index[1]?.auditIssues.join("\n")).toContain("缺少可恢复快照");
     });
 
     it("removes sqlite memory files when rolling back", async () => {

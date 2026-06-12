@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildAgentModelOverrides,
   buildDetectionConfig,
   buildNotifyChannel,
   detectionDraftFromConfig,
+  fixedAgentOverrideRows,
+  modelRouteValue,
   notifyDraftFromChannel,
+  parseModelRouteValue,
 } from "./project-settings-model";
 
 describe("project settings form model", () => {
@@ -36,5 +40,44 @@ describe("project settings form model", () => {
 
     expect(draft.enabled).toBe(false);
     expect(buildDetectionConfig(draft)).toBeNull();
+  });
+
+  it("expands agent model routes into fixed UI rows and saves only selected models", () => {
+    const rows = fixedAgentOverrideRows({
+      writer: "agnes-2.0-flash",
+      auditor: { model: "deepseek-chat", baseUrl: "https://api.example.com/v1" },
+      unknown: "ignored-model",
+    });
+
+    expect(rows.map((row) => row.agent)).toEqual(["architect", "writer", "auditor", "reviser", "exporter"]);
+    expect(rows.find((row) => row.agent === "writer")?.model).toBe("agnes-2.0-flash");
+    expect(rows.find((row) => row.agent === "auditor")?.rest).toEqual({ baseUrl: "https://api.example.com/v1" });
+
+    expect(buildAgentModelOverrides(rows)).toEqual({
+      writer: "agnes-2.0-flash",
+      auditor: { model: "deepseek-chat", baseUrl: "https://api.example.com/v1" },
+    });
+  });
+
+  it("keeps the configured service together with each selected agent model", () => {
+    const rows = fixedAgentOverrideRows({
+      writer: { service: "custom:Novel API", model: "novel-pro" },
+    });
+
+    expect(rows.find((row) => row.agent === "writer")).toMatchObject({
+      service: "custom:Novel API",
+      model: "novel-pro",
+    });
+    expect(buildAgentModelOverrides(rows)).toEqual({
+      writer: { service: "custom:Novel API", model: "novel-pro" },
+    });
+  });
+
+  it("round-trips service and model through the select option value", () => {
+    const value = modelRouteValue("custom:中文服务", "model/name:latest");
+    expect(parseModelRouteValue(value)).toEqual({
+      service: "custom:中文服务",
+      model: "model/name:latest",
+    });
   });
 });

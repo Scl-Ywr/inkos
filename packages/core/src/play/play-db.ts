@@ -62,7 +62,6 @@ const EVENT_SELECT_COLUMNS = `
 `;
 
 export class PlayDB {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private readonly db: any;
 
   constructor(runDir: string) {

@@ -67,7 +67,6 @@ export interface StoredHook {
 }
 
 export class MemoryDB {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private db: any;
 
   constructor(bookDir: string) {
