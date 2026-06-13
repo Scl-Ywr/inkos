@@ -4,6 +4,7 @@ import type { GenreProfile } from "../models/genre-profile.js";
 import type { ContextPackage, RuleStack } from "../models/input-governance.js";
 import { readGenreProfile, readBookRules } from "./rules-reader.js";
 import { parseWriterOutput, type ParsedWriterOutput } from "./writer-parser.js";
+import { parseSettlementOutput } from "./settler-parser.js";
 import { buildGovernedMemoryEvidenceBlocks } from "../utils/governed-context.js";
 import {
   buildGovernedCharacterMatrixWorkingSet,
@@ -183,6 +184,9 @@ export class ChapterAnalyzerAgent extends BaseAgent {
     );
 
     const countingMode = resolveLengthCountingMode(book.language ?? genreProfile.language);
+    // Missing truth blocks become placeholders in the generic writer parser,
+    // which is unsafe when this output will replace persisted truth files.
+    parseSettlementOutput(response.content, genreProfile);
     const output = parseWriterOutput(chapterNumber, response.content, genreProfile, countingMode);
     const canonicalContent = chapterContent;
     const canonicalWordCount = countChapterLength(canonicalContent, countingMode);

@@ -391,6 +391,160 @@ describe("PipelineRunner", () => {
     }
   });
 
+  it("reuses the base client when an object override only changes the model", () => {
+    const baseClient = {
+      provider: "openai",
+      apiFormat: "chat",
+      stream: false,
+      defaults: {
+        temperature: 0.7,
+        maxTokens: 4096,
+        thinkingBudget: 0,
+      },
+    } as ConstructorParameters<typeof PipelineRunner>[0]["client"];
+    const runner = new PipelineRunner({
+      client: baseClient,
+      model: "base-model",
+      projectRoot: process.cwd(),
+      modelOverrides: {
+        writer: { model: "writer-model" },
+      },
+    });
+
+    const resolved = (
+      runner as unknown as {
+        resolveOverride: (agent: string) => { model: string; client: unknown };
+      }
+    ).resolveOverride("writer");
+
+    expect(resolved.model).toBe("writer-model");
+    expect(resolved.client).toBe(baseClient);
+  });
+
+  it("creates a dedicated client for service overrides without an explicit base URL", () => {
+    const previousKey = process.env.TEST_AGENT_SERVICE_KEY;
+    process.env.TEST_AGENT_SERVICE_KEY = "agent-service-key";
+    try {
+      const baseClient = {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: true,
+        defaults: {
+          temperature: 0.7,
+          maxTokens: 4096,
+          thinkingBudget: 0,
+        },
+      } as ConstructorParameters<typeof PipelineRunner>[0]["client"];
+      const runner = new PipelineRunner({
+        client: baseClient,
+        model: "base-model",
+        projectRoot: process.cwd(),
+        defaultLLMConfig: {
+          provider: "openai",
+          service: "openai",
+          configSource: "env",
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: "base-key",
+          model: "base-model",
+          temperature: 0.7,
+          thinkingBudget: 0,
+          apiFormat: "chat",
+          stream: true,
+        },
+        modelOverrides: {
+          writer: {
+            model: "deepseek-chat",
+            service: "deepseek",
+            apiKeyEnv: "TEST_AGENT_SERVICE_KEY",
+            apiFormat: "chat",
+            stream: false,
+          },
+        },
+      });
+
+      const resolved = (
+        runner as unknown as {
+          resolveOverride: (agent: string) => {
+            model: string;
+            client: {
+              service?: string;
+              _piModel?: { baseUrl?: string };
+              _apiKey?: string;
+              apiFormat: string;
+              stream: boolean;
+            };
+          };
+        }
+      ).resolveOverride("writer");
+
+      expect(resolved.model).toBe("deepseek-chat");
+      expect(resolved.client).not.toBe(baseClient);
+      expect(resolved.client.service).toBe("deepseek");
+      expect(resolved.client._piModel?.baseUrl).toContain("deepseek.com");
+      expect(resolved.client._apiKey).toBe("agent-service-key");
+      expect(resolved.client.apiFormat).toBe("chat");
+      expect(resolved.client.stream).toBe(false);
+    } finally {
+      if (previousKey === undefined) delete process.env.TEST_AGENT_SERVICE_KEY;
+      else process.env.TEST_AGENT_SERVICE_KEY = previousKey;
+    }
+  });
+
+  it("rolls back interrupted chapter persistence and marks the saved body state-degraded", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const bookDir = state.bookDir(bookId);
+    const storyDir = join(bookDir, "story");
+    const runtimeDir = join(storyDir, "runtime");
+    const chapterPath = join(bookDir, "chapters", "0001_Interrupted.md");
+    const journalPath = join(runtimeDir, "chapter-persistence.json");
+    try {
+      await mkdir(runtimeDir, { recursive: true });
+      await writeFile(join(storyDir, "current_state.md"), "# Current State\n\n- stable\n", "utf-8");
+      await writeFile(join(storyDir, "pending_hooks.md"), "# Pending Hooks\n\n- stable hook\n", "utf-8");
+      await state.snapshotState(bookId, 0);
+
+      await writeFile(join(storyDir, "current_state.md"), "# Current State\n\n- partial mutation\n", "utf-8");
+      await writeFile(join(storyDir, "pending_hooks.md"), "# Pending Hooks\n\n- partial mutation\n", "utf-8");
+      await writeFile(chapterPath, "# 第1章 Interrupted\n\n正文仍需重新结算。\n", "utf-8");
+      await writeFile(journalPath, JSON.stringify({
+        version: 1,
+        chapterNumber: 1,
+        chapterTitle: "Interrupted",
+        status: "ready-for-review",
+        finalWordCount: 10,
+        startedAt: "2026-04-01T00:00:00.000Z",
+        stage: "truth-saved",
+      }), "utf-8");
+
+      const recoverableRunner = runner as unknown as {
+        recoverInterruptedChapterPersistence: (targetBookId: string) => Promise<void>;
+        syncNarrativeMemoryIndex: (targetBookId: string) => Promise<void>;
+        syncCurrentStateFactHistory: (targetBookId: string, chapter: number) => Promise<void>;
+      };
+      vi.spyOn(recoverableRunner, "syncNarrativeMemoryIndex").mockResolvedValue(undefined);
+      vi.spyOn(recoverableRunner, "syncCurrentStateFactHistory").mockResolvedValue(undefined);
+
+      await recoverableRunner.recoverInterruptedChapterPersistence(bookId);
+
+      await expect(readFile(join(storyDir, "current_state.md"), "utf-8")).resolves.toContain("- stable");
+      await expect(readFile(join(storyDir, "pending_hooks.md"), "utf-8")).resolves.toContain("- stable hook");
+      await expect(readFile(journalPath, "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(chapterPath, "utf-8")).resolves.toContain("正文仍需重新结算");
+      await expect(state.loadChapterIndex(bookId)).resolves.toEqual([
+        expect.objectContaining({
+          number: 1,
+          title: "Interrupted",
+          status: "state-degraded",
+          wordCount: 10,
+          auditIssues: [expect.stringContaining("persistence was interrupted")],
+          reviewNote: expect.any(String),
+        }),
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("initializes control documents during book creation", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-init-book-test-"));
     const bookId = "bootstrap-book";
@@ -3033,6 +3187,94 @@ describe("PipelineRunner", () => {
     expect(savedIndex[0]?.status).toBe("ready-for-review");
     expect(savedIndex[0]?.auditIssues).toEqual([]);
     expect(savedIndex[0]?.reviewNote).toBeUndefined();
+
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("rebuilds stale structured state from Markdown before repairing a degraded chapter", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture({
+      inputGovernanceMode: "legacy",
+    });
+    const now = "2026-03-19T00:00:00.000Z";
+    const bookDir = state.bookDir(bookId);
+    const storyDir = join(bookDir, "story");
+    const stateDir = join(storyDir, "state");
+
+    await mkdir(stateDir, { recursive: true });
+    await Promise.all([
+      writeFile(join(storyDir, "current_state.md"), [
+        "# Current State",
+        "",
+        "| Field | Value |",
+        "| --- | --- |",
+        "| Current Chapter | 20 |",
+        "| Current Location | Huangni Slope workshop |",
+        "| Current Goal | Sell the pills |",
+      ].join("\n"), "utf-8"),
+      writeFile(join(storyDir, "pending_hooks.md"), "# Hooks\n", "utf-8"),
+      writeFile(join(storyDir, "particle_ledger.md"), "stable ledger", "utf-8"),
+      writeFile(join(storyDir, "chapter_summaries.md"), "# Chapter Summaries\n", "utf-8"),
+      writeFile(join(bookDir, "chapters", "0001_Broken_Persistence.md"), [
+        "# Chapter 1 Broken Persistence",
+        "",
+        "Healthy chapter body.",
+      ].join("\n"), "utf-8"),
+      writeFile(join(stateDir, "manifest.json"), JSON.stringify({
+        schemaVersion: 2,
+        language: "en",
+        lastAppliedChapter: 1,
+        projectionVersion: 1,
+        migrationWarnings: [],
+      }), "utf-8"),
+      writeFile(join(stateDir, "current_state.json"), JSON.stringify({
+        chapter: 1,
+        facts: [],
+      }), "utf-8"),
+      writeFile(join(stateDir, "hooks.json"), JSON.stringify({ hooks: [] }), "utf-8"),
+      writeFile(join(stateDir, "chapter_summaries.json"), JSON.stringify({ rows: [] }), "utf-8"),
+      state.saveChapterIndex(bookId, [{
+        number: 1,
+        title: "Broken Persistence",
+        status: "state-degraded" as ChapterMeta["status"],
+        wordCount: 21,
+        createdAt: now,
+        updatedAt: now,
+        auditIssues: ["[warning] stale structured state"],
+        lengthWarnings: [],
+        reviewNote: JSON.stringify({
+          kind: "state-degraded",
+          baseStatus: "ready-for-review",
+          injectedIssues: ["[warning] stale structured state"],
+        }),
+      }]),
+    ]);
+
+    vi.spyOn(
+      WriterAgent.prototype as unknown as {
+        settleChapterState: (input: Record<string, unknown>) => Promise<WriteChapterOutput>;
+      },
+      "settleChapterState",
+    ).mockImplementation(async () => {
+      const structured = JSON.parse(
+        await readFile(join(stateDir, "current_state.json"), "utf-8"),
+      ) as { facts: Array<{ object: string }> };
+      expect(structured.facts.map((fact) => fact.object)).toContain("Huangni Slope workshop");
+      expect(structured.facts.map((fact) => fact.object)).toContain("Sell the pills");
+      return createWriterOutput({
+        chapterNumber: 1,
+        title: "Broken Persistence",
+        content: "Healthy chapter body.",
+        updatedState: "fixed state",
+        updatedHooks: "fixed hooks",
+        updatedLedger: "fixed ledger",
+      });
+    });
+    vi.spyOn(StateValidatorAgent.prototype, "validate").mockResolvedValue({
+      passed: true,
+      warnings: [],
+    });
+
+    await runner.repairChapterState(bookId, 1);
 
     await rm(root, { recursive: true, force: true });
   });

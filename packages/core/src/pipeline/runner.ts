@@ -41,11 +41,16 @@ import {
 import { readFile, readdir, writeFile, mkdir, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  buildStateDegradedReviewNote,
   parseStateDegradedReviewNote,
   resolveStateDegradedBaseStatus,
   retrySettlementAfterValidationFailure,
 } from "./chapter-state-recovery.js";
-import { persistChapterArtifacts } from "./chapter-persistence.js";
+import {
+  clearChapterPersistenceJournal,
+  loadChapterPersistenceJournal,
+  persistChapterArtifacts,
+} from "./chapter-persistence.js";
 import { runChapterReviewCycle } from "./chapter-review-cycle.js";
 import { TruthContextCache } from "../agents/truth-context-cache.js";
 import { validateChapterTruthPersistence } from "./chapter-truth-validation.js";
@@ -420,22 +425,33 @@ export class PipelineRunner {
     if (typeof override === "string") {
       return { model: override, client: this.config.client };
     }
-    // Full override — needs its own client if baseUrl differs
-    if (!override.baseUrl) {
+    const hasClientOverride =
+      override.service !== undefined ||
+      override.provider !== undefined ||
+      override.baseUrl !== undefined ||
+      override.apiKeyEnv !== undefined ||
+      override.apiKey !== undefined ||
+      override.apiFormat !== undefined ||
+      override.stream !== undefined;
+    if (!hasClientOverride) {
       return { model: override.model, client: this.config.client };
     }
     const base = this.config.defaultLLMConfig;
+    const service = override.service ?? base?.service ?? "custom";
     const provider = override.provider ?? base?.provider ?? "custom";
+    const baseUrl = override.baseUrl ??
+      (override.service && override.service !== base?.service ? "" : base?.baseUrl ?? "");
     const apiKeySource = override.apiKeyEnv
       ? `env:${override.apiKeyEnv}`
       : override.apiKey !== undefined
-        ? `service:${override.service ?? override.baseUrl}`
+        ? `service:${service}:${baseUrl}`
         : `base:${base?.apiKey ?? ""}`;
     const stream = override.stream ?? base?.stream ?? true;
     const apiFormat = override.apiFormat ?? base?.apiFormat ?? "chat";
     const cacheKey = [
       provider,
-      override.baseUrl,
+      service,
+      baseUrl,
       apiKeySource,
       `stream:${stream}`,
       `format:${apiFormat}`,
@@ -447,9 +463,9 @@ export class PipelineRunner {
         : override.apiKey ?? base?.apiKey ?? "";
       client = createLLMClient({
         provider,
-        service: override.service ?? base?.service ?? "custom",
+        service,
         configSource: base?.configSource ?? "env",
-        baseUrl: override.baseUrl,
+        baseUrl,
         apiKey,
         model: override.model,
         temperature: base?.temperature ?? 0.7,
@@ -1455,6 +1471,7 @@ export class PipelineRunner {
         };
     const releaseLock = await this.state.acquireBookLock(bookId);
     try {
+      await this.recoverInterruptedChapterPersistence(bookId);
       return await this._writeNextChapterLocked(bookId, options, this.config.externalContext);
     } finally {
       await releaseLock();
@@ -1464,6 +1481,7 @@ export class PipelineRunner {
   async repairChapterState(bookId: string, chapterNumber?: number): Promise<ChapterPipelineResult> {
     const releaseLock = await this.state.acquireBookLock(bookId);
     try {
+      await this.recoverInterruptedChapterPersistence(bookId);
       return await this._repairChapterStateLocked(bookId, chapterNumber);
     } finally {
       await releaseLock();
@@ -1473,6 +1491,7 @@ export class PipelineRunner {
   async resyncChapterArtifacts(bookId: string, chapterNumber?: number): Promise<ChapterPipelineResult> {
     const releaseLock = await this.state.acquireBookLock(bookId);
     try {
+      await this.recoverInterruptedChapterPersistence(bookId);
       return await this._resyncChapterArtifactsLocked(bookId, chapterNumber);
     } finally {
       await releaseLock();
@@ -1860,6 +1879,10 @@ export class PipelineRunner {
       syncCurrentStateFactHistory: () => this.syncCurrentStateFactHistory(bookId, chapterNumber),
       logSnapshotStage: () =>
         this.logStage(stageLanguage, { zh: "更新章节索引与快照", en: "updating chapter index and snapshots" }),
+      journalPath: join(bookDir, "story", "runtime", "chapter-persistence.json"),
+    }).catch(async (error) => {
+      await this.recoverInterruptedChapterPersistence(bookId);
+      throw error;
     });
 
     // 6. Send notification
@@ -1938,6 +1961,14 @@ export class PipelineRunner {
       readFile(join(storyDir, "current_state.md"), "utf-8").catch(() => ""),
       readFile(join(storyDir, "pending_hooks.md"), "utf-8").catch(() => ""),
     ]);
+
+    // A degraded chapter never persisted its settlement, so the Markdown truth
+    // files remain the last authoritative state. Rebuild structured state first
+    // to avoid replaying the repair against stale or partially migrated JSON.
+    await syncLegacyStructuredStateFromMarkdownHelper({
+      bookDir,
+      chapterNumber: targetChapter,
+    });
 
     const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
     let repairedOutput = await writer.settleChapterState({
@@ -2726,17 +2757,37 @@ ${matrix}`,
       return output;
     }
 
-    const analyzer = new ChapterAnalyzerAgent(this.agentCtxFor("chapter-analyzer", bookId));
-    const analyzed = await analyzer.analyzeChapter({
-      book,
-      bookDir,
-      chapterNumber,
-      chapterContent: finalContent,
-      chapterTitle: output.title,
-      chapterIntent: reducedControlInput?.chapterIntent,
-      contextPackage: reducedControlInput?.contextPackage,
-      ruleStack: reducedControlInput?.ruleStack,
-    });
+    let analyzed:
+      | Awaited<ReturnType<ChapterAnalyzerAgent["analyzeChapter"]>>
+      | WriteChapterOutput;
+    try {
+      const analyzer = new ChapterAnalyzerAgent(this.agentCtxFor("chapter-analyzer", bookId));
+      analyzed = await analyzer.analyzeChapter({
+        book,
+        bookDir,
+        chapterNumber,
+        chapterContent: finalContent,
+        chapterTitle: output.title,
+        chapterIntent: reducedControlInput?.chapterIntent,
+        contextPackage: reducedControlInput?.contextPackage,
+        ruleStack: reducedControlInput?.ruleStack,
+      });
+    } catch (error) {
+      this.config.logger?.warn(
+        `Final truth rebuild via chapter-analyzer failed; retrying with writer settlement: ${String(error)}`,
+      );
+      const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
+      analyzed = await writer.settleChapterState({
+        book,
+        bookDir,
+        chapterNumber,
+        title: output.title,
+        content: finalContent,
+        chapterIntent: reducedControlInput?.chapterIntent,
+        contextPackage: reducedControlInput?.contextPackage,
+        ruleStack: reducedControlInput?.ruleStack,
+      });
+    }
 
     return {
       ...analyzed,
@@ -2988,6 +3039,72 @@ ${matrix}`,
       chapterNumber,
       output,
     });
+  }
+
+  private async recoverInterruptedChapterPersistence(bookId: string): Promise<void> {
+    const bookDir = this.state.bookDir(bookId);
+    const journalPath = join(bookDir, "story", "runtime", "chapter-persistence.json");
+    const journal = await loadChapterPersistenceJournal(journalPath);
+    if (!journal) return;
+
+    const chaptersDir = join(bookDir, "chapters");
+    const padded = String(journal.chapterNumber).padStart(4, "0");
+    const chapterExists = (await readdir(chaptersDir).catch(() => [] as string[]))
+      .some((file) => file.startsWith(`${padded}_`) && file.endsWith(".md"));
+    if (!chapterExists && journal.stage === "prepared") {
+      await clearChapterPersistenceJournal(journalPath);
+      return;
+    }
+
+    const previousChapter = journal.chapterNumber - 1;
+    const restored = await this.state.restoreState(bookId, previousChapter);
+    if (!restored) {
+      throw new Error(
+        `Interrupted persistence for chapter ${journal.chapterNumber} could not restore snapshot ${previousChapter}.`,
+      );
+    }
+
+    const recoveryIssue: AuditIssue = {
+      severity: "warning",
+      category: "persistence-recovery",
+      description:
+        `Chapter ${journal.chapterNumber} persistence was interrupted at stage "${journal.stage}". ` +
+        "Truth/state was rolled back and must be settled again.",
+      suggestion: "Run chapter state repair before writing the next chapter.",
+    };
+    const index = [...(await this.state.loadChapterIndex(bookId))];
+    const existingIdx = index.findIndex((entry) => entry.number === journal.chapterNumber);
+    const now = new Date().toISOString();
+    const existingEntry = existingIdx >= 0 ? index[existingIdx] : undefined;
+    const recoveredEntry: ChapterMeta = {
+      ...existingEntry,
+      number: journal.chapterNumber,
+      title: journal.chapterTitle,
+      status: "state-degraded",
+      wordCount: journal.finalWordCount,
+      createdAt: existingEntry?.createdAt ?? journal.startedAt,
+      updatedAt: now,
+      auditIssues: [
+        ...(existingEntry?.auditIssues ?? []),
+        `[warning] ${recoveryIssue.description}`,
+      ],
+      lengthWarnings: existingEntry?.lengthWarnings ?? [],
+      reviewNote: buildStateDegradedReviewNote(
+        journal.status === "audit-failed" ? "audit-failed" : "ready-for-review",
+        [recoveryIssue],
+      ),
+    };
+    if (existingIdx >= 0) index[existingIdx] = recoveredEntry;
+    else index.push(recoveredEntry);
+    index.sort((left, right) => left.number - right.number);
+    await this.state.saveChapterIndex(bookId, index);
+    await this.syncNarrativeMemoryIndex(bookId);
+    await this.syncCurrentStateFactHistory(bookId, previousChapter);
+    await clearChapterPersistenceJournal(journalPath);
+    this.config.logger?.warn(
+      `[persistence-recovery] Recovered interrupted chapter ${journal.chapterNumber} from stage ${journal.stage}; ` +
+      "marked state-degraded.",
+    );
   }
 
   private async syncNarrativeMemoryIndex(bookId: string): Promise<void> {

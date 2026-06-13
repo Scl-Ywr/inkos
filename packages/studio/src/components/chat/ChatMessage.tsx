@@ -1,7 +1,10 @@
+import { useEffect, useState } from "react";
 import type { Theme } from "../../hooks/use-theme";
 import type { TokenUsageSnapshot } from "../../store/chat/types";
 import {
   Message,
+  MessageAction,
+  MessageActions,
   MessageContent,
   MessageResponse,
 } from "../ai-elements/message";
@@ -11,7 +14,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
-import { CheckCircle2, CircleDot, Database, MoreHorizontal, RefreshCw, Scissors, Trash2, XCircle, Zap } from "lucide-react";
+import { Check, CheckCircle2, CircleDot, Copy, Database, MoreHorizontal, RefreshCw, Scissors, Trash2, XCircle, Zap } from "lucide-react";
 
 export interface ChatMessageProps {
   readonly role: "user" | "assistant";
@@ -21,6 +24,8 @@ export interface ChatMessageProps {
   readonly tokenUsage?: TokenUsageSnapshot;
   readonly isStreaming?: boolean;
   readonly onDelete?: () => void;
+  readonly copyContent?: string;
+  readonly showCopyAction?: boolean;
 }
 
 export function ChatMessage({
@@ -29,9 +34,14 @@ export function ChatMessage({
   tokenUsage,
   isStreaming = false,
   onDelete,
+  copyContent,
+  showCopyAction = role === "assistant",
 }: ChatMessageProps) {
+  const [copied, setCopied] = useState(false);
   const isUser = role === "user";
   const isError = content.startsWith("\u2717");
+  const textToCopy = copyContent ?? content;
+  const canCopy = !isUser && showCopyAction && !isStreaming && textToCopy.trim().length > 0;
   const tokenLabel = tokenUsage && !isUser && tokenUsage.totalTokens > 0
     ? `本次${tokenUsage.estimated ? "约 " : " "}${tokenUsage.totalTokens.toLocaleString()} tokens`
     : null;
@@ -52,6 +62,20 @@ export function ChatMessage({
   const triggerDelete = () => {
     window.setTimeout(() => onDelete?.(), 0);
   };
+  const copyMessage = async () => {
+    try {
+      await writeClipboardText(textToCopy);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!copied) return;
+    const timeout = window.setTimeout(() => setCopied(false), 1_800);
+    return () => window.clearTimeout(timeout);
+  }, [copied]);
 
   return (
     <Message from={role}>
@@ -103,6 +127,20 @@ export function ChatMessage({
           </div>
         )}
         </MessageContent>
+        {canCopy ? (
+          <MessageActions className="mt-1">
+            <MessageAction
+              onClick={() => void copyMessage()}
+              label={copied ? "已复制" : "复制消息"}
+              title={copied ? "已复制" : "复制消息"}
+              className="h-8 gap-1.5 rounded-full px-2.5 text-xs text-muted-foreground/75 transition-colors hover:bg-muted/70 hover:text-foreground"
+              size="sm"
+            >
+              {copied ? <Check size={14} /> : <Copy size={14} />}
+              <span aria-hidden="true">{copied ? "已复制" : "复制"}</span>
+            </MessageAction>
+          </MessageActions>
+        ) : null}
         {onDelete && !isStreaming ? (
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -137,12 +175,38 @@ function compactPipeline(
   events: ReadonlyArray<{ readonly kind: string; readonly label: string; readonly at: number; readonly estimatedTokensSaved?: number; readonly similarity?: number }>,
 ) {
   const preferred = ["standardized", "headroom-official", "headroom-fallback", "compressed", "embedding-external", "embedding-fallback", "cache-check", "cache-hit", "cache-miss", "llm-call", "cache-write", "cache-maintenance", "cache-skip"];
+  const preferredKinds = new Set(preferred);
+  const latestByKind = new Map<string, (typeof events)[number]>();
+  for (let index = events.length - 1; index >= 0 && latestByKind.size < preferred.length; index--) {
+    const event = events[index];
+    if (preferredKinds.has(event.kind) && !latestByKind.has(event.kind)) {
+      latestByKind.set(event.kind, event);
+    }
+  }
   const result: Array<(typeof events)[number]> = [];
   for (const kind of preferred) {
-    const event = [...events].reverse().find((item) => item.kind === kind);
+    const event = latestByKind.get(kind);
     if (event) result.push(event);
   }
   return result.slice(0, 7);
+}
+
+async function writeClipboardText(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("Copy command failed");
 }
 
 function pipelineIcon(kind: string) {

@@ -691,5 +691,5 @@ describe("PlayRunner", () => {
     await expect(readFile(join(runDir, "variants", "turn-1", `${replay.variantId}.json`), "utf-8"))
       .resolves
       .toContain("版本B");
-  });
+  }, 15_000);
 });

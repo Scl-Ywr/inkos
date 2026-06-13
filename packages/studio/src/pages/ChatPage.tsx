@@ -850,6 +850,12 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                           }
                         }
                       }
+                      const textItems = items.filter(
+                        (item): item is Extract<RenderItem, { kind: "text" }> =>
+                          item.kind === "text" && item.part.content.trim().length > 0,
+                      );
+                      const assistantText = textItems.map((item) => item.part.content).join("\n\n");
+                      const lastTextPartIndex = textItems.at(-1)?.pi;
 
                       const rendered = items.map((item) => {
                         if (item.kind === "thinking") {
@@ -882,6 +888,8 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                               theme={theme}
                               tokenUsage={msg.tokenUsage}
                               isStreaming={loading && i === messages.length - 1}
+                              copyContent={assistantText}
+                              showCopyAction={item.pi === lastTextPartIndex}
                               onDelete={item.pi === msg.parts!.findIndex((part) => part.type === "text")
                                 ? () => void handleDeleteMessage(i, "assistant")
                                 : undefined}

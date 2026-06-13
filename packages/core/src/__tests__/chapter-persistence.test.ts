@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AuditIssue, AuditResult } from "../agents/continuity.js";
 import type { ChapterMeta } from "../models/chapter.js";
-import { persistChapterArtifacts } from "../pipeline/chapter-persistence.js";
+import {
+  loadChapterPersistenceJournal,
+  persistChapterArtifacts,
+} from "../pipeline/chapter-persistence.js";
 
 const ZERO_USAGE = {
   promptTokens: 0,
@@ -194,5 +200,70 @@ describe("persistChapterArtifacts", () => {
     // Must preserve original createdAt
     expect(savedIndex[0].createdAt).toBe("2026-01-01T00:00:00.000Z");
     expect(savedIndex[0].updatedAt).toBe("2026-04-01T00:00:00.000Z");
+  });
+
+  it("keeps a recoverable journal when persistence fails after truth files are saved", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-chapter-persistence-"));
+    const journalPath = join(root, "story", "runtime", "chapter-persistence.json");
+    try {
+      await expect(persistChapterArtifacts({
+        chapterNumber: 2,
+        chapterTitle: "Interrupted Chapter",
+        status: "ready-for-review",
+        auditResult: createAuditResult(),
+        finalWordCount: 1200,
+        lengthWarnings: [],
+        degradedIssues: [],
+        loadChapterIndex: async () => [],
+        saveChapter: vi.fn().mockResolvedValue(undefined),
+        saveTruthFiles: vi.fn().mockResolvedValue(undefined),
+        saveChapterIndex: vi.fn().mockRejectedValue(new Error("disk full")),
+        markBookActiveIfNeeded: vi.fn().mockResolvedValue(undefined),
+        persistAuditDriftGuidance: vi.fn().mockResolvedValue(undefined),
+        snapshotState: vi.fn().mockResolvedValue(undefined),
+        syncCurrentStateFactHistory: vi.fn().mockResolvedValue(undefined),
+        logSnapshotStage: vi.fn(),
+        journalPath,
+        now: () => "2026-04-01T00:00:00.000Z",
+      })).rejects.toThrow("disk full");
+
+      await expect(loadChapterPersistenceJournal(journalPath)).resolves.toMatchObject({
+        chapterNumber: 2,
+        stage: "truth-saved",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("removes the journal only after the full persistence sequence succeeds", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-chapter-persistence-"));
+    const journalPath = join(root, "story", "runtime", "chapter-persistence.json");
+    try {
+      await persistChapterArtifacts({
+        chapterNumber: 2,
+        chapterTitle: "Committed Chapter",
+        status: "ready-for-review",
+        auditResult: createAuditResult(),
+        finalWordCount: 1200,
+        lengthWarnings: [],
+        degradedIssues: [],
+        loadChapterIndex: async () => [],
+        saveChapter: vi.fn().mockResolvedValue(undefined),
+        saveTruthFiles: vi.fn().mockResolvedValue(undefined),
+        saveChapterIndex: vi.fn().mockResolvedValue(undefined),
+        markBookActiveIfNeeded: vi.fn().mockResolvedValue(undefined),
+        persistAuditDriftGuidance: vi.fn().mockResolvedValue(undefined),
+        snapshotState: vi.fn().mockResolvedValue(undefined),
+        syncCurrentStateFactHistory: vi.fn().mockResolvedValue(undefined),
+        logSnapshotStage: vi.fn(),
+        journalPath,
+      });
+
+      await expect(loadChapterPersistenceJournal(journalPath)).resolves.toBeNull();
+      await expect(readFile(`${journalPath}.bak`, "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

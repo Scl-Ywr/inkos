@@ -23,13 +23,22 @@ export function parseSettlementOutput(
     return match?.[1]?.trim() ?? "";
   };
 
+  const updatedState = extract("UPDATED_STATE");
+  const updatedLedger = extract("UPDATED_LEDGER");
+  const updatedHooks = extract("UPDATED_HOOKS");
+  if (!updatedState || !updatedHooks) {
+    throw new Error(
+      "legacy settlement output is incomplete: expected UPDATED_STATE and UPDATED_HOOKS",
+    );
+  }
+
   return {
     postSettlement: extract("POST_SETTLEMENT"),
-    updatedState: extract("UPDATED_STATE") || "(状态卡未更新)",
+    updatedState,
     updatedLedger: genreProfile.numericalSystem
-      ? (extract("UPDATED_LEDGER") || "(账本未更新)")
+      ? (updatedLedger || "(账本未更新)")
       : "",
-    updatedHooks: extract("UPDATED_HOOKS") || "(伏笔池未更新)",
+    updatedHooks,
     chapterSummary: extract("CHAPTER_SUMMARY"),
     updatedSubplots: extract("UPDATED_SUBPLOTS"),
     updatedEmotionalArcs: extract("UPDATED_EMOTIONAL_ARCS"),
