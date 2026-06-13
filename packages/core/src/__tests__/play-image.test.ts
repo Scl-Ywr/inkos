@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { writeFile, access } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -7,6 +8,7 @@ import {
   buildPlaySceneImagePrompt,
   readPlayImageManifest,
   setPlayImageEntry,
+  deletePlayImageEntry,
   playImageFileName,
   readPlayImageSettings,
   writePlayImageSettings,
@@ -91,6 +93,16 @@ describe("play image manifest", () => {
     // persisted to disk as JSON
     const raw = JSON.parse(await readFile(join(runDir, "images", "manifest.json"), "utf-8"));
     expect(Object.keys(raw)).toHaveLength(2);
+  });
+
+  it("deletes a manifest entry and its generated file", async () => {
+    await setPlayImageEntry(runDir, "actor-1", { status: "ready", file: "actor-1.png" });
+    await writeFile(join(runDir, "images", "actor-1.png"), "image");
+
+    await deletePlayImageEntry(runDir, "actor-1");
+
+    expect(await readPlayImageManifest(runDir)).toEqual({});
+    await expect(access(join(runDir, "images", "actor-1.png"))).rejects.toThrow();
   });
 });
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { fetchJson } from "../hooks/use-api";
 import { useServiceStore } from "../store/service";
 import { useChatStore } from "../store/chat";
@@ -6,6 +6,7 @@ import { AlertTriangle, ArrowLeft, CheckCircle2, Eye, EyeOff, Loader2, ShieldChe
 import { ServiceQuickLinks } from "../components/ServiceQuickLinks";
 import { StudioSelect } from "../components/StudioSelect";
 import { appConfirm } from "../lib/app-dialog";
+import { mobileTextInputHandlers } from "../lib/mobile-input";
 import {
   deleteServiceConfig,
   matchServiceConfigEntryForDetail,
@@ -62,24 +63,81 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
   const [detectedConfig, setDetectedConfig] = useState<DetectedConfig | null>(null);
   const [officialVerification, setOfficialVerification] = useState<OfficialVerification | null>(null);
   const [verifiedProbe, setVerifiedProbe] = useState<VerifiedProbe | null>(null);
+  const touchedFieldsRef = useRef(new Set<string>());
+  const customNameRef = useRef<HTMLInputElement>(null);
+  const baseUrlRef = useRef<HTMLInputElement>(null);
+  const apiKeyRef = useRef<HTMLInputElement>(null);
+  const testModelRef = useRef<HTMLInputElement>(null);
+  const touchField = (field: string) => {
+    touchedFieldsRef.current.add(field);
+  };
+  const setTextField = (
+    field: "customName" | "baseUrl" | "apiKey" | "testModel",
+    setter: (value: string) => void,
+    value: string,
+  ) => {
+    setter(value);
+    const refs = {
+      customName: customNameRef,
+      baseUrl: baseUrlRef,
+      apiKey: apiKeyRef,
+      testModel: testModelRef,
+    };
+    if (refs[field].current && refs[field].current.value !== value) {
+      refs[field].current.value = value;
+    }
+  };
+  const textHandlers = (
+    field: "customName" | "baseUrl" | "apiKey" | "testModel",
+    setter: (value: string) => void,
+  ) => mobileTextInputHandlers((value) => {
+    touchField(field);
+    setter(value);
+  });
 
   // -- Unified connection status --
   const [status, setStatus] = useState<ConnectionStatus>({ state: "idle" });
 
   useEffect(() => {
     let cancelled = false;
-    void fetchJson<{ services: Array<Record<string, unknown>> }>("/services/config")
+    void fetchJson<{
+      services: Array<Record<string, unknown>>;
+      service?: string | null;
+      defaultModel?: string | null;
+    }>("/services/config")
       .then((data) => {
         if (cancelled) return;
         const matched = matchServiceConfigEntryForDetail(data.services ?? [], serviceId);
         if (!matched) return;
+        const matchedServiceId = matched.service === "custom"
+          ? `custom:${String(matched.name ?? "")}`
+          : String(matched.service ?? "");
         if (isCustom) {
-          setCustomName(String(matched.name ?? persistedCustomName));
-          setBaseUrl(String(matched.baseUrl ?? ""));
+          if (!touchedFieldsRef.current.has("customName")) {
+            setTextField("customName", setCustomName, String(matched.name ?? persistedCustomName));
+          }
+          if (!touchedFieldsRef.current.has("baseUrl")) {
+            setTextField("baseUrl", setBaseUrl, String(matched.baseUrl ?? ""));
+          }
         }
-        if (typeof matched.temperature === "number") setTemperature(String(matched.temperature));
-        if (matched.apiFormat === "chat" || matched.apiFormat === "responses") setApiFormat(matched.apiFormat);
-        if (typeof matched.stream === "boolean") setStream(matched.stream);
+        if (typeof matched.temperature === "number" && !touchedFieldsRef.current.has("temperature")) {
+          setTemperature(String(matched.temperature));
+        }
+        if (
+          (matched.apiFormat === "chat" || matched.apiFormat === "responses")
+          && !touchedFieldsRef.current.has("apiFormat")
+        ) {
+          setApiFormat(matched.apiFormat);
+        }
+        if (typeof matched.stream === "boolean" && !touchedFieldsRef.current.has("stream")) {
+          setStream(matched.stream);
+        }
+        if (data.service === matchedServiceId && typeof data.defaultModel === "string") {
+          setDetectedModel((previous) => previous || data.defaultModel || "");
+          if (!touchedFieldsRef.current.has("testModel")) {
+            setTextField("testModel", setTestModel, data.defaultModel || "");
+          }
+        }
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -98,10 +156,13 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
     })
       .then((result) => {
         if (cancelled) return;
-        // Only hydrate if fields are empty (initial load), don't overwrite user edits
-        setApiKey((prev) => prev || result.apiKey);
+        if (!touchedFieldsRef.current.has("apiKey")) {
+          setTextField("apiKey", setApiKey, result.apiKey);
+        }
         setDetectedModel((prev) => prev || result.detectedModel);
-        setTestModel((prev) => prev || result.detectedModel);
+        if (!touchedFieldsRef.current.has("testModel")) {
+          setTextField("testModel", setTestModel, result.detectedModel);
+        }
         setDetectedConfig((prev) => prev ?? result.detectedConfig);
         setStatus(result.status);
       })
@@ -118,38 +179,57 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
   const isConnected = Boolean(svc?.connected);
   const models = status.state === "connected" ? status.models : (storeModels ?? []);
   const isBusy = status.state === "testing" || status.state === "saving";
+  const readForm = () => {
+    const nextCustomName = customNameRef.current?.value ?? customName;
+    const nextBaseUrl = baseUrlRef.current?.value ?? baseUrl;
+    const nextApiKey = apiKeyRef.current?.value ?? apiKey;
+    const nextTestModel = testModelRef.current?.value ?? testModel;
+    setTextField("customName", setCustomName, nextCustomName);
+    setTextField("baseUrl", setBaseUrl, nextBaseUrl);
+    setTextField("apiKey", setApiKey, nextApiKey);
+    setTextField("testModel", setTestModel, nextTestModel);
+    return {
+      customName: nextCustomName,
+      baseUrl: nextBaseUrl,
+      apiKey: nextApiKey,
+      testModel: nextTestModel,
+      resolvedCustomName: persistedCustomName || nextCustomName.trim() || "Custom",
+    };
+  };
 
   // -- Handlers --
   const handleTest = async () => {
-    const trimmedKey = apiKey.trim();
+    const form = readForm();
+    const currentEffectiveServiceId = isCustom ? `custom:${form.resolvedCustomName}` : serviceId;
+    const trimmedKey = form.apiKey.trim();
     if (!trimmedKey && !isCustom) {
       setStatus({ state: "error", message: "请先输入 API Key" });
       return;
     }
-    if (isCustom && !baseUrl.trim()) {
+    if (isCustom && !form.baseUrl.trim()) {
       setStatus({ state: "error", message: "请先填写 Base URL" });
       return;
     }
-    setApiKey(trimmedKey);
+    setTextField("apiKey", setApiKey, trimmedKey);
     setStatus({ state: "testing" });
     try {
-      const result = await probeServiceForDetail(effectiveServiceId, {
+      const result = await probeServiceForDetail(currentEffectiveServiceId, {
         apiKey: trimmedKey,
         apiFormat,
         stream,
-        ...(isCustom ? { baseUrl: baseUrl.trim() } : {}),
-        ...(testModel.trim() ? { model: testModel.trim() } : {}),
+        ...(isCustom ? { baseUrl: form.baseUrl.trim() } : {}),
+        ...(form.testModel.trim() ? { model: form.testModel.trim() } : {}),
       });
       if (result.ok) {
         const models = result.models ?? [];
         const verifiedApiFormat = result.detected?.apiFormat ?? apiFormat;
         const verifiedStream = typeof result.detected?.stream === "boolean" ? result.detected.stream : stream;
-        const verifiedBaseUrl = isCustom ? (result.detected?.baseUrl ?? baseUrl.trim()) : "";
+        const verifiedBaseUrl = isCustom ? (result.detected?.baseUrl ?? form.baseUrl.trim()) : "";
         if (result.detected?.apiFormat) setApiFormat(result.detected.apiFormat);
         if (typeof result.detected?.stream === "boolean") setStream(result.detected.stream);
         if (isCustom && result.detected?.baseUrl) setBaseUrl(result.detected.baseUrl);
         setDetectedModel(result.selectedModel ?? "");
-        setTestModel(result.selectedModel ?? testModel.trim());
+        setTextField("testModel", setTestModel, result.selectedModel ?? form.testModel.trim());
         setDetectedConfig(result.detected ?? null);
         setOfficialVerification(result.official ?? null);
         setVerifiedProbe({
@@ -163,12 +243,12 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
           official: result.official,
         });
         setStatus({ state: "connected", models });
-        setStoreModels(effectiveServiceId, models); // Write to global store
+        setStoreModels(currentEffectiveServiceId, models); // Write to global store
       } else {
         setVerifiedProbe(null);
         setOfficialVerification(result.official ?? null);
         setStatus({ state: "error", message: result.error ?? "连接失败" });
-        clearStoreModels(effectiveServiceId);
+        clearStoreModels(currentEffectiveServiceId);
       }
     } catch (e) {
       setVerifiedProbe(null);
@@ -196,46 +276,47 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
   };
 
   const handleSave = async () => {
-    const trimmedKey = apiKey.trim();
-    setApiKey(trimmedKey);
-    if (isCustom && !baseUrl.trim()) {
+    const form = readForm();
+    const currentEffectiveServiceId = isCustom ? `custom:${form.resolvedCustomName}` : serviceId;
+    const trimmedKey = form.apiKey.trim();
+    setTextField("apiKey", setApiKey, trimmedKey);
+    if (isCustom && !form.baseUrl.trim()) {
       setStatus({ state: "error", message: "请先填写 Base URL" });
       return;
     }
     setStatus({ state: "saving" });
     try {
       const result = await saveServiceConfig({
-        effectiveServiceId,
+        effectiveServiceId: currentEffectiveServiceId,
         serviceId,
         isCustom,
-        resolvedCustomName,
+        resolvedCustomName: form.resolvedCustomName,
         apiKey: trimmedKey,
-        baseUrl,
+        baseUrl: form.baseUrl,
         apiFormat,
         stream,
         temperature,
         detectedModel,
-        testModel,
+        testModel: form.testModel,
         verifiedProbe,
       });
-      if (result.status.state === "connected") {
-        if (result.detectedConfig?.apiFormat) setApiFormat(result.detectedConfig.apiFormat);
-        if (typeof result.detectedConfig?.stream === "boolean") setStream(result.detectedConfig.stream);
-        if (isCustom && result.detectedConfig?.baseUrl) setBaseUrl(result.detectedConfig.baseUrl);
-        setDetectedModel(result.detectedModel);
-        setTestModel(result.detectedModel);
-        setDetectedConfig(result.detectedConfig);
-        setStoreModels(effectiveServiceId, result.status.models);
-        if (result.detectedModel) {
-          useChatStore.getState().setSelectedModel(result.detectedModel, effectiveServiceId);
-        }
-        setStatus(result.status);
-      } else {
-        setStatus(result.status);
-        if (result.status.state === "error") return;
+      if (result.detectedConfig?.apiFormat) setApiFormat(result.detectedConfig.apiFormat);
+      if (typeof result.detectedConfig?.stream === "boolean") setStream(result.detectedConfig.stream);
+      if (isCustom && result.detectedConfig?.baseUrl) {
+        setTextField("baseUrl", setBaseUrl, result.detectedConfig.baseUrl);
       }
+      setDetectedModel(result.detectedModel);
+      setTextField("testModel", setTestModel, result.detectedModel);
+      setDetectedConfig(result.detectedConfig);
+      if (result.detectedModel) {
+        useChatStore.getState().setSelectedModel(result.detectedModel, currentEffectiveServiceId);
+      }
+      if (result.status.state === "connected") {
+        setStoreModels(currentEffectiveServiceId, result.status.models);
+      }
+      setStatus(result.status);
+      if (result.status.state === "error") return;
       await refreshServices();
-      nav.toServices();
     } catch (e) {
       setStatus({ state: "error", message: e instanceof Error ? e.message : "保存失败" });
     }
@@ -282,11 +363,13 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
         {isCustom && (
           <div className="mb-4 grid gap-4 sm:grid-cols-2">
             <Field label="服务名称" hint="用于在模型列表和聊天页识别该自定义通道">
-              <input type="text" value={customName} onChange={(e) => setCustomName(e.target.value)}
+              <input ref={customNameRef} type="text" defaultValue={customName}
+                {...textHandlers("customName", setCustomName)}
                 placeholder="例如：本地 Ollama" className="min-h-11 w-full rounded-xl border border-border/60 bg-background px-3 py-2 text-base sm:text-sm" />
             </Field>
             <Field label="Base URL" hint="兼容服务的 API 根地址，通常以 /v1 结尾">
-              <input type="text" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}
+              <input ref={baseUrlRef} type="text" defaultValue={baseUrl}
+                {...textHandlers("baseUrl", setBaseUrl)}
                 placeholder="https://api.example.com/v1" className="min-h-11 w-full rounded-xl border border-border/60 bg-background px-3 py-2 font-mono text-base sm:text-sm" />
             </Field>
           </div>
@@ -295,8 +378,9 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
         <Field label="API Key" hint="服务商鉴权密钥；保存前可先测试连接">
           <div className="relative">
             <input
-              type={showKey ? "text" : "password"} value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)} placeholder="sk-..."
+              ref={apiKeyRef}
+              type={showKey ? "text" : "password"} defaultValue={apiKey}
+              {...textHandlers("apiKey", setApiKey)} placeholder="sk-..."
               className="min-h-11 w-full rounded-xl border border-border/60 bg-background px-3 py-2 pr-12 font-mono text-base sm:text-sm"
             />
             <button type="button" onClick={() => setShowKey((v) => !v)}
@@ -310,9 +394,10 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <Field label="测试模型" hint="测试时优先使用这个模型；留空则自动选择第一个文本模型">
             <input
+              ref={testModelRef}
               type="text"
-              value={testModel}
-              onChange={(e) => setTestModel(e.target.value)}
+              defaultValue={testModel}
+              {...textHandlers("testModel", setTestModel)}
               placeholder="例如：claude-sonnet-4-6"
               className="min-h-11 w-full rounded-xl border border-border/60 bg-background px-3 py-2 font-mono text-base sm:text-sm"
             />
@@ -320,7 +405,10 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
           <Field label="从已发现模型选择" hint="测试成功后可在这里切换要保存的默认模型">
             <StudioSelect<string>
               value={testModel || detectedModel || models[0]?.id || ""}
-              onValueChange={(value) => setTestModel(value)}
+              onValueChange={(value) => {
+                touchField("testModel");
+                setTestModel(value);
+              }}
               options={(models.length > 0 ? models : detectedModel ? [{ id: detectedModel, name: detectedModel }] : []).map((model) => ({
                 value: model.id,
                 label: model.name ?? model.id,
@@ -374,7 +462,10 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
           <Field label="协议类型" hint="Chat 兼容面更广；Responses 适用于支持新版响应协议的端点">
             <StudioSelect<"chat" | "responses">
               value={apiFormat}
-              onValueChange={setApiFormat}
+              onValueChange={(value) => {
+                touchField("apiFormat");
+                setApiFormat(value);
+              }}
               options={[
                 { value: "chat", label: "Chat / Completions" },
                 { value: "responses", label: "Responses" },
@@ -388,7 +479,10 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
               <input
                 type="checkbox"
                 checked={stream}
-                onChange={(e) => setStream(e.target.checked)}
+                onChange={(e) => {
+                  touchField("stream");
+                  setStream(e.target.checked);
+                }}
               />
               <span>{stream ? "开启" : "关闭"}</span>
             </label>
@@ -424,8 +518,14 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
             <Field label="temperature" hint="控制随机性：0 更稳定，数值越高变化越大">
               <div className="flex items-center gap-3">
                 <input type="range" min="0" max="2" step="0.05" value={temperature}
-                  onChange={(e) => setTemperature(e.target.value)} className="flex-1 accent-primary h-1" />
-                <input type="number" value={temperature} onChange={(e) => setTemperature(e.target.value)}
+                  onChange={(e) => {
+                    touchField("temperature");
+                    setTemperature(e.target.value);
+                  }} className="flex-1 accent-primary h-1" />
+                <input type="number" value={temperature} onChange={(e) => {
+                  touchField("temperature");
+                  setTemperature(e.target.value);
+                }}
                   min="0" max="2" step="0.05" className="min-h-10 w-20 rounded-lg border border-border/60 bg-background px-2 py-1 text-right font-mono text-sm" />
               </div>
             </Field>

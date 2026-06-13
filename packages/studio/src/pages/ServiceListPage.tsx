@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
-import { Check, Eye, EyeOff, Loader2, Plus, Search, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Check, Eye, EyeOff, Image, Loader2, Plus, Search, WandSparkles, X } from "lucide-react";
 import { GROUP_DESCRIPTIONS, GROUP_LABELS, GROUP_ORDER, GROUP_SHORT_LABELS } from "../constants/service-groups";
-import { fetchJson } from "../hooks/use-api";
+import { buildApiUrl, fetchJson } from "../hooks/use-api";
 import { useServiceStore } from "../store/service";
 import type { EndpointGroup, ServiceInfo } from "../store/service";
 import { ServiceQuickLinks, getServiceQuickLinks } from "../components/ServiceQuickLinks";
 import { ServiceConfigSourceCard } from "../components/ServiceConfigSourceCard";
 import { StudioSelect } from "../components/StudioSelect";
+import { mobileTextInputHandlers } from "../lib/mobile-input";
 
 interface Nav {
   toDashboard: () => void;
@@ -79,22 +80,52 @@ function CoverConfigCard() {
   const [showKey, setShowKey] = useState(false);
   const [status, setStatus] = useState<"idle" | "loading" | "saving" | "saved" | "error">("loading");
   const [message, setMessage] = useState("");
+  const [manualTitle, setManualTitle] = useState("");
+  const [manualPrompt, setManualPrompt] = useState("");
+  const [manualGenerating, setManualGenerating] = useState(false);
+  const [manualCoverPath, setManualCoverPath] = useState<string | null>(null);
+  const formRevisionRef = useRef(0);
+  const apiKeyRevisionRef = useRef(0);
+  const customNameRef = useRef<HTMLInputElement>(null);
+  const customBaseUrlRef = useRef<HTMLInputElement>(null);
+  const customModelRef = useRef<HTMLInputElement>(null);
+  const apiKeyRef = useRef<HTMLInputElement>(null);
+  const setCoverTextField = (
+    ref: React.RefObject<HTMLInputElement | null>,
+    setter: (value: string) => void,
+    value: string,
+  ) => {
+    setter(value);
+    if (ref.current && ref.current.value !== value) ref.current.value = value;
+  };
+  const coverTextHandlers = (
+    revisionRef: React.MutableRefObject<number>,
+    setter: (value: string) => void,
+  ) => mobileTextInputHandlers((value) => {
+    revisionRef.current += 1;
+    setter(value);
+  });
 
   const selected = providers.find((provider) => provider.service === service);
 
   useEffect(() => {
     let cancelled = false;
+    const startingRevision = formRevisionRef.current;
     void fetchJson<CoverConfigPayload>("/cover/config")
       .then((payload) => {
         if (cancelled) return;
         setProviders(payload.providers);
+        if (formRevisionRef.current !== startingRevision) {
+          setStatus("idle");
+          return;
+        }
         const nextService = payload.service ?? payload.providers[0]?.service ?? "kkaiapi";
         const provider = payload.providers.find((item) => item.service === nextService) ?? payload.providers[0];
         setService(nextService);
-        setModel(payload.model ?? provider?.defaultModel ?? "gpt-image-2");
+        setCoverTextField(customModelRef, setModel, payload.model ?? provider?.defaultModel ?? "gpt-image-2");
         if (nextService.startsWith("custom:") && provider) {
-          setCustomName(provider.label);
-          setCustomBaseUrl(provider.baseUrl);
+          setCoverTextField(customNameRef, setCustomName, provider.label);
+          setCoverTextField(customBaseUrlRef, setCustomBaseUrl, provider.baseUrl);
           setCustomApi(provider.api);
         }
         setStatus("idle");
@@ -110,18 +141,24 @@ function CoverConfigCard() {
   useEffect(() => {
     if (!service) return;
     let cancelled = false;
+    const startingRevision = apiKeyRevisionRef.current;
     void fetchJson<{ apiKey?: string }>(`/cover/secret/${encodeURIComponent(service)}`)
       .then((payload) => {
-        if (cancelled) return;
-        setApiKey(payload.apiKey ?? "");
+        if (cancelled || apiKeyRevisionRef.current !== startingRevision) return;
+        setCoverTextField(apiKeyRef, setApiKey, payload.apiKey ?? "");
       })
       .catch(() => {
-        if (!cancelled) setApiKey("");
+        if (!cancelled && apiKeyRevisionRef.current === startingRevision) {
+          setCoverTextField(apiKeyRef, setApiKey, "");
+        }
       });
     return () => { cancelled = true; };
   }, [service]);
 
   const handleServiceChange = (nextService: string) => {
+    formRevisionRef.current += 1;
+    apiKeyRevisionRef.current += 1;
+    setCoverTextField(apiKeyRef, setApiKey, "");
     if (nextService === "__custom__") {
       const customService = `custom:${customName.trim() || "自定义封面"}`;
       setService(customService);
@@ -137,17 +174,21 @@ function CoverConfigCard() {
     setMessage("");
   };
 
-  const handleSave = async () => {
+  const handleSave = async (): Promise<boolean> => {
+    const liveCustomName = customNameRef.current?.value ?? customName;
+    const liveCustomBaseUrl = customBaseUrlRef.current?.value ?? customBaseUrl;
+    const liveModel = customModelRef.current?.value ?? model;
+    const liveApiKey = apiKeyRef.current?.value ?? apiKey;
     const isCustom = service.startsWith("custom:");
     const provider = selected;
-    if (!provider && !isCustom) return;
+    if (!provider && !isCustom) return false;
     const effectiveService = isCustom
-      ? `custom:${customName.trim() || "自定义封面"}`
+      ? `custom:${liveCustomName.trim() || "自定义封面"}`
       : provider!.service;
-    if (isCustom && (!customBaseUrl.trim() || !model.trim())) {
+    if (isCustom && (!liveCustomBaseUrl.trim() || !liveModel.trim())) {
       setStatus("error");
       setMessage("自定义封面服务需要填写 Base URL 和模型");
-      return;
+      return false;
     }
     setStatus("saving");
     setMessage("");
@@ -155,17 +196,17 @@ function CoverConfigCard() {
       await fetchJson(`/cover/secret/${encodeURIComponent(effectiveService)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: apiKey.trim() }),
+        body: JSON.stringify({ apiKey: liveApiKey.trim() }),
       });
       await fetchJson("/cover/config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           service: effectiveService,
-          model: model.trim(),
+          model: liveModel.trim(),
           ...(isCustom ? {
-            label: customName.trim() || "自定义封面",
-            baseUrl: customBaseUrl.trim(),
+            label: liveCustomName.trim() || "自定义封面",
+            baseUrl: liveCustomBaseUrl.trim(),
             api: customApi,
           } : {}),
         }),
@@ -173,11 +214,44 @@ function CoverConfigCard() {
       setService(effectiveService);
       setStatus("saved");
       setMessage("封面配置已保存");
+      return true;
     } catch (error) {
       setStatus("error");
       setMessage(error instanceof Error ? error.message : "保存封面配置失败");
+      return false;
     }
   };
+
+  const handleManualGenerate = async () => {
+    if (!manualTitle.trim() || manualGenerating) return;
+    const saved = await handleSave();
+    if (!saved) return;
+    setManualGenerating(true);
+    setManualCoverPath(null);
+    setMessage("正在调用生图模型...");
+    try {
+      const result = await fetchJson<{ coverImagePath: string }>("/cover/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: manualTitle.trim(),
+          coverPrompt: manualPrompt.trim(),
+        }),
+      });
+      setManualCoverPath(result.coverImagePath);
+      setStatus("saved");
+      setMessage("封面已生成");
+    } catch (error) {
+      setStatus("error");
+      setMessage(error instanceof Error ? error.message : "封面生成失败");
+    } finally {
+      setManualGenerating(false);
+    }
+  };
+
+  const manualCoverUrl = manualCoverPath
+    ? buildApiUrl(`/project/files/${manualCoverPath.split("/").map(encodeURIComponent).join("/")}`)
+    : null;
 
   if (providers.length === 0 && status !== "error") return null;
 
@@ -185,10 +259,20 @@ function CoverConfigCard() {
     <section className="rounded-xl border border-border/50 bg-card/50 p-4 space-y-3">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-medium text-foreground">封面生成</h2>
+          <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <Image size={15} className="text-primary" />
+            图片生成
+          </h2>
           <p className="mt-1 text-xs text-muted-foreground/70">
-            只配置封面通道和模型；封面尺寸由短篇封面提示词和内部默认处理。
+            此处配置全局生图通道，供短篇封面和互动世界配图共同使用。
           </p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {["短篇封面", "互动场景", "角色形象", "物品与线索"].map((usage) => (
+              <span key={usage} className="rounded-md border border-border/50 bg-secondary/40 px-2 py-1 text-[11px] text-muted-foreground">
+                {usage}
+              </span>
+            ))}
+          </div>
         </div>
         {selected?.connected && (
           <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-500">
@@ -214,14 +298,17 @@ function CoverConfigCard() {
           />
         </label>
         <label className="space-y-1.5">
-          <span className="block text-xs font-medium text-muted-foreground/70">封面模型</span>
+          <span className="block text-xs font-medium text-muted-foreground/70">生图模型</span>
           <StudioSelect
             value={model}
-            onValueChange={setModel}
+            onValueChange={(value) => {
+              formRevisionRef.current += 1;
+              setModel(value);
+            }}
             options={(selected?.models ?? (model ? [model] : [])).map((item) => ({ value: item, label: item }))}
             triggerClassName="min-h-11 rounded-xl bg-background/70 font-mono"
             contentClassName="font-mono"
-            placeholder={service.startsWith("custom:") ? "请在下方填写模型" : "选择封面模型"}
+            placeholder={service.startsWith("custom:") ? "请在下方填写模型" : "选择生图模型"}
           />
         </label>
       </div>
@@ -231,8 +318,9 @@ function CoverConfigCard() {
           <label className="space-y-1.5">
             <span className="block text-xs font-medium text-muted-foreground/70">自定义名称</span>
             <input
-              value={customName}
-              onChange={(event) => setCustomName(event.target.value)}
+              ref={customNameRef}
+              defaultValue={customName}
+              {...coverTextHandlers(formRevisionRef, setCustomName)}
               className="min-h-11 w-full rounded-xl border border-border/60 bg-background px-3 text-sm"
             />
           </label>
@@ -240,7 +328,10 @@ function CoverConfigCard() {
             <span className="block text-xs font-medium text-muted-foreground/70">协议类型</span>
             <StudioSelect
               value={customApi}
-              onValueChange={setCustomApi}
+              onValueChange={(value) => {
+                formRevisionRef.current += 1;
+                setCustomApi(value);
+              }}
               options={[
                 { value: "images", label: "Images / Generations" },
                 { value: "responses", label: "Responses" },
@@ -252,8 +343,9 @@ function CoverConfigCard() {
           <label className="space-y-1.5 md:col-span-2">
             <span className="block text-xs font-medium text-muted-foreground/70">Base URL</span>
             <input
-              value={customBaseUrl}
-              onChange={(event) => setCustomBaseUrl(event.target.value)}
+              ref={customBaseUrlRef}
+              defaultValue={customBaseUrl}
+              {...coverTextHandlers(formRevisionRef, setCustomBaseUrl)}
               placeholder="https://api.example.com/v1"
               className="min-h-11 w-full rounded-xl border border-border/60 bg-background px-3 font-mono text-sm"
             />
@@ -261,8 +353,9 @@ function CoverConfigCard() {
           <label className="space-y-1.5 md:col-span-2">
             <span className="block text-xs font-medium text-muted-foreground/70">模型名称</span>
             <input
-              value={model}
-              onChange={(event) => setModel(event.target.value)}
+              ref={customModelRef}
+              defaultValue={model}
+              {...coverTextHandlers(formRevisionRef, setModel)}
               placeholder="例如：gpt-image-2"
               className="min-h-11 w-full rounded-xl border border-border/60 bg-background px-3 font-mono text-sm"
             />
@@ -274,9 +367,10 @@ function CoverConfigCard() {
         <span className="block text-xs font-medium text-muted-foreground/70">API Key</span>
         <div className="relative">
           <input
+            ref={apiKeyRef}
             type={showKey ? "text" : "password"}
-            value={apiKey}
-            onChange={(event) => setApiKey(event.target.value)}
+            defaultValue={apiKey}
+            {...coverTextHandlers(apiKeyRevisionRef, setApiKey)}
             placeholder="sk-..."
             className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 pr-10 text-sm font-mono"
           />
@@ -290,14 +384,56 @@ function CoverConfigCard() {
         </div>
       </label>
 
+      <div className="space-y-3 border-t border-border/40 pt-3">
+        <div>
+          <div className="flex items-center gap-2 text-xs font-medium text-foreground">
+            <WandSparkles size={14} className="text-primary" />
+            手动生成封面
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground/60">
+            保存当前模型配置后立即调用，不经过聊天模型。
+          </p>
+        </div>
+        <input
+          value={manualTitle}
+          onChange={(event) => setManualTitle(event.target.value)}
+          placeholder="封面标题"
+          className="min-h-11 w-full rounded-lg border border-border/60 bg-background px-3 text-sm"
+        />
+        <textarea
+          value={manualPrompt}
+          onChange={(event) => setManualPrompt(event.target.value)}
+          placeholder="视觉要求，例如：雨夜霓虹街道，悬疑感，人物背影，标题留白"
+          rows={3}
+          className="w-full resize-none rounded-lg border border-border/60 bg-background px-3 py-2 text-sm leading-6"
+        />
+        <button
+          type="button"
+          onClick={() => void handleManualGenerate()}
+          disabled={manualGenerating || !manualTitle.trim()}
+          className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {manualGenerating ? <Loader2 size={14} className="animate-spin" /> : <WandSparkles size={14} />}
+          {manualGenerating ? "生成中" : "调用生图模型"}
+        </button>
+        {manualCoverUrl ? (
+          <div className="overflow-hidden rounded-lg border border-border/50 bg-background">
+            <img src={manualCoverUrl} alt={manualTitle || "生成的封面"} className="max-h-96 w-full object-contain" />
+            <div className="border-t border-border/40 px-3 py-2 font-mono text-[11px] text-muted-foreground break-all">
+              {manualCoverPath}
+            </div>
+          </div>
+        ) : null}
+      </div>
+
       <div className="flex flex-wrap items-center gap-3">
         <button
-          onClick={handleSave}
+          onClick={() => void handleSave()}
           disabled={status === "saving" || (!selected && !service.startsWith("custom:"))}
           className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-xs text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
         >
           {status === "saving" && <Loader2 size={12} className="animate-spin" />}
-          保存封面配置
+          保存生图配置
         </button>
         {(selected?.baseUrl || customBaseUrl) && (
           <span className="text-xs text-muted-foreground/60">

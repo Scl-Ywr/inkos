@@ -29,6 +29,21 @@ export const AGENT_MODEL_ROUTES = [
     hint: "生成正文与章节内容，建议使用文风最稳定的模型。",
   },
   {
+    agent: "planner",
+    label: "规划",
+    hint: "规划章节目标、冲突、节奏与必须避免的内容。",
+  },
+  {
+    agent: "composer",
+    label: "成文",
+    hint: "根据章节规划生成正文，是自动写作的主要成文模型。",
+  },
+  {
+    agent: "state-repair",
+    label: "状态恢复",
+    hint: "重建降级章节的状态与伏笔文件；未单独配置时沿用写作模型。",
+  },
+  {
     agent: "auditor",
     label: "审计",
     hint: "检查逻辑、伏笔、状态文件与前后矛盾。",

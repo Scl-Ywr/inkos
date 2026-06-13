@@ -187,7 +187,7 @@ export function useApi<T>(path: string) {
       setData(null);
       setError(null);
       setLoading(false);
-      return;
+      return null;
     }
 
     setLoading(true);
@@ -196,8 +196,10 @@ export function useApi<T>(path: string) {
       const json = await fetchJson<T>(url);
       apiDataCache.set(url, json);
       setData(json);
+      return json;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      return null;
     } finally {
       setLoading(false);
     }

@@ -167,43 +167,16 @@ export async function saveServiceConfig(args: {
       && (!args.testModel?.trim() || verified.selectedModel === args.testModel.trim()),
   );
 
-  let probe: ServiceProbeResponse;
-  if (canReuseVerifiedProbe && verified) {
-    probe = {
-      ok: true,
-      models: verified.models,
-      selectedModel: verified.selectedModel,
-      detected: verified.detected,
-      official: verified.official,
-    };
-  } else {
-    try {
-      probe = await probeServiceForDetail(args.effectiveServiceId, {
-        apiKey: trimmedKey,
+  const detectedModel = args.testModel?.trim()
+    || (canReuseVerifiedProbe ? verified?.selectedModel : "")
+    || args.detectedModel;
+  const detectedConfig = canReuseVerifiedProbe
+    ? verified?.detected ?? null
+    : {
         apiFormat: args.apiFormat,
         stream: args.stream,
         ...(args.isCustom ? { baseUrl: trimmedBaseUrl } : {}),
-        ...(args.testModel?.trim() ? { model: args.testModel.trim() } : {}),
-      }, { fetchJsonImpl });
-    } catch (error) {
-      return {
-        status: { state: "error", message: error instanceof Error ? error.message : "连接失败" },
-        detectedModel: "",
-        detectedConfig: null,
       };
-    }
-  }
-
-  if (!probe.ok) {
-    return {
-      status: { state: "error", message: probe.error ?? "连接失败" },
-      detectedModel: "",
-      detectedConfig: null,
-    };
-  }
-
-  const detectedModel = args.testModel?.trim() || probe.selectedModel || args.detectedModel;
-  const detectedConfig = probe.detected ?? null;
   const savedApiFormat = detectedConfig?.apiFormat ?? args.apiFormat;
   const savedStream = typeof detectedConfig?.stream === "boolean" ? detectedConfig.stream : args.stream;
   const savedBaseUrl = args.isCustom ? (detectedConfig?.baseUrl ?? trimmedBaseUrl) : undefined;
@@ -236,7 +209,9 @@ export async function saveServiceConfig(args: {
   });
 
   return {
-    status: { state: "connected", models: probe.models ?? [] },
+    status: canReuseVerifiedProbe && verified
+      ? { state: "connected", models: verified.models }
+      : { state: "saved" },
     detectedModel,
     detectedConfig,
   };

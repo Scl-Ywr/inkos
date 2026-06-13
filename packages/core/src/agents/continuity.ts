@@ -692,10 +692,15 @@ ${chapterContent}`;
 
     // Strategy 4: Try to extract individual fields via regex (last resort fallback)
     const passedMatch = content.match(/"passed"\s*:\s*(true|false)/);
+    const scoreMatch = content.match(/"(?:overall_score|overallScore)"\s*:\s*(\d+(?:\.\d+)?)/);
     const issuesMatch = content.match(/"issues"\s*:\s*\[([\s\S]*?)\]/);
     const summaryMatch = content.match(/"summary"\s*:\s*"([^"]*)"/);
-    if (passedMatch) {
+    if (passedMatch && scoreMatch) {
       const issues: AuditIssue[] = [];
+      const rawScore = Number(scoreMatch[1]);
+      const overallScore = typeof rawScore === "number" && Number.isFinite(rawScore)
+        ? Math.round(Math.max(0, Math.min(100, rawScore)))
+        : undefined;
       if (issuesMatch) {
         // Try to parse individual issue objects
         const issuePattern = /\{[^{}]*"severity"\s*:\s*"[^"]*"[^{}]*\}/g;
@@ -719,6 +724,7 @@ ${chapterContent}`;
         passed: passedMatch[1] === "true",
         issues,
         summary: summaryMatch?.[1] ?? "",
+        overallScore,
       };
     }
 

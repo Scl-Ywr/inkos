@@ -142,7 +142,8 @@ describe("writer context reader", () => {
     expect(metrics.entries).toBe(1);
     expect(metrics.fields.currentState?.tokensBefore).toBeGreaterThan(metrics.fields.currentState?.tokensAfter ?? 0);
     expect(metrics.fields.hooks?.tokensBefore).toBeGreaterThan(metrics.fields.hooks?.tokensAfter ?? 0);
-    expect(cache.summary()).toContain("currentState:");
+    expect(cache.summary()).toContain("context compression: applied");
+    expect(cache.summary()).toContain(`saved ${metrics.tokensBeforeTrim - metrics.tokensAfterTrim}`);
   });
 
   it("keeps JSON parseable and Markdown table rows structurally complete after trimming", async () => {

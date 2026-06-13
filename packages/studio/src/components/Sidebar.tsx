@@ -30,6 +30,7 @@ import {
   Boxes,
   Wand2,
   FileInput,
+  Images,
   TrendingUp,
   Stethoscope,
   FolderOpen,
@@ -74,6 +75,7 @@ interface Nav {
   toGenres: () => void;
   toStyle: () => void;
   toImport: () => void;
+  toImages: () => void;
   toRadar: () => void;
   toDoctor: () => void;
 }
@@ -464,6 +466,12 @@ export function Sidebar({ nav, activePage, sse, t, onClose, mobileOpen }: {
               icon={<Gamepad2 size={16} />}
               active={false}
               onClick={() => launchPlay("open")}
+            />
+            <SidebarItem
+              label="图片库"
+              icon={<Images size={16} />}
+              active={activePage === "images"}
+              onClick={nav.toImages}
             />
             <div>
               <div

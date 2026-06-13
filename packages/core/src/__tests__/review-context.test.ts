@@ -145,7 +145,8 @@ describe("review context reader", () => {
     expect(metrics.trimmedReads).toBe(1);
     expect(metrics.charsBeforeTrim).toBeGreaterThan(metrics.charsAfterTrim);
     expect(metrics.charsAfterTrim).toBe(returnedChars);
-    expect(cache.summary()).toContain(`charsAfterTrim=${returnedChars}`);
+    expect(cache.summary()).toContain("context compression: applied");
+    expect(cache.summary()).toContain(`-> ${metrics.tokensAfterTrim} tokens`);
   });
 
   it("keeps differently budgeted review snapshots separate in the shared cache", async () => {

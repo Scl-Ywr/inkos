@@ -69,20 +69,12 @@ describe("saveServiceConfig", () => {
     });
   });
 
-  it("validates the upstream service before persisting secrets/config", async () => {
+  it("persists entered service data without requiring a connection test", async () => {
     const calls: string[] = [];
     const bodies: unknown[] = [];
     const fetchJsonImpl = vi.fn(async (path: string, init?: { body?: string }) => {
       calls.push(path);
       if (init?.body) bodies.push(JSON.parse(init.body));
-      if (path === "/services/openai/test") {
-        return {
-          ok: true,
-          models: [{ id: "gpt-5.5" }],
-          selectedModel: "gpt-5.5",
-          detected: { apiFormat: "chat", stream: true },
-        };
-      }
       if (path === "/services/openai/secret") return { ok: true };
       if (path === "/services/config") return { ok: true };
       throw new Error(`unexpected path: ${path}`);
@@ -99,16 +91,15 @@ describe("saveServiceConfig", () => {
       stream: true,
       temperature: "0.7",
       detectedModel: "",
+      testModel: "gpt-5.5",
       fetchJsonImpl: fetchJsonImpl as never,
     });
 
     expect(calls).toEqual([
-      "/services/openai/test",
       "/services/openai/secret",
       "/services/config",
     ]);
     expect(bodies).toEqual([
-      { apiKey: "sk-live", apiFormat: "chat", stream: true },
       { apiKey: "sk-live" },
       {
         service: "openai",
@@ -121,7 +112,7 @@ describe("saveServiceConfig", () => {
     expect(result).toEqual({
       detectedModel: "gpt-5.5",
       detectedConfig: { apiFormat: "chat", stream: true },
-      status: { state: "connected", models: [{ id: "gpt-5.5" }] },
+      status: { state: "saved" },
     });
   });
 
@@ -180,18 +171,14 @@ describe("saveServiceConfig", () => {
     });
   });
 
-  it("does not persist secrets/config when validation fails", async () => {
+  it("keeps user-entered data saveable even when it has not been validated", async () => {
     const calls: string[] = [];
+    const bodies: unknown[] = [];
     const fetchJsonImpl = vi.fn(async (path: string, init?: { body?: string }) => {
       calls.push(path);
-      if (path === "/services/openai/test") {
-        expect(init?.body ? JSON.parse(init.body) : null).toEqual({
-          apiKey: "sk-bad",
-          apiFormat: "chat",
-          stream: true,
-        });
-        return { ok: false, error: "invalid key" };
-      }
+      if (init?.body) bodies.push(JSON.parse(init.body));
+      if (path === "/services/openai/secret") return { ok: true };
+      if (path === "/services/config") return { ok: true };
       throw new Error(`unexpected path: ${path}`);
     });
 
@@ -206,14 +193,19 @@ describe("saveServiceConfig", () => {
       stream: true,
       temperature: "0.7",
       detectedModel: "",
+      testModel: "manual-model",
       fetchJsonImpl: fetchJsonImpl as never,
     })).resolves.toEqual({
-      detectedModel: "",
-      detectedConfig: null,
-      status: { state: "error", message: "invalid key" },
+      detectedModel: "manual-model",
+      detectedConfig: { apiFormat: "chat", stream: true },
+      status: { state: "saved" },
     });
 
-    expect(calls).toEqual(["/services/openai/test"]);
+    expect(calls).toEqual(["/services/openai/secret", "/services/config"]);
+    expect(bodies[1]).toMatchObject({
+      service: "openai",
+      defaultModel: "manual-model",
+    });
   });
 
   it("allows local custom services to validate and save without an API key", async () => {
@@ -250,16 +242,13 @@ describe("saveServiceConfig", () => {
     });
 
     expect(calls).toEqual([
-      "/services/custom%3ALocal/test",
       "/services/custom%3ALocal/secret",
       "/services/config",
     ]);
     expect(bodies).toEqual([
-      { apiKey: "", apiFormat: "chat", stream: false, baseUrl: "http://127.0.0.1:8001/v1" },
       { apiKey: "" },
       {
         service: "custom:Local",
-        defaultModel: "qwen3.6:35b-a3b",
         services: [
           {
             service: "custom",
@@ -272,7 +261,7 @@ describe("saveServiceConfig", () => {
         ],
       },
     ]);
-    expect(result.status).toEqual({ state: "connected", models: [{ id: "qwen3.6:35b-a3b" }] });
+    expect(result.status).toEqual({ state: "saved" });
   });
 });
 

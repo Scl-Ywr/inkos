@@ -30,9 +30,7 @@ export abstract class BaseAgent {
   ): Promise<LLMResponse> {
     const service = this.ctx.client.service ?? this.ctx.client.provider;
     const baseUrl = this.ctx.client._piModel?.baseUrl ?? "(unknown)";
-    this.log?.info(
-      `LLM request agent=${this.name} service=${service} model=${this.ctx.model} baseUrl=${baseUrl}`,
-    );
+    this.log?.info(`LLM ${this.name}: ${service}/${this.ctx.model}`);
     try {
       return await chatCompletion(this.ctx.client, this.ctx.model, messages, {
         ...options,

@@ -496,7 +496,7 @@ async function generateCoverImageArtifact(input: {
     coverModel: input.coverModel,
     coverApiKeyEnv: input.coverApiKeyEnv,
   });
-  const size = input.coverSize || process.env.INKOS_COVER_SIZE || "1024x1360";
+  const size = input.coverSize || process.env.INKOS_COVER_SIZE || "1024x1536";
   const { buffer, extension } = await generateImageFromPrompt(request, buildCoverImagePrompt(input.salesPackage, input.promptMode ?? "short"), size);
   const coverPath = join(input.outputDir, extension === "jpg" ? "cover.jpg" : "cover.png");
   await writeBinary(input.root, coverPath, buffer);
@@ -522,8 +522,8 @@ export async function generateImageFromPrompt(
     return generateImagesCover(request, prompt, size);
   }
 
-  const endpoint = request.endpoint ?? `${request.baseUrl.replace(/\/+$/u, "")}/responses`;
-  const response = await fetch(endpoint, {
+  const endpoint = resolveImageApiEndpoint(request.baseUrl, request.endpoint, "responses");
+  const sendRequest = (requestSize: string) => fetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -532,10 +532,15 @@ export async function generateImageFromPrompt(
     body: JSON.stringify({
       model: request.model,
       input: prompt,
-      tools: [{ type: "image_generation", size }],
+      tools: [{ type: "image_generation", size: requestSize }],
     }),
   });
-  const text = await response.text();
+  let response = await sendRequest(size);
+  let text = await response.text();
+  if (!response.ok && shouldRetryImageSize(response.status, size)) {
+    response = await sendRequest("1024x1024");
+    text = await response.text();
+  }
   if (!response.ok) {
     throw new Error(`image generation failed: HTTP ${response.status} ${text.slice(0, 500)}`);
   }
@@ -672,8 +677,8 @@ async function generateImagesCover(
   prompt: string,
   size: string,
 ): Promise<{ readonly buffer: Buffer; readonly extension: "png" | "jpg" }> {
-  const endpoint = request.endpoint ?? `${request.baseUrl.replace(/\/+$/u, "")}/images/generations`;
-  const response = await fetch(endpoint, {
+  const endpoint = resolveImageApiEndpoint(request.baseUrl, request.endpoint, "images");
+  const sendRequest = (requestSize: string) => fetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -683,10 +688,15 @@ async function generateImagesCover(
       model: request.model,
       prompt,
       n: 1,
-      size,
+      size: requestSize,
     }),
   });
-  const text = await response.text();
+  let response = await sendRequest(size);
+  let text = await response.text();
+  if (!response.ok && shouldRetryImageSize(response.status, size)) {
+    response = await sendRequest("1024x1024");
+    text = await response.text();
+  }
   if (!response.ok) {
     throw new Error(`cover generation failed: HTTP ${response.status} ${text.slice(0, 500)}`);
   }
@@ -709,6 +719,21 @@ async function generateImagesCover(
     return downloadGeneratedCoverImage(image.url, request.apiKey);
   }
   throw new Error("cover generation response did not include image URL or base64 data.");
+}
+
+function resolveImageApiEndpoint(
+  baseUrl: string,
+  endpoint: string | undefined,
+  api: "images" | "responses",
+): string {
+  if (endpoint) return endpoint;
+  const normalized = baseUrl.replace(/\/+$/u, "");
+  const suffix = api === "images" ? "/images/generations" : "/responses";
+  return normalized.endsWith(suffix) ? normalized : `${normalized}${suffix}`;
+}
+
+function shouldRetryImageSize(status: number, size: string): boolean {
+  return size !== "1024x1024" && (status === 400 || status === 422);
 }
 
 export function extractImagesGenerationImage(payload: unknown): (

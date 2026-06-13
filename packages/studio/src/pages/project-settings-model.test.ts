@@ -49,7 +49,17 @@ describe("project settings form model", () => {
       unknown: "ignored-model",
     });
 
-    expect(rows.map((row) => row.agent)).toEqual(["architect", "writer", "auditor", "reviser", "exporter", "play"]);
+    expect(rows.map((row) => row.agent)).toEqual([
+      "architect",
+      "writer",
+      "planner",
+      "composer",
+      "state-repair",
+      "auditor",
+      "reviser",
+      "exporter",
+      "play",
+    ]);
     expect(rows.find((row) => row.agent === "writer")?.model).toBe("agnes-2.0-flash");
     expect(rows.find((row) => row.agent === "auditor")?.rest).toEqual({ baseUrl: "https://api.example.com/v1" });
 

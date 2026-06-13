@@ -103,6 +103,7 @@ export {
   buildPlaySceneImagePrompt,
   readPlayImageManifest,
   setPlayImageEntry,
+  deletePlayImageEntry,
   playImageFileName,
   generatePlayImage,
   readPlayImageSettings,

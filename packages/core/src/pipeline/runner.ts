@@ -85,6 +85,7 @@ const SEQUENCE_LEVEL_CATEGORIES = new Set([
 ]);
 
 const INTERNAL_AGENT_ROUTE_FALLBACKS: Readonly<Record<string, readonly string[]>> = {
+  "state-repair": ["writer"],
   "state-validator": ["auditor"],
   "chapter-analyzer": ["writer"],
   "length-normalizer": ["reviser", "writer"],
@@ -2040,7 +2041,7 @@ export class PipelineRunner {
       chapterNumber: targetChapter,
     });
 
-    const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
+    const writer = new WriterAgent(this.agentCtxFor("state-repair", bookId));
     let repairedOutput: WriteChapterOutput;
     try {
       repairedOutput = await writer.settleChapterState({
@@ -2055,25 +2056,45 @@ export class PipelineRunner {
       if (!isIncompleteSettlementOutputError(error)) {
         throw error;
       }
-      const issues = buildIncompleteSettlementIssues(targetChapter, pipelineLang);
       this.config.logger?.warn(
-        `State repair returned incomplete truth blocks for chapter ${targetChapter}: ${String(error)}`,
+        `State repair returned incomplete truth blocks for chapter ${targetChapter}; retrying with strict format feedback: ${String(error)}`,
       );
-      return {
-        chapterNumber: targetChapter,
-        title: targetMeta.title,
-        wordCount: targetMeta.wordCount,
-        auditResult: {
-          passed: false,
-          issues,
-          summary: issues[0]?.description ?? "state repair returned incomplete settlement output",
-        },
-        revised: false,
-        status: "state-degraded",
-        lengthWarnings: targetMeta.lengthWarnings,
-        lengthTelemetry: targetMeta.lengthTelemetry,
-        tokenUsage: targetMeta.tokenUsage,
-      };
+      try {
+        repairedOutput = await writer.settleChapterState({
+          book,
+          bookDir,
+          chapterNumber: targetChapter,
+          title: targetMeta.title,
+          content,
+          allowReapply: true,
+          validationFeedback: pipelineLang === "en"
+            ? "Your previous settlement output was incomplete. Return the complete required settlement format. UPDATED_STATE and UPDATED_HOOKS are mandatory and must both be non-empty. Do not rewrite the chapter body."
+            : "你上一次的状态结算输出不完整。请严格返回完整的结算格式，UPDATED_STATE 与 UPDATED_HOOKS 都是必填且不得为空。不要改写章节正文。",
+        });
+      } catch (retryError) {
+        if (!isIncompleteSettlementOutputError(retryError)) {
+          throw retryError;
+        }
+        const issues = buildIncompleteSettlementIssues(targetChapter, pipelineLang);
+        this.config.logger?.warn(
+          `State repair retry still returned incomplete truth blocks for chapter ${targetChapter}: ${String(retryError)}`,
+        );
+        return {
+          chapterNumber: targetChapter,
+          title: targetMeta.title,
+          wordCount: targetMeta.wordCount,
+          auditResult: {
+            passed: false,
+            issues,
+            summary: issues[0]?.description ?? "state repair returned incomplete settlement output",
+          },
+          revised: false,
+          status: "state-degraded",
+          lengthWarnings: targetMeta.lengthWarnings,
+          lengthTelemetry: targetMeta.lengthTelemetry,
+          tokenUsage: targetMeta.tokenUsage,
+        };
+      }
     }
     const validator = new StateValidatorAgent(this.agentCtxFor("state-validator", bookId));
     let validation = await validator.validate(
@@ -3476,6 +3497,8 @@ ${matrix}`,
         passed: hasBlockedWords ? false : llmAudit.passed,
         issues,
         summary: llmAudit.summary,
+        parseFailed: llmAudit.parseFailed,
+        overallScore: llmAudit.overallScore,
         tokenUsage: llmAudit.tokenUsage,
       },
       aiTellCount: aiTells.issues.length,

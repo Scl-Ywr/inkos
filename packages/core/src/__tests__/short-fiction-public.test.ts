@@ -12,6 +12,7 @@ import { saveSecrets } from "../llm/secrets.js";
 import {
   extractGeminiImageBase64,
   extractImagesGenerationImage,
+  generateImageFromPrompt,
   generateShortFictionCover,
   resolveCoverGenerationRequest,
 } from "../pipeline/short-fiction-runner.js";
@@ -198,6 +199,40 @@ describe("public short-fiction chain", () => {
     expect(image).toEqual({ base64: "ZmFrZQ==", extension: "jpg" });
   });
 
+  it("uses a full images endpoint as-is and retries an unsupported portrait size", async () => {
+    const originalFetch = globalThis.fetch;
+    try {
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "unsupported size" } }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({
+          data: [{ b64_json: "ZmFrZQ==" }],
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }));
+      globalThis.fetch = fetchMock as never;
+
+      const result = await generateImageFromPrompt({
+        api: "images",
+        baseUrl: "https://images.example.test/v1/images/generations",
+        model: "gpt-image-2",
+        apiKey: "sk-cover",
+      }, "portrait cover", "1024x1536");
+
+      expect(result.buffer).toEqual(Buffer.from("fake"));
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls[0]?.[0]).toBe("https://images.example.test/v1/images/generations");
+      expect(fetchMock.mock.calls[1]?.[0]).toBe("https://images.example.test/v1/images/generations");
+      expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({ size: "1024x1536" });
+      expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({ size: "1024x1024" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("generates a standalone cover artifact without running the short fiction pipeline", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-cover-tool-"));
     const originalFetch = globalThis.fetch;
@@ -234,6 +269,7 @@ describe("public short-fiction chain", () => {
         }),
       );
       const body = String(fetchMock.mock.calls[0]?.[1]?.body ?? "");
+      expect(JSON.parse(body)).toMatchObject({ size: "1024x1536" });
       expect(body).toContain("按用户给出的标题、简介、卖点和视觉要求生成封面图。");
       expect(body).not.toContain("不添加文字");
       expect(body).not.toContain("水印");

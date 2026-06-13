@@ -18,6 +18,7 @@ import { LogViewer } from "./pages/LogViewer";
 import { GenreManager } from "./pages/GenreManager";
 import { StyleManager } from "./pages/StyleManager";
 import { ImportManager } from "./pages/ImportManager";
+import { ImageLibraryPage } from "./pages/ImageLibraryPage";
 import { RadarView } from "./pages/RadarView";
 import { DoctorView } from "./pages/DoctorView";
 import { LanguageSelector } from "./pages/LanguageSelector";
@@ -1024,6 +1025,7 @@ export function App() {
     toGenres: () => { setRoute({ page: "genres" }); closeSidebar(); },
     toStyle: () => { setRoute({ page: "style" }); closeSidebar(); },
     toImport: (tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation") => { setRoute({ page: "import", ...(tab ? { tab } : {}) }); closeSidebar(); },
+    toImages: () => { setRoute({ page: "images" }); closeSidebar(); },
     toRadar: () => { setRoute({ page: "radar" }); closeSidebar(); },
     toDoctor: () => { setRoute({ page: "doctor" }); closeSidebar(); },
   };
@@ -1275,6 +1277,11 @@ export function App() {
           {route.page === "import" && (
             <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
               <ImportManager nav={nav} theme={theme} t={t} initialTab={route.tab} />
+            </div>
+          )}
+          {route.page === "images" && (
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
+              <ImageLibraryPage />
             </div>
           )}
           {route.page === "radar" && (

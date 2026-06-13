@@ -730,7 +730,7 @@ const ShortFictionRunParams = Type.Object({
     description: "Optional image-capable Responses model. Default gpt-image-2.",
   })),
   coverSize: Type.Optional(Type.String({
-    description: "Optional image size, default 1024x1360.",
+    description: "Optional image size, default 1024x1536.",
   })),
   coverApiKeyEnv: Type.Optional(Type.String({
     description: "Optional env var containing the cover API key. Default INKOS_COVER_API_KEY.",
@@ -848,7 +848,7 @@ const GenerateCoverParams = Type.Object({
     description: "Optional image model. Usually omit and use Studio cover config.",
   })),
   coverSize: Type.Optional(Type.String({
-    description: "Optional image size, default 1024x1360.",
+    description: "Optional image size, default 1024x1536.",
   })),
   coverApiKeyEnv: Type.Optional(Type.String({
     description: "Optional env var containing the cover API key. Usually omit and use Studio cover config.",

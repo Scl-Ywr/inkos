@@ -141,6 +141,20 @@ export async function setPlayImageEntry(
   return next;
 }
 
+export async function deletePlayImageEntry(runDir: string, key: string): Promise<PlayImageManifest> {
+  const current = await readPlayImageManifest(runDir);
+  const entry = current[key];
+  if (!entry) return current;
+
+  const next = { ...current };
+  delete next[key];
+  if (entry.file && !entry.file.includes("/") && !entry.file.includes("\\") && !entry.file.includes("\0")) {
+    await rm(join(runDir, "images", entry.file), { force: true });
+  }
+  await writePlayImageManifest(runDir, next);
+  return next;
+}
+
 /**
  * Per-run auto-illustration toggles. Default all-off: nothing is generated
  * until the user opts in (and the cover API is configured).

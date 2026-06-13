@@ -51,7 +51,7 @@ import type { ContextCompressionCallback } from "../models/context-compression.j
 import { assertSafeBookId } from "../utils/book-id.js";
 import { PlayStore } from "../play/play-store.js";
 
-const INKOS_AGENT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const INKOS_AGENT_USER_AGENT = "InkOS Agent Client";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -229,10 +229,10 @@ function mergeAgentRequestHeaders(
   requestHeaders?: Record<string, string>,
 ): Record<string, string> {
   return {
-    "User-Agent": INKOS_AGENT_USER_AGENT,
     ...(modelHeaders ?? {}),
     ...(optionHeaders ?? {}),
     ...(requestHeaders ?? {}),
+    "User-Agent": INKOS_AGENT_USER_AGENT,
   };
 }
 

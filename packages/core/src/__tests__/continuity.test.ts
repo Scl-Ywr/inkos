@@ -79,6 +79,65 @@ describe("ContinuityAuditor", () => {
     });
   });
 
+  it("keeps overall_score when falling back to regex audit parsing", () => {
+    const auditor = new ContinuityAuditor({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: {
+          temperature: 0.7,
+          maxTokens: 4096,
+          thinkingBudget: 0,
+          extra: {},
+        },
+      },
+      model: "test-model",
+      projectRoot: "/tmp/inkos-auditor-score-fallback-test",
+    });
+
+    const result = (auditor as any).parseAuditResult([
+      "Here is the audit:",
+      '"passed": true,',
+      '"overall_score": 91,',
+      '"issues": [],',
+      '"summary": "passes"',
+    ].join("\n"), "en");
+
+    expect(result.passed).toBe(true);
+    expect(result.overallScore).toBe(91);
+    expect(result.parseFailed).toBeUndefined();
+  });
+
+  it("treats a partial fallback without an overall score as a parse failure", () => {
+    const auditor = new ContinuityAuditor({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: {
+          temperature: 0.7,
+          maxTokens: 4096,
+          thinkingBudget: 0,
+          extra: {},
+        },
+      },
+      model: "test-model",
+      projectRoot: "/tmp/inkos-auditor-partial-fallback-test",
+    });
+
+    const result = (auditor as any).parseAuditResult([
+      "Here is the audit:",
+      '"passed": true,',
+      '"issues": [],',
+      '"summary": "passes"',
+    ].join("\n"), "en");
+
+    expect(result.passed).toBe(false);
+    expect(result.overallScore).toBeUndefined();
+    expect(result.parseFailed).toBe(true);
+  });
+
   it("prefers book language override when building audit prompts", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-auditor-lang-test-"));
     const bookDir = join(root, "book");

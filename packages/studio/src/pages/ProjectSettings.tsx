@@ -297,7 +297,10 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
             onClick={() => runSave("overrides", async () => {
               const overrides = buildAgentModelOverrides(overrideRows);
               await putApi("/project/model-overrides", { overrides });
-              await refetchOverrides();
+              const refreshed = await refetchOverrides();
+              if (refreshed?.overrides) {
+                setOverrideRows(fixedAgentOverrideRows(refreshed.overrides));
+              }
             }, t("settings.saved"))}
             disabled={saving === "overrides"}
             className={`rounded-lg px-4 py-2 text-sm font-bold ${c.btnPrimary} disabled:opacity-40`}

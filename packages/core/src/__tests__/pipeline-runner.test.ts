@@ -16,6 +16,7 @@ import { ContinuityAuditor, type AuditIssue, type AuditResult } from "../agents/
 import { ReviserAgent, type ReviseOutput } from "../agents/reviser.js";
 import { ChapterAnalyzerAgent } from "../agents/chapter-analyzer.js";
 import { StateValidatorAgent } from "../agents/state-validator.js";
+import { IncompleteSettlementOutputError } from "../agents/settler-parser.js";
 import { FoundationReviewerAgent } from "../agents/foundation-reviewer.js";
 import { PolisherAgent } from "../agents/polisher.js";
 import type { BookConfig } from "../models/book.js";
@@ -412,6 +413,42 @@ describe("PipelineRunner", () => {
 
     expect(resolved.model).toBe("validator-model");
     expect(resolved.client).toBe(baseClient);
+  });
+
+  it("uses a dedicated state-repair route and falls back to writer", () => {
+    const baseClient = {
+      provider: "openai",
+      apiFormat: "chat",
+      stream: false,
+      defaults: {
+        temperature: 0.7,
+        maxTokens: 4096,
+        thinkingBudget: 0,
+      },
+    } as ConstructorParameters<typeof PipelineRunner>[0]["client"];
+    const fallbackRunner = new PipelineRunner({
+      client: baseClient,
+      model: "base-model",
+      projectRoot: process.cwd(),
+      modelOverrides: { writer: "writer-model" },
+    });
+    const explicitRunner = new PipelineRunner({
+      client: baseClient,
+      model: "base-model",
+      projectRoot: process.cwd(),
+      modelOverrides: {
+        writer: "writer-model",
+        "state-repair": "repair-model",
+      },
+    });
+    const resolve = (runner: PipelineRunner) => (
+      runner as unknown as {
+        resolveOverride: (agent: string) => { model: string; client: unknown };
+      }
+    ).resolveOverride("state-repair");
+
+    expect(resolve(fallbackRunner).model).toBe("writer-model");
+    expect(resolve(explicitRunner).model).toBe("repair-model");
   });
 
   it("does not reuse override clients when credential sources differ", () => {
@@ -3336,6 +3373,69 @@ describe("PipelineRunner", () => {
     expect(savedIndex[0]?.status).toBe("ready-for-review");
     expect(savedIndex[0]?.auditIssues).toEqual([]);
     expect(savedIndex[0]?.reviewNote).toBeUndefined();
+
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("retries state repair with strict format feedback after incomplete settlement output", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture({
+      inputGovernanceMode: "legacy",
+    });
+    const now = "2026-03-19T00:00:00.000Z";
+    const bookDir = state.bookDir(bookId);
+    const storyDir = join(bookDir, "story");
+    const content = "Healthy chapter body with a complete ending.";
+
+    await Promise.all([
+      writeFile(join(storyDir, "current_state.md"), "stable state", "utf-8"),
+      writeFile(join(storyDir, "pending_hooks.md"), "stable hooks", "utf-8"),
+      writeFile(join(storyDir, "particle_ledger.md"), "stable ledger", "utf-8"),
+      writeFile(join(bookDir, "chapters", "0001_Repair_Retry.md"), `# Chapter 1 Repair Retry\n\n${content}`, "utf-8"),
+      state.saveChapterIndex(bookId, [{
+        number: 1,
+        title: "Repair Retry",
+        status: "state-degraded" as ChapterMeta["status"],
+        wordCount: content.length,
+        createdAt: now,
+        updatedAt: now,
+        auditIssues: ["[warning] incomplete settlement"],
+        lengthWarnings: [],
+        reviewNote: JSON.stringify({
+          kind: "state-degraded",
+          baseStatus: "ready-for-review",
+          injectedIssues: ["[warning] incomplete settlement"],
+        }),
+      }]),
+    ]);
+
+    const settleSpy = vi.spyOn(
+      WriterAgent.prototype as unknown as {
+        settleChapterState: (input: Record<string, unknown>) => Promise<WriteChapterOutput>;
+      },
+      "settleChapterState",
+    )
+      .mockRejectedValueOnce(new IncompleteSettlementOutputError())
+      .mockResolvedValueOnce(createWriterOutput({
+        chapterNumber: 1,
+        title: "Repair Retry",
+        content,
+        updatedState: "fixed state",
+        updatedHooks: "fixed hooks",
+        updatedLedger: "fixed ledger",
+      }));
+    vi.spyOn(StateValidatorAgent.prototype, "validate").mockResolvedValue({
+      passed: true,
+      warnings: [],
+    });
+
+    const result = await runner.repairChapterState(bookId, 1);
+
+    expect(result.status).toBe("ready-for-review");
+    expect(settleSpy).toHaveBeenCalledTimes(2);
+    expect(settleSpy.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+      allowReapply: true,
+      validationFeedback: expect.stringContaining("UPDATED_STATE"),
+    }));
 
     await rm(root, { recursive: true, force: true });
   });

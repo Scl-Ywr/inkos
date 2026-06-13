@@ -17,6 +17,7 @@ export type HashRoute =
   | { page: "genres" }
   | { page: "style" }
   | { page: "import"; tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" }
+  | { page: "images" }
   | { page: "radar" }
   | { page: "doctor" };
 
@@ -60,6 +61,7 @@ function parseHash(hash: string): HashRoute {
   if (path === "daemon") return { page: "daemon" };
   if (path === "genres") return { page: "genres" };
   if (path === "style") return { page: "style" };
+  if (path === "images") return { page: "images" };
   if (path === "radar") return { page: "radar" };
   if (path === "doctor") return { page: "doctor" };
 
@@ -82,6 +84,7 @@ function routeToHash(route: HashRoute): string {
     case "daemon": return "#/daemon";
     case "genres": return "#/genres";
     case "style": return "#/style";
+    case "images": return "#/images";
     case "radar": return "#/radar";
     case "doctor": return "#/doctor";
     case "import": return route.tab ? `#/import/${route.tab}` : "#/import";
@@ -109,6 +112,7 @@ const HASH_PAGES = new Set([
   "genres",
   "style",
   "import",
+  "images",
   "radar",
   "doctor",
 ]);
@@ -140,6 +144,7 @@ export function useHashRoute() {
   const nav = {
     toServices: () => setRoute({ page: "services" }),
     toServiceDetail: (id: string) => setRoute({ page: "service-detail", serviceId: id }),
+    toImages: () => setRoute({ page: "images" }),
   };
 
   return { route, setRoute, nav };

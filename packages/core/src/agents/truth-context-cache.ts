@@ -115,11 +115,17 @@ export class TruthContextCache {
 
   summary(): string {
     const metrics = this.metrics();
-    return `hits=${metrics.hits} misses=${metrics.misses} entries=${metrics.entries} chars=${metrics.chars} loadMs=${metrics.loadMs} `
-      + `budgetReads=${metrics.budgetReads} trimmedReads=${metrics.trimmedReads} `
-      + `charsBeforeTrim=${metrics.charsBeforeTrim} charsAfterTrim=${metrics.charsAfterTrim} `
-      + `tokensBeforeTrim=${metrics.tokensBeforeTrim} tokensAfterTrim=${metrics.tokensAfterTrim} `
-      + `fields=${formatFieldMetrics(metrics.fields)}`;
+    if (metrics.budgetReads === 0) {
+      return `context cache: ${metrics.hits} hit(s), ${metrics.misses} load(s); compression not checked`;
+    }
+    const savedTokens = Math.max(0, metrics.tokensBeforeTrim - metrics.tokensAfterTrim);
+    if (savedTokens === 0) {
+      return `context compression: not needed (${metrics.tokensAfterTrim} tokens within budget)`;
+    }
+    const savedPercent = metrics.tokensBeforeTrim > 0
+      ? Math.round((savedTokens / metrics.tokensBeforeTrim) * 100)
+      : 0;
+    return `context compression: applied ${metrics.tokensBeforeTrim} -> ${metrics.tokensAfterTrim} tokens, saved ${savedTokens} (${savedPercent}%)`;
   }
 }
 
@@ -415,15 +421,6 @@ function binarySearchSuffix(content: string, maxTokens: number): string {
     else high = mid - 1;
   }
   return content.slice(-low);
-}
-
-function formatFieldMetrics(fields: TruthContextCacheMetrics["fields"]): string {
-  return Object.entries(fields)
-    .map(([field, metrics]) =>
-      `${field}:${metrics.tokensBefore}->${metrics.tokensAfter}t(-${metrics.tokensOmitted})/`
-      + `${metrics.charsBefore}->${metrics.charsAfter}c(-${metrics.charsOmitted})`
-    )
-    .join(",");
 }
 
 function isMissingContextPlaceholder(content: string): boolean {

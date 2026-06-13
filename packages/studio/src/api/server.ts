@@ -50,6 +50,7 @@ import {
   buildPlaySceneImagePrompt,
   generatePlayImage,
   readPlayImageManifest,
+  deletePlayImageEntry,
   readPlayImageSettings,
   writePlayImageSettings,
   type PlayImageSettings,
@@ -68,6 +69,7 @@ import {
   type ActionPayload,
   type ActionSource,
   createGenerateCoverTool,
+  generateShortFictionCover,
   createPlayStartTool,
   createShortFictionRunTool,
   createSubAgentTool,
@@ -82,7 +84,7 @@ import {
   type AgentRequestDiagnostics,
   type SessionKind,
 } from "@actalk/inkos-core";
-import { access, appendFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, appendFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isSafeBookId } from "./safety.js";
 import { ApiError } from "./errors.js";
@@ -273,6 +275,134 @@ function resolveProjectImageFile(root: string, rawPath: string): { readonly reso
     throw new ApiError(400, "INVALID_PROJECT_FILE_PATH", "Invalid project file path");
   }
   return { resolved, contentType };
+}
+
+type GeneratedImageLibraryItem = {
+  readonly id: string;
+  readonly source: "play" | "project";
+  readonly kind: "scene" | "actor" | "item" | "cover" | "short" | "other";
+  readonly status: "ready" | "failed";
+  readonly title: string;
+  readonly subtitle?: string;
+  readonly url?: string;
+  readonly error?: string;
+  readonly updatedAt?: string;
+  readonly worldId?: string;
+  readonly runId?: string;
+  readonly key?: string;
+  readonly path?: string;
+};
+
+function projectFileUrl(relPath: string): string {
+  return `/api/v1/project/files/${relPath.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+function playImageUrl(worldId: string, runId: string, file?: string): string | undefined {
+  return file ? `/api/v1/play/runs/${encodeURIComponent(worldId)}/${encodeURIComponent(runId)}/images/${encodeURIComponent(file)}` : undefined;
+}
+
+function classifyPlayImageKind(key: string): GeneratedImageLibraryItem["kind"] {
+  if (key.startsWith("scene-turn-")) return "scene";
+  const lowered = key.toLowerCase();
+  if (lowered.includes("actor") || lowered.includes("character") || lowered.includes("player")) return "actor";
+  if (lowered.includes("item") || lowered.includes("evidence") || lowered.includes("clue")) return "item";
+  return "other";
+}
+
+function classifyProjectImageKind(relPath: string): GeneratedImageLibraryItem["kind"] {
+  if (relPath.startsWith("covers/")) return "cover";
+  if (relPath.startsWith("shorts/")) return "short";
+  return "other";
+}
+
+function isSupportedGeneratedImageFile(name: string): boolean {
+  return /\.(?:png|jpe?g|webp)$/i.test(name);
+}
+
+function encodeLibraryId(parts: ReadonlyArray<string>): string {
+  return parts.map((part) => encodeURIComponent(part)).join(":");
+}
+
+function decodeLibraryId(id: string): string[] {
+  return id.split(":").map((part) => decodeURIComponent(part));
+}
+
+async function listProjectGeneratedImages(root: string): Promise<GeneratedImageLibraryItem[]> {
+  const items: GeneratedImageLibraryItem[] = [];
+  const roots = ["covers", "shorts"] as const;
+
+  async function walk(base: string, relDir: string): Promise<void> {
+    let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+    try {
+      entries = await readdir(join(base, relDir), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const relPath = relDir ? `${relDir}/${entry.name}` : entry.name;
+      const fullPath = join(base, relPath);
+      if (entry.isDirectory()) {
+        await walk(base, relPath);
+        continue;
+      }
+      if (!entry.isFile() || !isSupportedGeneratedImageFile(entry.name)) continue;
+      const projectRelPath = relPath.replace(/\\/g, "/");
+      const fileStat = await stat(fullPath).catch(() => null);
+      const parts = projectRelPath.split("/");
+      const parent = parts.length > 1 ? parts.at(-2) ?? "" : "";
+      const title = entry.name.replace(/\.[^.]+$/u, "") || entry.name;
+      items.push({
+        id: encodeLibraryId(["project", projectRelPath]),
+        source: "project",
+        kind: classifyProjectImageKind(projectRelPath),
+        status: "ready",
+        title: title === "cover" && parent ? parent : title,
+        subtitle: projectRelPath,
+        url: projectFileUrl(projectRelPath),
+        updatedAt: fileStat?.mtime.toISOString(),
+        path: projectRelPath,
+      });
+    }
+  }
+
+  for (const folder of roots) {
+    await walk(root, folder);
+  }
+  return items;
+}
+
+async function listPlayGeneratedImages(root: string): Promise<GeneratedImageLibraryItem[]> {
+  const store = new PlayStore(root);
+  const worlds = await store.listWorlds();
+  const items: GeneratedImageLibraryItem[] = [];
+  for (const world of worlds) {
+    const runs = await store.listRuns(world.id);
+    for (const run of runs) {
+      const runDir = store.runDir(world.id, run.id);
+      const manifest = await readPlayImageManifest(runDir);
+      const manifestStat = await stat(join(runDir, "images", "manifest.json")).catch(() => null);
+      for (const [key, entry] of Object.entries(manifest)) {
+        const kind = classifyPlayImageKind(key);
+        items.push({
+          id: encodeLibraryId(["play", world.id, run.id, key]),
+          source: "play",
+          kind,
+          status: entry.status,
+          title: key.startsWith("scene-turn-")
+            ? `Turn ${key.replace(/^scene-turn-/u, "")}`
+            : key,
+          subtitle: [world.title, run.id].filter(Boolean).join(" / "),
+          url: entry.status === "ready" ? playImageUrl(world.id, run.id, entry.file) : undefined,
+          error: entry.error,
+          updatedAt: manifestStat?.mtime.toISOString() ?? run.updatedAt,
+          worldId: world.id,
+          runId: run.id,
+          key,
+        });
+      }
+    }
+  }
+  return items;
 }
 
 function isLikelyFailedToolResult(exec: CollectedToolExec): boolean {
@@ -1904,6 +2034,75 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     return resolved;
   }
 
+  const AGENTS_FOLLOWING_SELECTED_MODEL = [
+    "architect",
+    "foundation-reviewer",
+    "planner",
+    "composer",
+    "writer",
+    "state-repair",
+    "auditor",
+    "reviser",
+    "state-validator",
+    "length-normalizer",
+    "play",
+    "short-outline",
+    "short-outline-review",
+    "short-writer",
+    "short-draft-review",
+    "short-revise",
+    "short-package",
+  ] as const;
+
+  function mergeSelectedModelOverrides(
+    base: PipelineConfig["modelOverrides"],
+    selected: {
+      readonly service?: string;
+      readonly model: ResolvedModel["model"];
+      readonly apiKey?: string;
+    } | undefined,
+  ): PipelineConfig["modelOverrides"] {
+    if (!selected) return base;
+    const resolved = { ...(base ?? {}) };
+    const modelRecord = selected.model as unknown as Record<string, unknown>;
+    const selectedModelId = typeof modelRecord.id === "string"
+      ? modelRecord.id
+      : typeof modelRecord.modelId === "string"
+        ? modelRecord.modelId
+        : undefined;
+    const modelId = selectedModelId ?? String(modelRecord.name ?? "");
+    if (!modelId.trim()) return base;
+    const service = selected.service?.trim();
+    const serviceProvider = service ? resolveServiceProviderFamily(service) : undefined;
+    const provider: "custom" | "openai" | "anthropic" | undefined =
+      modelRecord.provider === "custom" || modelRecord.provider === "openai" || modelRecord.provider === "anthropic"
+        ? modelRecord.provider
+        : serviceProvider === "openai" || serviceProvider === "anthropic"
+          ? serviceProvider
+          : undefined;
+    const baseUrl = typeof modelRecord.baseUrl === "string" ? modelRecord.baseUrl : undefined;
+    const apiFormat: "chat" | "responses" | undefined = modelRecord.api === "openai-responses"
+      ? "responses"
+      : modelRecord.api === "openai-completions"
+        ? "chat"
+        : undefined;
+    const selectedOverride = {
+      model: modelId,
+      ...(service ? { service } : {}),
+      ...(provider ? { provider } : {}),
+      ...(baseUrl ? { baseUrl } : {}),
+      ...(selected.apiKey ? { apiKey: selected.apiKey } : {}),
+      ...(apiFormat ? { apiFormat } : {}),
+    };
+
+    for (const agent of AGENTS_FOLLOWING_SELECTED_MODEL) {
+      if (resolved[agent] === undefined) {
+        resolved[agent] = selectedOverride;
+      }
+    }
+    return resolved;
+  }
+
   function normalizeModelOverrides(overrides: Record<string, unknown>): Record<string, unknown> {
     const normalized: Record<string, unknown> = {};
     for (const [agent, override] of Object.entries(overrides)) {
@@ -1983,9 +2182,18 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     overrides?: Partial<Pick<PipelineConfig, "externalContext" | "client" | "model">> & {
       readonly currentConfig?: ProjectConfig;
       readonly sessionIdForSSE?: string;
+      readonly selectedModelRoute?: {
+        readonly service?: string;
+        readonly model: ResolvedModel["model"];
+        readonly apiKey?: string;
+      };
     },
   ): Promise<PipelineConfig> {
     const currentConfig = overrides?.currentConfig ?? await loadCurrentProjectConfig();
+    const modelOverrides = mergeSelectedModelOverrides(
+      await resolvePipelineModelOverrides(currentConfig),
+      overrides?.selectedModelRoute,
+    );
     const scopedSseSink: LogSink = overrides?.sessionIdForSSE
       ? {
           write(entry) {
@@ -2010,7 +2218,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       foundationReviewRetries: currentConfig.foundation?.reviewRetries ?? 2,
       writingReviewRetries: currentConfig.writing?.reviewRetries ?? 1,
       chapterReviewMode: (currentConfig.writing as { readonly reviewMode?: string } | undefined)?.reviewMode === "manual" ? "manual" : "auto",
-      modelOverrides: await resolvePipelineModelOverrides(currentConfig),
+      modelOverrides,
       notifyChannels: currentConfig.notify,
       logger,
       onRequestDiagnostics: (diagnostics) =>
@@ -2701,6 +2909,31 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     return c.json({ ok: true, service: preset?.service ?? body.service, model });
   });
 
+  app.post("/api/v1/cover/generate", async (c) => {
+    type GenerateCoverBody = {
+      title?: string;
+      intro?: string;
+      coverPrompt?: string;
+    };
+    const body = await c.req.json<GenerateCoverBody>().catch(() => ({} as GenerateCoverBody));
+    const title = body.title?.trim() ?? "";
+    if (!title) {
+      return c.json({ error: "Cover title is required" }, 400);
+    }
+    try {
+      const result = await generateShortFictionCover({
+        projectRoot: root,
+        title,
+        intro: body.intro?.trim(),
+        coverPrompt: body.coverPrompt?.trim(),
+        outputDir: join("covers", `manual-${Date.now().toString(36)}`),
+      });
+      return c.json({ ok: true, ...result });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+
   app.get("/api/v1/cover/secret/:service", async (c) => {
     const service = c.req.param("service");
     if (!resolveCoverProviderPreset(service) && !service.startsWith("custom:")) {
@@ -3225,8 +3458,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       readPlayImageManifest(runDir),
       readPlayImageSettings(runDir),
     ]);
-    const imageUrlFor = (file?: string): string | undefined =>
-      file ? `/api/v1/play/runs/${encodeURIComponent(worldId)}/${encodeURIComponent(runId)}/images/${encodeURIComponent(file)}` : undefined;
+    const imageUrlFor = (file?: string): string | undefined => playImageUrl(worldId, runId, file);
     const sceneImageUrls = Object.fromEntries(
       Object.entries(manifest)
         .filter(([key, entry]) => key.startsWith("scene-turn-") && entry.status === "ready" && entry.file)
@@ -3327,7 +3559,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     try {
       const entry = await generatePlayImage({ root, runDir, key, prompt });
       const url = entry.status === "ready" && entry.file
-        ? `/api/v1/play/runs/${encodeURIComponent(worldId)}/${encodeURIComponent(runId)}/images/${encodeURIComponent(entry.file)}`
+        ? playImageUrl(worldId, runId, entry.file)
         : undefined;
       return c.json({ key, ok: entry.status === "ready", ...entry, ...(url ? { url } : {}) });
     } catch (e) {
@@ -3353,6 +3585,38 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     } catch {
       return c.notFound();
     }
+  });
+
+  app.get("/api/v1/images/library", async (c) => {
+    const [playItems, projectItems] = await Promise.all([
+      listPlayGeneratedImages(root),
+      listProjectGeneratedImages(root),
+    ]);
+    const items = [...playItems, ...projectItems]
+      .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "") || a.title.localeCompare(b.title));
+    return c.json({ items });
+  });
+
+  app.delete("/api/v1/images/library", async (c) => {
+    const id = c.req.query("id")?.trim();
+    if (!id) return c.json({ error: "Image id is required" }, 400);
+    const parts = decodeLibraryId(id);
+    const source = parts[0];
+    if (source === "play") {
+      const [, worldId, runId, key] = parts;
+      if (!worldId || !runId || !key) return c.json({ error: "Invalid image id" }, 400);
+      const store = new PlayStore(root);
+      await deletePlayImageEntry(store.runDir(worldId, runId), key);
+      return c.json({ ok: true });
+    }
+    if (source === "project") {
+      const relPath = parts[1];
+      if (!relPath) return c.json({ error: "Invalid image id" }, 400);
+      const file = resolveProjectImageFile(root, relPath);
+      await rm(file.resolved, { force: true });
+      return c.json({ ok: true });
+    }
+    return c.json({ error: "Invalid image id" }, 400);
   });
 
   // -- Per-book session endpoints --
@@ -3701,11 +3965,23 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
 
       const model = resolvedModel!;
       const agentApiKey = resolvedApiKey;
-      // Chat replies use the composer-selected model above. Production writing,
-      // audit, revision, and state repair use the project's Agent routing table.
+      const keepProjectProductionRoute = Boolean(
+        requestedIntent
+        && requestedIntent !== "create_book"
+        && requestedIntent !== "play_start",
+      );
+      // Interactive Play/book-creation tools follow the current chat selection.
+      // Direct production actions such as write-next retain the project's routing table.
       const pipeline = new PipelineRunner(await buildPipelineConfig({
         currentConfig: config,
         sessionIdForSSE: bookSession.sessionId,
+        ...(reqModel && !keepProjectProductionRoute ? {
+          selectedModelRoute: {
+            ...(reqService ? { service: reqService } : {}),
+            model,
+            ...(agentApiKey ? { apiKey: agentApiKey } : {}),
+          },
+        } : {}),
       }));
 
       if (requestedIntent && isConfirmedProductionAction({ actionSource, requestedIntent })) {
@@ -3826,7 +4102,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
           {
             const repairIssue = repairResult.auditResult?.issues?.[0];
             const repairStatus = repairResult.status ?? "ready-for-review";
-            const repairIncomplete = repairStatus === "state-degraded" || repairResult.auditResult?.passed === false;
+            const repairIncomplete = repairStatus === "state-degraded";
             const repairReason = repairIssue?.description ? `\n原因：${repairIssue.description}` : "";
             const repairSuggestion = repairIssue?.suggestion ? `\n建议：${repairIssue.suggestion}` : "";
             const responseText = repairIncomplete

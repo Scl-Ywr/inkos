@@ -38,6 +38,7 @@ import {
   MoreHorizontal,
   Trash2,
   ShieldAlert,
+  Sparkles,
   Wrench,
 } from "lucide-react";
 import { Shimmer } from "../components/ai-elements/shimmer";
@@ -96,6 +97,7 @@ interface PlayRunImagePayload {
 
 interface CoverConfigResponse {
   readonly service?: string | null;
+  readonly model?: string | null;
   readonly configured?: boolean;
   readonly providers?: ReadonlyArray<{ readonly service: string; readonly connected?: boolean }>;
 }
@@ -239,7 +241,10 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   const [playImageError, setPlayImageError] = useState<string | null>(null);
   const [playImageMenuOpen, setPlayImageMenuOpen] = useState(false);
   const [playImageSettings, setPlayImageSettings] = useState<PlayImageSettings>({ actors: false, moments: false, inventory: false });
+  const [playImageRoute, setPlayImageRoute] = useState<{ service: string; model: string } | null>(null);
   const [playImageCoverReady, setPlayImageCoverReady] = useState(false);
+  const [playSceneGenerating, setPlaySceneGenerating] = useState(false);
+  const [playImageRefreshToken, setPlayImageRefreshToken] = useState(0);
   const [tokenSavingsLabel, setTokenSavingsLabel] = useState<string | null>(null);
   const worldPanelInsetClass = currentSessionKind === "play" && worldPanelOpen ? "lg:pr-[380px]" : "";
 
@@ -642,9 +647,17 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
         setPlayImageCoverReady(
           cfg.configured ?? (!!selected && (cfg.providers ?? []).some((p) => p.service === selected && p.connected)),
         );
+        setPlayImageRoute(
+          cfg.service && cfg.model
+            ? { service: cfg.service, model: cfg.model }
+            : null,
+        );
       })
       .catch(() => {
-        if (!cancelled) setPlayImageCoverReady(false);
+        if (!cancelled) {
+          setPlayImageCoverReady(false);
+          setPlayImageRoute(null);
+        }
       });
     return () => { cancelled = true; };
   }, [activeSessionId, currentSessionKind]);
@@ -686,6 +699,24 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     if (!activeSessionId || loading || playMode === nextMode) return;
     setConsumedPlayChoiceKey(null);
     setSessionPlayMode(activeSessionId, nextMode);
+  };
+
+  const handleGenerateCurrentScene = async () => {
+    if (!activeSessionId || currentSessionKind !== "play" || !playImageCoverReady || playSceneGenerating) return;
+    setPlaySceneGenerating(true);
+    setPlayImageError(null);
+    try {
+      await fetchJson(`/play/runs/${encodeURIComponent(activeSessionId)}/main/generate-image`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: "scene" }),
+      });
+      setPlayImageRefreshToken((value) => value + 1);
+    } catch (error) {
+      setPlayImageError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPlaySceneGenerating(false);
+    }
   };
 
   return (
@@ -1138,6 +1169,27 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                     <div className="mb-1.5 px-1 text-[12px] leading-5 font-semibold uppercase tracking-wider text-muted-foreground/60">
                       {isZh ? "自动配图" : "Auto illustration"}
                     </div>
+                    {playImageRoute ? (
+                      <div className="mb-2 rounded-lg border border-border/40 bg-secondary/30 px-2 py-1.5">
+                        <div className="text-[11px] text-muted-foreground/60">
+                          {isZh ? "当前生图模型" : "Image model"}
+                        </div>
+                        <div className="mt-0.5 truncate font-mono text-[12px] text-foreground" title={`${playImageRoute.service} / ${playImageRoute.model}`}>
+                          {playImageRoute.service} / {playImageRoute.model}
+                        </div>
+                      </div>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => void handleGenerateCurrentScene()}
+                      disabled={!playImageCoverReady || playSceneGenerating}
+                      className="mb-1.5 flex min-h-9 w-full items-center justify-center gap-2 rounded-lg border border-primary/35 bg-primary/10 px-2 text-[13px] font-medium text-primary transition-colors hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <Sparkles size={14} className={playSceneGenerating ? "animate-pulse" : ""} />
+                      {playSceneGenerating
+                        ? (isZh ? "正在生成当前场景" : "Generating scene")
+                        : (isZh ? "生成当前场景" : "Generate current scene")}
+                    </button>
                     {(["actors", "moments", "inventory"] as const).map((key) => (
                       <label
                         key={key}
@@ -1185,6 +1237,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
           open={worldPanelOpen}
           onClose={() => setWorldPanelOpen(false)}
           imageSettings={playImageSettings}
+          imageRefreshToken={playImageRefreshToken}
           sessionTitle={activeSession?.title ?? null}
         />
       )}

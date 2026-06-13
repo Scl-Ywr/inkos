@@ -27,7 +27,8 @@ export interface StreamProgress {
 
 export type OnStreamProgress = (progress: StreamProgress) => void;
 
-const INKOS_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const INKOS_USER_AGENT = "InkOS API Client";
+const CLAUDE_CLI_COMPAT_USER_AGENT = "claude-cli/2.1.173 (external, sdk-cli)";
 const UNKNOWN_MODEL_FALLBACK_MAX_TOKENS = 8192 * 3;
 const CUSTOM_COMPAT_SAFE_MAX_TOKENS = 16_384;
 const TRANSIENT_LLM_RETRIES = 2;
@@ -55,7 +56,21 @@ function sanitizeHttpHeaders(headers?: Record<string, string>): Record<string, s
 }
 
 function mergeUserAgent(headers?: Record<string, string>): Record<string, string> {
-  return { "User-Agent": INKOS_USER_AGENT, ...(sanitizeHttpHeaders(headers) ?? {}) };
+  return { ...(sanitizeHttpHeaders(headers) ?? {}), "User-Agent": INKOS_USER_AGENT };
+}
+
+function withClaudeCliCompatibility(headers: Record<string, string>): Record<string, string> {
+  return {
+    ...headers,
+    "User-Agent": CLAUDE_CLI_COMPAT_USER_AGENT,
+    "X-App": "cli",
+    "X-Stainless-Lang": "js",
+    "X-Stainless-Runtime": "node",
+  };
+}
+
+function shouldRetryAsClaudeCli(model: string, detail: string): boolean {
+  return /^claude-/i.test(model) && /does not allow the current client/i.test(detail);
 }
 
 export function createStreamMonitor(
@@ -677,9 +692,9 @@ function buildCustomHeaders(client: LLMClient): Record<string, string> {
   const apiKey = sanitizeHeaderApiKey(client._apiKey);
   return sanitizeHttpHeaders({
     "Content-Type": "application/json",
-    "User-Agent": INKOS_USER_AGENT,
     ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
     ...(client._piModel?.headers ?? {}),
+    "User-Agent": INKOS_USER_AGENT,
   }) ?? { "Content-Type": "application/json" };
 }
 
@@ -958,6 +973,7 @@ async function chatCompletionViaCustomAnthropicCompatible(
   resolved: { readonly temperature: number; readonly maxTokens: number; readonly extra: Record<string, unknown> },
   onStreamProgress?: OnStreamProgress,
   onTextDelta?: (text: string) => void,
+  useClaudeCliHeaders = false,
 ): Promise<LLMResponse> {
   const baseUrl = client._piModel?.baseUrl ?? "";
   const errorCtx = { baseUrl, model, service: client.service ?? client.provider };
@@ -982,21 +998,34 @@ async function chatCompletionViaCustomAnthropicCompatible(
     maxTokens: resolved.maxTokens,
     endpoint: "messages",
   });
+  const requestHeaders = sanitizeHttpHeaders({
+    "x-api-key": apiKey,
+    "anthropic-version": "2023-06-01",
+    "Content-Type": "application/json",
+    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+    ...(client._piModel?.headers ?? {}),
+    "User-Agent": INKOS_USER_AGENT,
+  }) ?? { "Content-Type": "application/json" };
   const response = await fetchWithProxy(`${baseUrl.replace(/\/$/, "")}/messages`, {
     method: "POST",
-    headers: sanitizeHttpHeaders({
-      "User-Agent": INKOS_USER_AGENT,
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "Content-Type": "application/json",
-      ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-      ...(client._piModel?.headers ?? {}),
-    }) ?? { "Content-Type": "application/json" },
+    headers: useClaudeCliHeaders ? withClaudeCliCompatibility(requestHeaders) : requestHeaders,
     body: JSON.stringify(payload),
   }, client.proxyUrl);
 
   if (!response.ok) {
-    throw wrapLLMError(new Error(await readErrorResponse(response)), errorCtx);
+    const detail = await readErrorResponse(response);
+    if (!useClaudeCliHeaders && response.status === 403 && shouldRetryAsClaudeCli(model, detail)) {
+      return chatCompletionViaCustomAnthropicCompatible(
+        client,
+        model,
+        messages,
+        resolved,
+        onStreamProgress,
+        onTextDelta,
+        true,
+      );
+    }
+    throw wrapLLMError(new Error(detail), errorCtx);
   }
 
   if (!client.stream) {
@@ -1077,6 +1106,7 @@ async function chatCompletionViaCustomOpenAICompatible(
     readonly tokenLimitField: "max_tokens" | "max_completion_tokens";
     readonly omitStreamOptions: boolean;
     readonly forceNonStream: boolean;
+    readonly useClaudeCliHeaders: boolean;
     readonly maxTokensOverride?: number;
   } = {
     allowSystemRoleFallback: true,
@@ -1084,13 +1114,17 @@ async function chatCompletionViaCustomOpenAICompatible(
     tokenLimitField: "max_tokens",
     omitStreamOptions: false,
     forceNonStream: false,
+    useClaudeCliHeaders: false,
   },
 ): Promise<LLMResponse> {
   if (client.provider === "anthropic") {
     return chatCompletionViaCustomAnthropicCompatible(client, model, messages, resolved, onStreamProgress, onTextDelta);
   }
   const baseUrl = client._piModel?.baseUrl ?? "";
-  const headers = buildCustomHeaders(client);
+  const baseHeaders = buildCustomHeaders(client);
+  const headers = compatibility.useClaudeCliHeaders
+    ? withClaudeCliCompatibility(baseHeaders)
+    : baseHeaders;
   const errorCtx = { baseUrl, model, service: client.service ?? client.provider };
   const extra = stripReservedKeys(resolved.extra);
   const effectiveMaxTokens = compatibility.maxTokensOverride ?? resolved.maxTokens;
@@ -1143,6 +1177,12 @@ async function chatCompletionViaCustomOpenAICompatible(
     }
     if (!response.ok) {
       const detail = await readErrorResponse(response);
+      if (!compatibility.useClaudeCliHeaders && response.status === 403 && shouldRetryAsClaudeCli(model, detail)) {
+        return chatCompletionViaCustomOpenAICompatible(client, model, messages, resolved, onStreamProgress, onTextDelta, {
+          ...compatibility,
+          useClaudeCliHeaders: true,
+        });
+      }
       if ((response.status === 400 || response.status === 403) && effectiveMaxTokens > CUSTOM_COMPAT_SAFE_MAX_TOKENS && isTokenLimitRejectedErrorText(detail)) {
         return chatCompletionViaCustomOpenAICompatible(client, model, messages, resolved, onStreamProgress, onTextDelta, {
           ...compatibility,
@@ -1284,6 +1324,12 @@ async function chatCompletionViaCustomOpenAICompatible(
   }
   if (!response.ok) {
     const detail = await readErrorResponse(response);
+    if (!compatibility.useClaudeCliHeaders && response.status === 403 && shouldRetryAsClaudeCli(model, detail)) {
+      return chatCompletionViaCustomOpenAICompatible(client, model, messages, resolved, onStreamProgress, onTextDelta, {
+        ...compatibility,
+        useClaudeCliHeaders: true,
+      });
+    }
     if (response.status === 400 && !compatibility.omitTemperature && isUnsupportedParameterErrorText(detail, "temperature")) {
       return chatCompletionViaCustomOpenAICompatible(client, model, messages, resolved, onStreamProgress, onTextDelta, {
         ...compatibility,

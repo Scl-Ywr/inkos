@@ -256,6 +256,7 @@ describe("chatCompletion via pi-ai", () => {
         ...MOCK_PI_MODEL,
         headers: {
           "X-Valid": "ok",
+          "User-Agent": "Mozilla/5.0",
           "X-Bad": "服务测试",
         },
       },
@@ -263,7 +264,7 @@ describe("chatCompletion via pi-ai", () => {
     await chatCompletion(client, "test-model", [{ role: "user", content: "hi" }]);
 
     const opts = mockStreamSimple.mock.calls[0]?.[2] as { headers?: Record<string, string> };
-    expect(opts.headers?.["User-Agent"]).toContain("Mozilla/5.0");
+    expect(opts.headers?.["User-Agent"]).toBe("InkOS API Client");
     expect(opts.headers).toMatchObject({ "X-Valid": "ok" });
     expect(opts.headers).not.toHaveProperty("X-Bad");
   });
@@ -346,14 +347,61 @@ describe("chatCompletion via pi-ai", () => {
         ...MOCK_PI_MODEL,
         provider: "openai",
         baseUrl: "https://gateway.example/v1",
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+        },
       },
     });
     const result = await chatCompletion(client, "gpt-5.4", [{ role: "user", content: "nihao" }]);
 
     expect(result.content).toBe("你好！");
     expect(fetchMock).toHaveBeenCalledOnce();
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(request.headers).toMatchObject({ "User-Agent": "InkOS API Client" });
     expect(mockCompleteSimple).not.toHaveBeenCalled();
     expect(mockStreamSimple).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
+
+  it("retries Claude client-restricted custom channels with Claude CLI compatibility headers", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        headers: new Headers(),
+        text: async () => "403 This channel does not allow the current client (detected: InkOS API Client)",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: async () => ({
+          choices: [{ message: { content: "兼容重试成功" } }],
+          usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = makeClient(0.7, {
+      service: "custom",
+      stream: false,
+      _piModel: {
+        ...MOCK_PI_MODEL,
+        provider: "openai",
+        baseUrl: "https://gateway.example/v1",
+      },
+    });
+
+    const result = await chatCompletion(client, "claude-opus-4-6", [{ role: "user", content: "ping" }]);
+
+    expect(result.content).toBe("兼容重试成功");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const retry = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect(retry.headers).toMatchObject({
+      "User-Agent": expect.stringContaining("claude-cli/"),
+      "X-App": "cli",
+    });
 
     vi.unstubAllGlobals();
   });

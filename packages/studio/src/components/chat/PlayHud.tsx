@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Gamepad2, X, ChevronDown, ChevronLeft } from "lucide-react";
 import { fetchJson } from "../../hooks/use-api";
+import { buildApiUrl } from "../../lib/api-url";
 import {
   HOLDING_TYPES, HOLDING_GLYPH, SLOT_GLYPH, EVIDENCE_LADDER,
   type HudDetail, type HudRow, type HoldingRow, type HoldingRelation, type HoldingLifecycle,
@@ -142,6 +143,10 @@ type AutoImageRequest =
   | { readonly key: string; readonly body: { readonly target: "entity"; readonly entityId: string } }
   | { readonly key: string; readonly body: { readonly target: "scene" } };
 
+function imageSrc(url?: string): string | undefined {
+  return url ? buildApiUrl(url) ?? url : undefined;
+}
+
 export function buildAutoImageRequests(
   view: HudView | null,
   settings: PlayImageSettings,
@@ -208,7 +213,7 @@ export function buildView(run: PlayRunResponse | null): HudView | null {
       label: e.label,
       note: statusNote(e),
       details: [...summaryDetail(e), ...relationDetails(e.id)],
-      imageUrl: e.imageUrl,
+      imageUrl: imageSrc(e.imageUrl),
     }));
   const surroundings: HudRow[] = entities
     .filter((e) => HOLDING_TYPES.has(e.type) && !isHeldEntity(e, currentEdges))
@@ -218,7 +223,7 @@ export function buildView(run: PlayRunResponse | null): HudView | null {
       label: e.label,
       note: statusNote(e),
       details: summaryDetail(e),
-      imageUrl: e.imageUrl,
+      imageUrl: imageSrc(e.imageUrl),
     }));
   const ownedMeters = (id: string): HudRow[] =>
     stateSlots
@@ -270,7 +275,7 @@ export function buildView(run: PlayRunResponse | null): HudView | null {
         || (lifecycle ? lifecycle.current : statusPill);
       return {
         id: e.id, kind: e.type, glyph: HOLDING_GLYPH[e.type] ?? "•", label: e.label,
-        imageUrl: e.imageUrl, summary, preview, statusPill, lifecycle, meters, relations,
+        imageUrl: imageSrc(e.imageUrl), summary, preview, statusPill, lifecycle, meters, relations,
         provenanceTurn: e.createdEventId ? turnOf.get(e.createdEventId) : undefined,
         isFresh, changeReason,
       };
@@ -324,6 +329,7 @@ export function PlayHud(props: {
   readonly onClose: () => void;
   readonly sessionTitle?: string | null;
   readonly imageSettings?: PlayImageSettings;
+  readonly imageRefreshToken?: number;
 }) {
   const { sessionId, isStreaming, isZh, open, onClose } = props;
   const base = `/play/runs/${encodeURIComponent(sessionId)}/main`;
@@ -348,6 +354,10 @@ export function PlayHud(props: {
   }, [base]);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    if ((props.imageRefreshToken ?? 0) > 0) void load();
+  }, [load, props.imageRefreshToken]);
 
   // Refetch when a turn finishes (streaming true -> false).
   useEffect(() => {

@@ -6,6 +6,7 @@ import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { StudioSelect } from "../components/StudioSelect";
+import { useChatStore } from "../store/chat";
 import {
   clearBookCreateSessionId,
   getBookCreateSessionId,
@@ -232,6 +233,30 @@ export function platformOptionsForLanguage(language: "zh" | "en"): ReadonlyArray
   return language === "en" ? PLATFORMS_EN : PLATFORMS_ZH;
 }
 
+export function mergeBookCreationDraftIntoForm(
+  sourceDraft: BookCreationDraft,
+  current: BookCreateFormState,
+  platformChoices: ReadonlyArray<PlatformOption>,
+): BookCreateFormState {
+  const draftBrief = [
+    sourceDraft.blurb,
+    sourceDraft.worldPremise,
+    sourceDraft.protagonist,
+    sourceDraft.conflictCore,
+    sourceDraft.volumeOutline,
+  ].filter((part): part is string => Boolean(part?.trim())).join("\n\n");
+  const platformValues = platformChoices.map((option) => option.value);
+
+  return {
+    title: sourceDraft.title?.trim() || current.title,
+    genre: sourceDraft.genre?.trim() || current.genre,
+    platform: pickValidValue(sourceDraft.platform ?? current.platform, platformValues),
+    targetChapters: sourceDraft.targetChapters ? String(sourceDraft.targetChapters) : current.targetChapters,
+    chapterWordCount: sourceDraft.chapterWordCount ? String(sourceDraft.chapterWordCount) : current.chapterWordCount,
+    brief: draftBrief || current.brief,
+  };
+}
+
 function parsePositiveInteger(value: string): number | null {
   const parsed = Number.parseInt(value.trim(), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
@@ -455,12 +480,15 @@ function readSessionId(response: SessionResponse): string | null {
 export function buildBookCreateAgentRequest(
   instruction: string,
   sessionId: string,
+  modelSelection?: { readonly model?: string | null; readonly service?: string | null },
 ): {
   instruction: string;
   sessionId: string;
   sessionKind: "book-create";
   actionSource: "free-text" | "slash";
   requestedIntent?: "create_book";
+  model?: string;
+  service?: string;
 } {
   const trimmedSessionId = sessionId.trim();
   if (!trimmedSessionId) {
@@ -473,6 +501,8 @@ export function buildBookCreateAgentRequest(
     sessionKind: "book-create",
     actionSource: trimmedInstruction.startsWith("/") ? "slash" : "free-text",
     ...(trimmedInstruction === "/create" ? { requestedIntent: "create_book" as const } : {}),
+    ...(modelSelection?.model ? { model: modelSelection.model } : {}),
+    ...(modelSelection?.service ? { service: modelSelection.service } : {}),
   };
 }
 
@@ -593,6 +623,8 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [bookCreateSessionId, setBookCreateSessionIdState] = useState<string | null>(null);
+  const selectedModel = useChatStore((s) => s.selectedModel);
+  const selectedService = useChatStore((s) => s.selectedService);
 
   const summaryStages = useMemo(
     () => (draft ? buildCreationDraftStages(draft, projectLang) : []),
@@ -620,23 +652,13 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
     if (!draft) {
       return;
     }
-    const draftBrief = [
-      draft.blurb,
-      draft.worldPremise,
-      draft.protagonist,
-      draft.conflictCore,
-      draft.volumeOutline,
-    ].filter((part): part is string => Boolean(part?.trim())).join("\n\n");
-    const platformValues = platformChoices.map((option) => option.value);
-    setForm((current) => ({
-      title: draft.title?.trim() || current.title,
-      genre: draft.genre?.trim() || current.genre,
-      platform: pickValidValue(draft.platform ?? current.platform, platformValues),
-      targetChapters: draft.targetChapters ? String(draft.targetChapters) : current.targetChapters,
-      chapterWordCount: draft.chapterWordCount ? String(draft.chapterWordCount) : current.chapterWordCount,
-      brief: draftBrief || current.brief,
-    }));
+    setForm((current) => mergeBookCreationDraftIntoForm(draft, current, platformChoices));
   };
+
+  useEffect(() => {
+    if (!draft) return;
+    setForm((current) => mergeBookCreationDraftIntoForm(draft, current, platformChoices));
+  }, [draft, platformChoices]);
 
   const refreshDraft = async (): Promise<BookCreationDraft | undefined> => {
     const data = await fetchJson<InteractionSessionResponse>("/interaction/session");
@@ -694,7 +716,10 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
     return fetchJson<AgentResponse>("/agent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildBookCreateAgentRequest(instruction, sessionId)),
+      body: JSON.stringify(buildBookCreateAgentRequest(instruction, sessionId, {
+        model: selectedModel,
+        service: selectedService,
+      })),
     });
   };
 

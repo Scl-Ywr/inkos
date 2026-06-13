@@ -34,6 +34,7 @@ const runAgentSessionMock = vi.fn();
 const playRunnerStepMock = vi.fn();
 const playRunnerCtorArgs: unknown[] = [];
 const generatePlayImageMock = vi.fn();
+const generateShortFictionCoverMock = vi.fn();
 const createAndPersistBookSessionMock = vi.fn();
 const loadBookSessionMock = vi.fn();
 const persistBookSessionMock = vi.fn();
@@ -267,6 +268,8 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     buildPlayEntityImagePrompt: actual.buildPlayEntityImagePrompt,
     buildPlaySceneImagePrompt: actual.buildPlaySceneImagePrompt,
     generatePlayImage: generatePlayImageMock,
+    deletePlayImageEntry: actual.deletePlayImageEntry,
+    generateShortFictionCover: generateShortFictionCoverMock,
     readPlayImageManifest: actual.readPlayImageManifest,
     readPlayImageSettings: actual.readPlayImageSettings,
     writePlayImageSettings: actual.writePlayImageSettings,
@@ -392,6 +395,7 @@ describe("createStudioServer daemon lifecycle", () => {
     loadChapterIndexMock.mockReset();
     loadBookConfigMock.mockReset();
     generatePlayImageMock.mockClear();
+    generateShortFictionCoverMock.mockReset();
     await mkdir(join(root, "books", "demo-book", "chapters"), { recursive: true });
     await writeFile(join(root, "books", "demo-book", "chapters", "0003_Demo.md"), "# Demo\n\nBody", "utf-8");
     runRadarMock.mockResolvedValue({
@@ -1207,6 +1211,53 @@ describe("createStudioServer daemon lifecycle", () => {
       { service: "moonshot", temperature: 0.5, apiFormat: "responses", stream: false },
       { service: "custom", name: "内网GPT", baseUrl: "https://llm.internal.corp/v1", temperature: 0.9, apiFormat: "responses", stream: false },
     ]);
+  });
+
+  it("round-trips a custom service config and secret exactly as the detail page saves them", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const secretSave = await app.request("http://localhost/api/v1/services/custom%3AMyRelay/secret", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apiKey: "sk-mobile-input" }),
+    });
+    expect(secretSave.status).toBe(200);
+
+    const configSave = await app.request("http://localhost/api/v1/services/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        service: "custom:MyRelay",
+        defaultModel: "claude-opus-4-6",
+        services: [{
+          service: "custom",
+          name: "MyRelay",
+          baseUrl: "https://relay.example.com/v1",
+          temperature: 0.7,
+          apiFormat: "chat",
+          stream: true,
+        }],
+      }),
+    });
+    expect(configSave.status).toBe(200);
+
+    const configRead = await app.request("http://localhost/api/v1/services/config");
+    await expect(configRead.json()).resolves.toMatchObject({
+      service: "custom:MyRelay",
+      defaultModel: "claude-opus-4-6",
+      services: [{
+        service: "custom",
+        name: "MyRelay",
+        baseUrl: "https://relay.example.com/v1",
+        temperature: 0.7,
+        apiFormat: "chat",
+        stream: true,
+      }],
+    });
+
+    const secretRead = await app.request("http://localhost/api/v1/services/custom%3AMyRelay/secret");
+    await expect(secretRead.json()).resolves.toEqual({ apiKey: "sk-mobile-input" });
   });
 
   it("normalizes encoded custom service ids from array-based config", async () => {
@@ -2346,6 +2397,38 @@ describe("createStudioServer daemon lifecycle", () => {
     });
   });
 
+  it("manually invokes the configured image model for a cover", async () => {
+    generateShortFictionCoverMock.mockResolvedValueOnce({
+      title: "Rain City",
+      outputDir: "covers/manual-demo",
+      coverPromptPath: "covers/manual-demo/cover-prompt.md",
+      coverImagePath: "covers/manual-demo/cover.png",
+    });
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/cover/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "Rain City",
+        coverPrompt: "A detective under neon rain",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      coverImagePath: "covers/manual-demo/cover.png",
+    });
+    expect(generateShortFictionCoverMock).toHaveBeenCalledWith(expect.objectContaining({
+      projectRoot: root,
+      title: "Rain City",
+      coverPrompt: "A detective under neon rain",
+      outputDir: expect.stringMatching(/^covers[\\/]manual-/),
+    }));
+  });
+
   it("serves generated project cover images without exposing arbitrary files", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
@@ -3248,6 +3331,60 @@ describe("createStudioServer daemon lifecycle", () => {
     );
   }, 10_000);
 
+  it("presents an audit-failed chapter as state-repaired while keeping review required", async () => {
+    repairChapterStateMock.mockResolvedValueOnce({
+      chapterNumber: 21,
+      title: "Chapter 21",
+      wordCount: 1800,
+      revised: false,
+      status: "audit-failed",
+      auditResult: {
+        passed: false,
+        issues: [],
+        summary: "state repaired but chapter still needs review",
+      },
+    });
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instruction: "恢复第21章状态",
+        activeBookId: "demo-book",
+        sessionId: "agent-session-1",
+        sessionKind: "book",
+        actionSource: "quick-action",
+        requestedIntent: "repair_state",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      response: expect.stringContaining("audit-failed"),
+    });
+    expect(appendManualSessionMessagesMock).toHaveBeenCalledWith(
+      root,
+      "agent-session-1",
+      expect.any(Array),
+      "恢复第21章状态",
+      expect.objectContaining({
+        legacyDisplay: {
+          toolExecutions: [
+            expect.objectContaining({
+              status: "completed",
+              details: expect.objectContaining({
+                kind: "chapter_state_repaired",
+                status: "audit-failed",
+              }),
+            }),
+          ],
+        },
+      }),
+    );
+  }, 10_000);
+
   it("does not direct-run write-next from ordinary free text", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
@@ -3320,6 +3457,57 @@ describe("createStudioServer daemon lifecycle", () => {
       "开一局",
     );
   });
+
+  it("uses saved agent routes before the selected chat model and fills only unconfigured routes", async () => {
+    await writeFile(
+      join(root, "inkos.json"),
+      JSON.stringify({
+        ...cloneProjectConfig(),
+        modelOverrides: {
+          play: "project-play-model",
+          writer: "project-writer-model",
+          auditor: "project-auditor-model",
+        },
+      }, null, 2),
+      "utf-8",
+    );
+    loadSecretsMock.mockResolvedValueOnce({ services: { google: { apiKey: "google-key" } } });
+    resolveServiceModelMock.mockResolvedValueOnce({
+      model: {
+        id: "gemini-2.5-pro",
+        name: "Gemini 2.5 Pro",
+        provider: "google",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+        api: "openai-completions",
+      },
+      apiKey: "google-key",
+    });
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const response = await app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instruction: "开一个开放世界",
+        sessionId: "agent-session-1",
+        sessionKind: "play",
+        playMode: "open",
+        service: "google",
+        model: "gemini-2.5-pro",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const pipelineConfig = pipelineConfigs.at(-1) as { modelOverrides?: Record<string, unknown> };
+    expect(pipelineConfig.modelOverrides).toMatchObject({
+      play: "project-play-model",
+      writer: "project-writer-model",
+      auditor: "project-auditor-model",
+      planner: expect.objectContaining({ service: "google", model: "gemini-2.5-pro", apiKey: "google-key" }),
+      composer: expect.objectContaining({ service: "google", model: "gemini-2.5-pro", apiKey: "google-key" }),
+    });
+  }, 10_000);
 
   it("passes configured long-form writing review retries into Studio write-next", async () => {
     await writeFile(
@@ -4499,7 +4687,11 @@ describe("createStudioServer daemon lifecycle", () => {
   it("returns Play image generation failures as non-fatal manifest status instead of a network error", async () => {
     generatePlayImageMock.mockResolvedValueOnce({ status: "failed", error: "provider unavailable" });
     await mkdir(join(root, "worlds", "img-world", "runs", "run-1", "projections"), { recursive: true });
-    await writeFile(join(root, "worlds", "img-world", "runs", "run-1", "projections", "scene.md"), "雨夜里，侦探站在冷库门口。", "utf-8");
+    await writeFile(
+      join(root, "worlds", "img-world", "runs", "run-1", "projections", "scene.md"),
+      "At midnight, the detective stands outside the cold-storage door in heavy rain.",
+      "utf-8",
+    );
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
 
@@ -4510,6 +4702,11 @@ describe("createStudioServer daemon lifecycle", () => {
     });
 
     expect(res.status).toBe(200);
+    expect(generatePlayImageMock).toHaveBeenCalledWith(expect.objectContaining({
+      root,
+      key: "scene-turn-0",
+      prompt: expect.stringContaining("the detective stands outside the cold-storage door"),
+    }));
     await expect(res.json()).resolves.toMatchObject({
       key: "scene-turn-0",
       status: "failed",
@@ -4522,6 +4719,104 @@ describe("createStudioServer daemon lifecycle", () => {
     const app = createStudioServer(cloneProjectConfig() as never, root);
     const res = await app.request("http://localhost/api/v1/play/runs/img-world/run-1/images/..%2F..%2Fbook.json");
     expect([400, 404]).toContain(res.status);
+  });
+
+  it("lists generated Play and cover images in the image library", async () => {
+    await mkdir(join(root, "worlds", "img-world", "runs", "run-1", "images"), { recursive: true });
+    await writeFile(join(root, "worlds", "img-world", "world.json"), JSON.stringify({
+      id: "img-world",
+      title: "Image World",
+      premise: "",
+      mode: "open",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }), "utf-8");
+    await writeFile(join(root, "worlds", "img-world", "runs", "run-1", "images", "actor_player.png"), "play-image");
+    await writeFile(join(root, "worlds", "img-world", "runs", "run-1", "images", "manifest.json"), JSON.stringify({
+      actor_player: { status: "ready", file: "actor_player.png" },
+      "scene-turn-2": { status: "failed", error: "provider unavailable" },
+    }), "utf-8");
+    await mkdir(join(root, "covers", "manual-demo"), { recursive: true });
+    await writeFile(join(root, "covers", "manual-demo", "cover.png"), "cover-image");
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const res = await app.request("http://localhost/api/v1/images/library");
+
+    expect(res.status).toBe(200);
+    const json = await res.json() as { items: Array<{ source: string; kind: string; title: string; url?: string; status: string }> };
+    expect(json.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: "play",
+        kind: "actor",
+        title: "actor_player",
+        url: "/api/v1/play/runs/img-world/run-1/images/actor_player.png",
+      }),
+      expect.objectContaining({
+        source: "play",
+        kind: "scene",
+        status: "failed",
+        title: "Turn 2",
+      }),
+      expect.objectContaining({
+        source: "project",
+        kind: "cover",
+        title: "manual-demo",
+        url: "/api/v1/project/files/covers/manual-demo/cover.png",
+      }),
+    ]));
+  });
+
+  it("deletes image library entries from Play manifests and project image files", async () => {
+    await mkdir(join(root, "worlds", "img-world", "runs", "run-1", "images"), { recursive: true });
+    await writeFile(join(root, "worlds", "img-world", "runs", "run-1", "images", "actor_player.png"), "play-image");
+    await writeFile(join(root, "worlds", "img-world", "runs", "run-1", "images", "manifest.json"), JSON.stringify({
+      actor_player: { status: "ready", file: "actor_player.png" },
+    }), "utf-8");
+    await mkdir(join(root, "covers", "manual-demo"), { recursive: true });
+    await writeFile(join(root, "covers", "manual-demo", "cover.png"), "cover-image");
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const playDelete = await app.request(
+      `http://localhost/api/v1/images/library?id=${encodeURIComponent("play:img-world:run-1:actor_player")}`,
+      { method: "DELETE" },
+    );
+    expect(playDelete.status).toBe(200);
+    await expect(access(join(root, "worlds", "img-world", "runs", "run-1", "images", "actor_player.png"))).rejects.toThrow();
+    await expect(readFile(join(root, "worlds", "img-world", "runs", "run-1", "images", "manifest.json"), "utf-8"))
+      .resolves.toBe("{}");
+
+    const coverDelete = await app.request(
+      `http://localhost/api/v1/images/library?id=${encodeURIComponent("project:covers%2Fmanual-demo%2Fcover.png")}`,
+      { method: "DELETE" },
+    );
+    expect(coverDelete.status).toBe(200);
+    await expect(access(join(root, "covers", "manual-demo", "cover.png"))).rejects.toThrow();
+  });
+
+  it("round-trips planner and composer model overrides through project settings", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const overrides = {
+      planner: { service: "custom:Novel API", model: "claude-opus-4-6" },
+      composer: { service: "google", model: "gemini-2.5-pro" },
+    };
+
+    const save = await app.request("http://localhost/api/v1/project/model-overrides", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ overrides }),
+    });
+    expect(save.status).toBe(200);
+
+    const response = await app.request("http://localhost/api/v1/project/model-overrides");
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ overrides });
+
+    const persisted = JSON.parse(await readFile(join(root, "inkos.json"), "utf-8"));
+    expect(persisted.modelOverrides).toEqual(overrides);
   });
 
   it("chapter-review-mode defaults to auto and round-trips a manual setting (C4a)", async () => {
