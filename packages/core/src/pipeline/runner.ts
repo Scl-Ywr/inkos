@@ -92,6 +92,11 @@ const INTERNAL_AGENT_ROUTE_FALLBACKS: Readonly<Record<string, readonly string[]>
   composer: ["writer"],
   "foundation-reviewer": ["architect"],
   "fanfic-canon-importer": ["architect"],
+  "play": ["writer"],
+  "play.actionInterpreter": ["writer"],
+  "play.worldMutator": ["writer"],
+  "play.sceneRenderer": ["writer"],
+  "play.sceneReconciler": ["writer"],
 };
 
 function isSequenceLevelCategory(category: string): boolean {

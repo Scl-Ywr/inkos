@@ -98,10 +98,11 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
     })
       .then((result) => {
         if (cancelled) return;
-        setApiKey(result.apiKey);
-        setDetectedModel(result.detectedModel);
-        setTestModel(result.detectedModel);
-        setDetectedConfig(result.detectedConfig);
+        // Only hydrate if fields are empty (initial load), don't overwrite user edits
+        setApiKey((prev) => prev || result.apiKey);
+        setDetectedModel((prev) => prev || result.detectedModel);
+        setTestModel((prev) => prev || result.detectedModel);
+        setDetectedConfig((prev) => prev ?? result.detectedConfig);
         setStatus(result.status);
       })
       .catch(() => {

@@ -1,6 +1,6 @@
 {
   "name": "inkos",
-  "version": "1.5.4",
+  "version": "1.5.5",
   "private": true,
   "description": "Autonomous AI novel writing CLI agent — 10-agent pipeline that writes, audits, and revises novels with continuity tracking",
   "keywords": [

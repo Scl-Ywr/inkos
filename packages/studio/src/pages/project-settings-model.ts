@@ -43,6 +43,11 @@ export const AGENT_MODEL_ROUTES = [
     label: "导出",
     hint: "整理导出内容，通常可使用默认或轻量模型。",
   },
+  {
+    agent: "play",
+    label: "互动",
+    hint: "开放世界与分支互动场景生成，建议使用创意强的模型。",
+  },
 ] as const;
 
 export type AgentModelRouteKey = typeof AGENT_MODEL_ROUTES[number]["agent"];
