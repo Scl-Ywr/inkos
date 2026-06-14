@@ -290,29 +290,3 @@ jobs:
           test -f node_modules/@actalk/inkos-core/dist/notify/telegram.js || test -f node_modules/@actalk/inkos/node_modules/@actalk/inkos-core/dist/notify/telegram.js
           echo "Release verification passed"
           rm -rf "$TMPDIR"
-
-  github-release:
-    runs-on: ubuntu-latest
-    needs: verify-release
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Generate release notes
-        id: notes
-        run: |
-          PREV_TAG=$(git tag --sort=-creatordate | sed -n '2p' || echo "")
-          if [ -n "$PREV_TAG" ]; then
-            echo "notes<<EOF" >> "$GITHUB_OUTPUT"
-            git log --pretty=format:"- %s (%h)" "$PREV_TAG"..HEAD >> "$GITHUB_OUTPUT"
-            echo "" >> "$GITHUB_OUTPUT"
-            echo "EOF" >> "$GITHUB_OUTPUT"
-          else
-            echo "notes=Initial release" >> "$GITHUB_OUTPUT"
-          fi
-
-      - uses: softprops/action-gh-release@v2
-        with:
-          body: ${{ steps.notes.outputs.notes }}
-          generate_release_notes: true

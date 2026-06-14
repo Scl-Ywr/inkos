@@ -121,6 +121,22 @@ jobs:
             --asset-name "$APK_ASSET_NAME" \
             --channel "${{ github.event.inputs.channel || 'stable' }}"
 
+      - name: Prune stale release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            exit 0
+          fi
+
+          gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' | while IFS= read -r asset; do
+            if [ "$asset" = "$APK_ASSET_NAME" ] || [ "$asset" = "update.json" ]; then
+              continue
+            fi
+            gh release delete-asset "$GITHUB_REF_NAME" "$asset" -y
+          done
+
       - uses: softprops/action-gh-release@v2
         with:
           files: |
