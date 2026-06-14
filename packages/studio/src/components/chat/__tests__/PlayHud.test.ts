@@ -188,6 +188,30 @@ describe("PlayHud buildView", () => {
     expect(buildAutoImageRequests(view, { actors: false, moments: true, inventory: false }, "/scene.png")).toEqual([]);
   });
 
+  it("does not auto-illustrate images the user deleted", () => {
+    const view = buildView({
+      currentState: { turn: 3, mode: "open", premise: "雨夜库房。" },
+      graph: {
+        entities: [
+          { id: "actor_player", type: "actor", label: "守库弟子" },
+          { id: "item_box", type: "item", label: "铜匣" },
+        ],
+        edges: [
+          { id: "edge-hold-box", fromId: "actor_player", type: "持有", toId: "item_box", value: { role: "holding" } },
+        ],
+        stateSlots: [],
+        events: [],
+      },
+    });
+
+    expect(buildAutoImageRequests(
+      view,
+      { actors: true, moments: true, inventory: true },
+      undefined,
+      new Set(["actor_player", "item_box", "scene-turn-3"]),
+    )).toEqual([]);
+  });
+
   it("surfaces a holding's relationship web from its edges, excluding every player edge", () => {
     const view = buildView({
       currentState: { turn: 2, mode: "open", premise: "推理。" },

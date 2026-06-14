@@ -2615,6 +2615,51 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(saveChapterIndexMock).not.toHaveBeenCalled();
   });
 
+  it("saves edited chapter titles to the markdown file, filename, and chapter index", async () => {
+    loadChapterIndexMock.mockResolvedValue([
+      {
+        number: 3,
+        title: "Demo",
+        status: "ready-for-review",
+        wordCount: 4,
+        createdAt: "2026-04-07T00:00:00.000Z",
+        updatedAt: "2026-04-07T00:00:00.000Z",
+        auditIssues: [],
+        lengthWarnings: [],
+      },
+    ]);
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/books/demo-book/chapters/3", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "New Title",
+        content: "# 第3章 Demo\n\nUpdated body.",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      chapterNumber: 3,
+      filename: "0003_New_Title.md",
+    });
+    await expect(readFile(join(root, "books", "demo-book", "chapters", "0003_New_Title.md"), "utf-8"))
+      .resolves.toBe("# 第3章 New Title\n\nUpdated body.");
+    await expect(access(join(root, "books", "demo-book", "chapters", "0003_Demo.md"))).rejects.toThrow();
+    expect(saveChapterIndexMock).toHaveBeenCalledWith("demo-book", [
+      expect.objectContaining({
+        number: 3,
+        title: "New Title",
+        wordCount: expect.any(Number),
+        updatedAt: expect.any(String),
+      }),
+    ]);
+  });
+
   it("routes create requests through the shared structured interaction runtime", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
@@ -2913,6 +2958,63 @@ describe("createStudioServer daemon lifecycle", () => {
       "检查当前状态",
     );
   });
+
+  it("routes explicit project-chat book creation requests through book-create mode", async () => {
+    const orphanChatSession = {
+      sessionId: "agent-session-1",
+      bookId: null,
+      sessionKind: "chat",
+      title: null,
+      messages: [],
+      events: [],
+      draftRounds: [],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const bookCreateSession = {
+      ...orphanChatSession,
+      sessionKind: "book-create",
+    };
+    loadBookSessionMock
+      .mockResolvedValueOnce(orphanChatSession)
+      .mockResolvedValue(bookCreateSession);
+    createAndPersistBookSessionMock.mockResolvedValueOnce(bookCreateSession);
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instruction: "帮我建书",
+        sessionId: "agent-session-1",
+        sessionKind: "chat",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(createAndPersistBookSessionMock).toHaveBeenCalledWith(
+      root,
+      null,
+      "agent-session-1",
+      "book-create",
+    );
+    expect(runAgentSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bookId: null,
+        sessionKind: "book-create",
+        requestedIntent: undefined,
+      }),
+      "帮我建书",
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      session: {
+        sessionId: "agent-session-1",
+        sessionKind: "book-create",
+      },
+    });
+  }, 10_000);
 
   it("executes confirmed create-book action directly without asking the chat model to call tools", async () => {
     loadBookSessionMock.mockResolvedValueOnce({
@@ -4650,6 +4752,7 @@ describe("createStudioServer daemon lifecycle", () => {
       "scene-turn-0": { status: "ready", file: "scene-turn-0.png" },
       "scene-turn-3": { status: "ready", file: "scene-turn-3.png" },
       "scene-turn-4": { status: "failed", error: "provider unavailable" },
+      "scene-turn-5": { status: "deleted" },
       actor_player: { status: "ready", file: "actor_player.png" },
     }, null, 2), "utf-8");
 
@@ -4664,6 +4767,7 @@ describe("createStudioServer daemon lifecycle", () => {
         "scene-turn-0": "/api/v1/play/runs/img-world/run-1/images/scene-turn-0.png",
         "scene-turn-3": "/api/v1/play/runs/img-world/run-1/images/scene-turn-3.png",
       },
+      deletedImageKeys: ["scene-turn-5"],
     });
   });
 
@@ -4735,6 +4839,7 @@ describe("createStudioServer daemon lifecycle", () => {
     await writeFile(join(root, "worlds", "img-world", "runs", "run-1", "images", "manifest.json"), JSON.stringify({
       actor_player: { status: "ready", file: "actor_player.png" },
       "scene-turn-2": { status: "failed", error: "provider unavailable" },
+      "scene-turn-3": { status: "deleted" },
     }), "utf-8");
     await mkdir(join(root, "covers", "manual-demo"), { recursive: true });
     await writeFile(join(root, "covers", "manual-demo", "cover.png"), "cover-image");
@@ -4765,6 +4870,9 @@ describe("createStudioServer daemon lifecycle", () => {
         url: "/api/v1/project/files/covers/manual-demo/cover.png",
       }),
     ]));
+    expect(json.items).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "Turn 3" }),
+    ]));
   });
 
   it("deletes image library entries from Play manifests and project image files", async () => {
@@ -4786,7 +4894,7 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(playDelete.status).toBe(200);
     await expect(access(join(root, "worlds", "img-world", "runs", "run-1", "images", "actor_player.png"))).rejects.toThrow();
     await expect(readFile(join(root, "worlds", "img-world", "runs", "run-1", "images", "manifest.json"), "utf-8"))
-      .resolves.toBe("{}");
+      .resolves.toContain('"status": "deleted"');
 
     const coverDelete = await app.request(
       `http://localhost/api/v1/images/library?id=${encodeURIComponent("project:covers%2Fmanual-demo%2Fcover.png")}`,

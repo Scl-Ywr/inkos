@@ -156,6 +156,30 @@ export function pickProjectChatSessionId(
     ?? null;
 }
 
+export function isExplicitCreateBookInstruction(instruction: string): boolean {
+  const trimmed = instruction.trim();
+  if (!trimmed) return false;
+  if (
+    /[\uFF1F?]\s*$/.test(trimmed)
+    && /(?:\u80FD\u4E0D\u80FD|\u53EF\u4EE5|\u662F\u5426|\u600E\u4E48|\u5982\u4F55|\u5EFA\u8BAE)/u.test(trimmed)
+  ) {
+    return false;
+  }
+
+  const imperative = trimmed.replace(
+    /^(?:\u8BF7|\u9EBB\u70E6|\u5E2E\u6211|\u7ED9\u6211|\u66FF\u6211|\u76F4\u63A5|\u73B0\u5728|\u5F00\u59CB|\u7ACB\u523B|\u9A6C\u4E0A)\s*/u,
+    "",
+  );
+  if (
+    /^(?:\u5EFA\u4E66|\u521B\u5EFA(?:\u4E00?\u672C)?(?:\u4E66|\u4E66\u7C4D|\u5C0F\u8BF4|\u957F\u7BC7|\u8FDE\u8F7D|\u4F5C\u54C1)|\u65B0\u5EFA(?:\u4E00?\u672C)?(?:\u4E66|\u4E66\u7C4D|\u5C0F\u8BF4|\u957F\u7BC7|\u8FDE\u8F7D|\u4F5C\u54C1)|\u751F\u6210(?:\u4E00?\u672C)?(?:\u4E66|\u4E66\u7C4D|\u5C0F\u8BF4|\u957F\u7BC7|\u8FDE\u8F7D|\u4F5C\u54C1))(?:\s|[\uFF0C\u3002,.!\uFF01?\uFF1F;\uFF1B:\uFF1A]|$)/u.test(imperative)
+    || /^(?:\u521B\u5EFA|\u65B0\u5EFA|\u751F\u6210)(?:\u4E00?\u672C)?[\u3400-\u9fffA-Za-z0-9_\-\s]{0,40}(?:\u4E66|\u4E66\u7C4D|\u5C0F\u8BF4|\u957F\u7BC7|\u8FDE\u8F7D|\u4F5C\u54C1)(?:\s|[\uFF0C\u3002,.!\uFF01?\uFF1F;\uFF1B:\uFF1A]|$)/u.test(imperative)
+  ) {
+    return true;
+  }
+
+  return /^(?:please\s+)?(?:create|start|build|make|generate)\s+(?:me\s+)?(?:a\s+)?(?:new\s+)?(?:book|novel|long[-\s]?form|serial)(?:\b|$)/i.test(trimmed);
+}
+
 export function shouldShowPlayChoicePanel(input: {
   readonly playMode?: string | null;
   readonly choiceSetKey?: string | null;

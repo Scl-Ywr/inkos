@@ -382,6 +382,7 @@ async function listPlayGeneratedImages(root: string): Promise<GeneratedImageLibr
       const manifest = await readPlayImageManifest(runDir);
       const manifestStat = await stat(join(runDir, "images", "manifest.json")).catch(() => null);
       for (const [key, entry] of Object.entries(manifest)) {
+        if (entry.status === "deleted") continue;
         const kind = classifyPlayImageKind(key);
         items.push({
           id: encodeLibraryId(["play", world.id, run.id, key]),
@@ -478,6 +479,44 @@ function normalizeStudioPlayMode(value: unknown): PlayMode | undefined {
   } catch {
     throw new ApiError(400, "INVALID_PLAY_MODE", `Invalid playMode: ${String(value)}`);
   }
+}
+
+function isExplicitCreateBookInstruction(instruction: string): boolean {
+  const trimmed = instruction.trim();
+  if (!trimmed) return false;
+  if (
+    /[\uFF1F?]\s*$/.test(trimmed)
+    && /(?:\u80FD\u4E0D\u80FD|\u53EF\u4EE5|\u662F\u5426|\u600E\u4E48|\u5982\u4F55|\u5EFA\u8BAE)/u.test(trimmed)
+  ) {
+    return false;
+  }
+
+  const imperative = trimmed.replace(
+    /^(?:\u8BF7|\u9EBB\u70E6|\u5E2E\u6211|\u7ED9\u6211|\u66FF\u6211|\u76F4\u63A5|\u73B0\u5728|\u5F00\u59CB|\u7ACB\u523B|\u9A6C\u4E0A)\s*/u,
+    "",
+  );
+  if (
+    /^(?:\u5EFA\u4E66|\u521B\u5EFA(?:\u4E00?\u672C)?(?:\u4E66|\u4E66\u7C4D|\u5C0F\u8BF4|\u957F\u7BC7|\u8FDE\u8F7D|\u4F5C\u54C1)|\u65B0\u5EFA(?:\u4E00?\u672C)?(?:\u4E66|\u4E66\u7C4D|\u5C0F\u8BF4|\u957F\u7BC7|\u8FDE\u8F7D|\u4F5C\u54C1)|\u751F\u6210(?:\u4E00?\u672C)?(?:\u4E66|\u4E66\u7C4D|\u5C0F\u8BF4|\u957F\u7BC7|\u8FDE\u8F7D|\u4F5C\u54C1))(?:\s|[\uFF0C\u3002,.!\uFF01?\uFF1F;\uFF1B:\uFF1A]|$)/u.test(imperative)
+    || /^(?:\u521B\u5EFA|\u65B0\u5EFA|\u751F\u6210)(?:\u4E00?\u672C)?[\u3400-\u9fffA-Za-z0-9_\-\s]{0,40}(?:\u4E66|\u4E66\u7C4D|\u5C0F\u8BF4|\u957F\u7BC7|\u8FDE\u8F7D|\u4F5C\u54C1)(?:\s|[\uFF0C\u3002,.!\uFF01?\uFF1F;\uFF1B:\uFF1A]|$)/u.test(imperative)
+  ) {
+    return true;
+  }
+
+  return /^(?:please\s+)?(?:create|start|build|make|generate)\s+(?:me\s+)?(?:a\s+)?(?:new\s+)?(?:book|novel|long[-\s]?form|serial)(?:\b|$)/i.test(trimmed);
+}
+
+function shouldRouteChatCreateBookToBookCreate(args: {
+  readonly instruction: string;
+  readonly agentBookId: string | null | undefined;
+  readonly sessionKind: SessionKind;
+  readonly actionSource: ActionSource;
+  readonly requestedIntent?: RequestedIntent;
+}): boolean {
+  return !args.agentBookId
+    && args.sessionKind === "chat"
+    && args.actionSource === "free-text"
+    && !args.requestedIntent
+    && isExplicitCreateBookInstruction(args.instruction);
 }
 
 function shouldRunDirectWriteNext(args: {
@@ -589,6 +628,34 @@ async function findChapterFile(root: string, bookId: string, chapterNumber: numb
   const files = await readdir(chaptersDir).catch(() => []);
   const match = files.find((file) => file.startsWith(`${padded}_`) && file.endsWith(".md"));
   return match ? join(chaptersDir, match) : null;
+}
+
+function sanitizeChapterFilenameTitle(title: string): string {
+  return title
+    .replace(/[/\\?%*:|"<>]/g, "")
+    .replace(/\s+/g, "_")
+    .slice(0, 50)
+    || "Untitled";
+}
+
+function buildChapterHeading(existingHeading: string | undefined, chapterNumber: number, title: string): string {
+  if (existingHeading && /^#\s*第\s*\d+\s*章/.test(existingHeading)) {
+    return `# 第${chapterNumber}章 ${title}`;
+  }
+  if (existingHeading && /^#\s*Chapter\s+\d+/i.test(existingHeading)) {
+    return `# Chapter ${chapterNumber}: ${title}`;
+  }
+  return `# ${title}`;
+}
+
+function replaceChapterTitleInMarkdown(content: string, chapterNumber: number, title: string): string {
+  const lines = content.split("\n");
+  const headingIndex = lines.findIndex((line) => line.startsWith("# "));
+  if (headingIndex >= 0) {
+    lines[headingIndex] = buildChapterHeading(lines[headingIndex], chapterNumber, title);
+    return lines.join("\n");
+  }
+  return `${buildChapterHeading(undefined, chapterNumber, title)}\n\n${content}`;
 }
 
 function parseBookChapterFromRelativePath(rel: string): { bookId: string; chapterNumber: number } | null {
@@ -2406,7 +2473,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     const num = parseInt(c.req.param("num"), 10);
     const bookDir = state.bookDir(id);
     const chaptersDir = join(bookDir, "chapters");
-    const { content } = await c.req.json<{ content: string }>();
+    const { content, title } = await c.req.json<{ content: string; title?: string }>();
+    const nextTitle = title?.trim();
+    if (title !== undefined && !nextTitle) {
+      return c.json({ error: "Chapter title cannot be empty" }, 400);
+    }
 
     try {
       const files = await readdir(chaptersDir);
@@ -2414,9 +2485,35 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
       if (!match) return c.json({ error: "Chapter not found" }, 404);
 
-      const { writeFile: writeFileFs } = await import("node:fs/promises");
-      await writeFileFs(join(chaptersDir, match), content, "utf-8");
-      return c.json({ ok: true, chapterNumber: num });
+      const currentPath = join(chaptersDir, match);
+      const nextContent = nextTitle
+        ? replaceChapterTitleInMarkdown(content, num, nextTitle)
+        : content;
+      const nextFilename = nextTitle
+        ? `${paddedNum}_${sanitizeChapterFilenameTitle(nextTitle)}.md`
+        : match;
+      const nextPath = join(chaptersDir, nextFilename);
+
+      await writeFile(nextPath, nextContent, "utf-8");
+      if (nextFilename !== match && nextPath.toLowerCase() !== currentPath.toLowerCase()) {
+        await rm(currentPath, { force: true });
+      }
+
+      if (nextTitle) {
+        const now = new Date().toISOString();
+        const index = await state.loadChapterIndex(id);
+        const updated = index.map((chapter) => chapter.number === num
+          ? {
+              ...chapter,
+              title: nextTitle,
+              wordCount: countContentUnits(nextContent),
+              updatedAt: now,
+            }
+          : chapter);
+        await state.saveChapterIndex(id, updated);
+      }
+
+      return c.json({ ok: true, chapterNumber: num, filename: nextFilename });
     } catch (e) {
       return c.json({ error: String(e) }, 500);
     }
@@ -3464,6 +3561,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
         .filter(([key, entry]) => key.startsWith("scene-turn-") && entry.status === "ready" && entry.file)
         .map(([key, entry]) => [key, imageUrlFor(entry.file)]),
     );
+    const deletedImageKeys = Object.entries(manifest)
+      .filter(([, entry]) => entry.status === "deleted")
+      .map(([key]) => key);
     const entitiesWithImages = (graph.entities ?? []).map((entity: { id: string }) => {
       const entry = manifest[entity.id];
       return entry?.status === "ready" && entry.file
@@ -3485,6 +3585,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       graph: { ...graph, entities: entitiesWithImages },
       imageSettings,
       sceneImageUrls,
+      deletedImageKeys,
       ...(sceneImageUrl ? { sceneImageUrl } : {}),
     });
   });
@@ -3581,7 +3682,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       const content = await readFileFs(join(runDir, "images", file));
       const ext = file.split(".").pop()?.toLowerCase() ?? "";
       const contentType = ext === "jpg" || ext === "jpeg" ? "image/jpeg" : "image/png";
-      return new Response(content, { headers: { "Content-Type": contentType } });
+      return new Response(content, { headers: { "Content-Type": contentType, "Cache-Control": "no-store" } });
     } catch {
       return c.notFound();
     }
@@ -3606,7 +3707,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       const [, worldId, runId, key] = parts;
       if (!worldId || !runId || !key) return c.json({ error: "Invalid image id" }, 400);
       const store = new PlayStore(root);
-      await deletePlayImageEntry(store.runDir(worldId, runId), key);
+      await deletePlayImageEntry(store.runDir(worldId, runId), key, { rememberDeleted: true });
       return c.json({ ok: true });
     }
     if (source === "project") {
@@ -3805,10 +3906,17 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
         );
       }
       const agentBookId = requestedActiveBookId ?? persistedBookId;
-      const sessionKind = normalizeStudioSessionKind(
+      const requestedSessionKind = normalizeStudioSessionKind(
         reqSessionKind,
         bookSession.sessionKind ?? (agentBookId ? "book" : "chat"),
       );
+      const sessionKind = shouldRouteChatCreateBookToBookCreate({
+        instruction,
+        agentBookId,
+        sessionKind: requestedSessionKind,
+        actionSource,
+        requestedIntent,
+      }) ? "book-create" : requestedSessionKind;
       if (bookSession.sessionKind !== sessionKind || (playMode && bookSession.playMode !== playMode)) {
         const updatedSession = await createAndPersistBookSession(
           root,

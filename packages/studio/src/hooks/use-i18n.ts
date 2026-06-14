@@ -52,6 +52,7 @@ const strings = {
   "reader.characters": { zh: "字符", en: "characters" },
   "reader.edit": { zh: "编辑", en: "Edit" },
   "reader.preview": { zh: "预览", en: "Preview" },
+  "reader.chapterTitle": { zh: "章节标题", en: "Chapter title" },
 
   // Book Create
   "create.title": { zh: "创建书籍", en: "Create Book" },

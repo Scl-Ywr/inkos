@@ -104,6 +104,16 @@ describe("play image manifest", () => {
     expect(await readPlayImageManifest(runDir)).toEqual({});
     await expect(access(join(runDir, "images", "actor-1.png"))).rejects.toThrow();
   });
+
+  it("can remember a user-deleted entry without keeping its image file", async () => {
+    await setPlayImageEntry(runDir, "actor-1", { status: "ready", file: "actor-1.png" });
+    await writeFile(join(runDir, "images", "actor-1.png"), "image");
+
+    await deletePlayImageEntry(runDir, "actor-1", { rememberDeleted: true });
+
+    expect(await readPlayImageManifest(runDir)).toEqual({ "actor-1": { status: "deleted" } });
+    await expect(access(join(runDir, "images", "actor-1.png"))).rejects.toThrow();
+  });
 });
 
 describe("play image settings", () => {

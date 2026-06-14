@@ -71,6 +71,7 @@ interface PlayRunResponse {
   readonly graph?: PlayGraph;
   readonly imageSettings?: PlayImageSettings;
   readonly sceneImageUrl?: string;
+  readonly deletedImageKeys?: ReadonlyArray<string>;
 }
 interface CoverConfigResponse {
   readonly service?: string | null;
@@ -151,21 +152,23 @@ export function buildAutoImageRequests(
   view: HudView | null,
   settings: PlayImageSettings,
   sceneImageUrl?: string,
+  deletedImageKeys: ReadonlySet<string> = new Set(),
 ): ReadonlyArray<AutoImageRequest> {
   if (!view) return [];
   const requests: AutoImageRequest[] = [];
   if (settings.actors) {
     view.actors.forEach((row) => {
-      if (!row.imageUrl) requests.push({ key: row.id, body: { target: "entity", entityId: row.id } });
+      if (!row.imageUrl && !deletedImageKeys.has(row.id)) requests.push({ key: row.id, body: { target: "entity", entityId: row.id } });
     });
   }
   if (settings.inventory) {
     view.holdings.forEach((row) => {
-      if (!row.imageUrl) requests.push({ key: row.id, body: { target: "entity", entityId: row.id } });
+      if (!row.imageUrl && !deletedImageKeys.has(row.id)) requests.push({ key: row.id, body: { target: "entity", entityId: row.id } });
     });
   }
-  if (settings.moments && view.turn != null && !sceneImageUrl) {
-    requests.push({ key: `scene-turn-${view.turn}`, body: { target: "scene" } });
+  const sceneKey = view.turn == null ? null : `scene-turn-${view.turn}`;
+  if (settings.moments && sceneKey && !sceneImageUrl && !deletedImageKeys.has(sceneKey)) {
+    requests.push({ key: sceneKey, body: { target: "scene" } });
   }
   return requests;
 }
@@ -403,6 +406,7 @@ export function PlayHud(props: {
 
   const view = useMemo(() => buildView(run), [run]);
   const effectiveImageSettings = props.imageSettings ?? settings;
+  const deletedImageKeys = useMemo(() => new Set(run?.deletedImageKeys ?? []), [run?.deletedImageKeys]);
   // The selected holding is looked up fresh from the current view, so if it
   // disappears on the next turn the panel falls back to the list automatically.
   const selectedHolding = view?.holdings.find((h) => h.id === selectedHoldingId) ?? null;
@@ -413,9 +417,9 @@ export function PlayHud(props: {
   // images appear on the next refresh.
   useEffect(() => {
     if (!coverReady || !view) return;
-    buildAutoImageRequests(view, effectiveImageSettings, run?.sceneImageUrl)
+    buildAutoImageRequests(view, effectiveImageSettings, run?.sceneImageUrl, deletedImageKeys)
       .forEach((request) => void generate(request.key, request.body));
-  }, [coverReady, effectiveImageSettings, view, run?.sceneImageUrl, generate]);
+  }, [coverReady, effectiveImageSettings, view, run?.sceneImageUrl, deletedImageKeys, generate]);
 
   const title = props.sessionTitle?.trim() || run?.title?.trim() || (isZh ? "互动世界" : "Play World");
 

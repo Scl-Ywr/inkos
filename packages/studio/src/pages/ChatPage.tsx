@@ -52,6 +52,7 @@ import {
   filterModelGroups,
   getBookCreateSessionId,
   getProjectChatSessionId,
+  isExplicitCreateBookInstruction,
   pickProjectChatSessionId,
   pickModelSelection,
   setBookCreateSessionId,
@@ -66,6 +67,7 @@ import {
 interface Nav {
   toDashboard: () => void;
   toBook: (id: string) => void;
+  toBookCreate: () => void;
   toServices: () => void;
   toImport: (tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation") => void;
   toStyle: () => void;
@@ -519,6 +521,18 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     if (!activeSessionId) return;
     autoScrollPinnedRef.current = true;
     setFollowingLatest(true);
+    if (!activeBookId && mode === "project-chat" && isExplicitCreateBookInstruction(text)) {
+      void (async () => {
+        const targetSessionId = await createSession(null, "book-create");
+        setBookCreateSessionId(targetSessionId);
+        nav.toBookCreate();
+        await sendMessage(targetSessionId, text, {
+          sessionKind: "book-create",
+          actionSource: "free-text",
+        });
+      })();
+      return;
+    }
     void sendMessage(activeSessionId, text, {
       activeBookId,
       sessionKind: currentSessionKind,

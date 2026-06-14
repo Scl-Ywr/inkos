@@ -34,6 +34,13 @@ interface Nav {
   toDashboard: () => void;
 }
 
+function stripChapterHeadingPrefix(heading: string, chapterNumber: number): string {
+  return heading
+    .replace(new RegExp(`^第\\s*${chapterNumber}\\s*章[\\s:：、.-]*`), "")
+    .replace(new RegExp(`^Chapter\\s+${chapterNumber}\\s*[:：.-]?\\s*`, "i"), "")
+    .trim();
+}
+
 export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   bookId: string;
   chapterNumber: number;
@@ -46,29 +53,40 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
     `/books/${bookId}/chapters/${chapterNumber}`,
   );
   const [editing, setEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
 
   const handleStartEdit = () => {
     if (!data) return;
+    const titleLine = data.content.split("\n").find((l) => l.startsWith("# "));
+    const heading = titleLine?.replace(/^#\s*/, "") ?? `Chapter ${chapterNumber}`;
+    setEditTitle(stripChapterHeadingPrefix(heading, chapterNumber) || heading);
     setEditContent(data.content);
     setEditing(true);
   };
 
   const handleCancelEdit = () => {
     setEditing(false);
+    setEditTitle("");
     setEditContent("");
   };
 
   const handleSave = async () => {
+    const title = editTitle.trim();
+    if (!title) {
+      await appAlert({ title: "保存失败", message: "章节标题不能为空", tone: "danger" });
+      return;
+    }
     setSaving(true);
     try {
       await fetchJson(`/books/${bookId}/chapters/${chapterNumber}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: editContent }),
+        body: JSON.stringify({ content: editContent, title }),
       });
       setEditing(false);
+      setEditTitle("");
       refetch();
     } catch (e) {
       await appAlert({ title: "保存失败", message: e instanceof Error ? e.message : "Save failed", tone: "danger" });
@@ -244,9 +262,23 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
             <BookOpen size={20} />
             <div className="h-px w-12 bg-border/40" />
           </div>
-          <h1 className="block w-full break-words px-1 text-3xl font-serif font-medium italic text-foreground tracking-normal leading-tight md:text-5xl">
-            {title}
-          </h1>
+          {editing ? (
+            <label className="block w-full max-w-2xl text-left">
+              <span className="mb-2 block text-xs font-bold uppercase tracking-[0.2em] text-muted-foreground/60">
+                {t("reader.chapterTitle")}
+              </span>
+              <input
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                className="block w-full rounded-xl border border-border/40 bg-background/60 px-4 py-3 text-center font-serif text-2xl font-medium text-foreground shadow-sm outline-none transition-all focus:border-primary/50 focus:ring-2 focus:ring-primary/10 md:text-4xl"
+                autoFocus
+              />
+            </label>
+          ) : (
+            <h1 className="block w-full break-words px-1 text-3xl font-serif font-medium italic text-foreground tracking-normal leading-tight md:text-5xl">
+              {title}
+            </h1>
+          )}
           <div className="mt-8 flex items-center justify-center gap-4 text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/60">
             <span>{t("reader.manuscriptPage")}</span>
             <span className="text-border">·</span>
@@ -259,7 +291,6 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
             value={editContent}
             onChange={(e) => setEditContent(e.target.value)}
             className="w-full min-h-[78dvh] bg-transparent font-serif text-base leading-[1.8] text-foreground/90 focus:outline-none resize-y border border-border/30 rounded-lg p-4 focus:border-primary/40 focus:ring-2 focus:ring-primary/10 transition-all sm:min-h-[72vh] sm:p-6 sm:text-lg"
-            autoFocus
           />
         ) : (
           <article className="prose prose-zinc dark:prose-invert max-w-none">

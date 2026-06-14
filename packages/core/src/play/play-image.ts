@@ -86,7 +86,7 @@ export function buildPlaySceneImagePrompt(sceneText: string, worldPremise?: Play
   ].filter(Boolean).join("\n");
 }
 
-export type PlayImageStatus = "ready" | "failed";
+export type PlayImageStatus = "ready" | "failed" | "deleted";
 
 export interface PlayImageEntry {
   readonly status: PlayImageStatus;
@@ -141,13 +141,21 @@ export async function setPlayImageEntry(
   return next;
 }
 
-export async function deletePlayImageEntry(runDir: string, key: string): Promise<PlayImageManifest> {
+export async function deletePlayImageEntry(
+  runDir: string,
+  key: string,
+  options?: { readonly rememberDeleted?: boolean },
+): Promise<PlayImageManifest> {
   const current = await readPlayImageManifest(runDir);
   const entry = current[key];
   if (!entry) return current;
 
   const next = { ...current };
-  delete next[key];
+  if (options?.rememberDeleted) {
+    next[key] = { status: "deleted" };
+  } else {
+    delete next[key];
+  }
   if (entry.file && !entry.file.includes("/") && !entry.file.includes("\\") && !entry.file.includes("\0")) {
     await rm(join(runDir, "images", entry.file), { force: true });
   }

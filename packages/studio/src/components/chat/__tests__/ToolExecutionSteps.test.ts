@@ -273,6 +273,19 @@ describe("groupChronologically", () => {
     expect(buildPlayRunStatusUrl(details)).toBe("/api/v1/play/runs/rain-teahouse/main");
   });
 
+  it("does not render stale direct scene image urls after the run marks them deleted", () => {
+    const details = {
+      kind: "play_turn_advanced" as const,
+      worldId: "rain-teahouse",
+      runId: "main",
+      turn: 3,
+      sceneImageUrl: "/api/v1/play/runs/rain-teahouse/main/images/scene-turn-3.png",
+      sceneText: "你翻开账本。",
+    };
+
+    expect(buildPlaySceneImageUrl(details, { deletedImageKeys: ["scene-turn-3"] })).toBeNull();
+  });
+
   it("extracts play edit details", () => {
     const exec = makeExec({
       id: "play-edit-1",

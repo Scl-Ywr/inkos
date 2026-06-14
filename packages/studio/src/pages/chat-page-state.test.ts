@@ -5,6 +5,7 @@ import {
   filterModelGroups,
   getBookCreateSessionId,
   getProjectChatSessionId,
+  isExplicitCreateBookInstruction,
   pickModelSelection,
   pickProjectChatSessionId,
   setBookCreateSessionId,
@@ -244,6 +245,19 @@ describe("pickProjectChatSessionId", () => {
 
   it("returns null when there is no project chat session", () => {
     expect(pickProjectChatSessionId([])).toBeNull();
+  });
+});
+
+describe("isExplicitCreateBookInstruction", () => {
+  it("recognizes direct book creation commands", () => {
+    expect(isExplicitCreateBookInstruction("帮我建书")).toBe(true);
+    expect(isExplicitCreateBookInstruction("创建一本都市悬疑小说")).toBe(true);
+    expect(isExplicitCreateBookInstruction("create a new novel")).toBe(true);
+  });
+
+  it("does not treat writing advice questions as create-book commands", () => {
+    expect(isExplicitCreateBookInstruction("怎么建书？")).toBe(false);
+    expect(isExplicitCreateBookInstruction("可以给我一些建书建议吗？")).toBe(false);
   });
 });
 

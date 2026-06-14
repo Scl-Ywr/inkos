@@ -434,6 +434,7 @@ export function getPlayToolDetails(exec: ToolExecution): PlayToolDetails | null 
 type PlayRunImageIndex = {
   readonly sceneImageUrls?: Record<string, string>;
   readonly sceneImageUrl?: string;
+  readonly deletedImageKeys?: ReadonlyArray<string>;
 };
 
 function sceneImageKey(details: PlayToolDetails): string | null {
@@ -441,10 +442,11 @@ function sceneImageKey(details: PlayToolDetails): string | null {
 }
 
 export function buildPlaySceneImageUrl(details: PlayToolDetails, run?: PlayRunImageIndex | null): string | null {
+  const key = sceneImageKey(details);
+  if (key && run?.deletedImageKeys?.includes(key)) return null;
   if (details.sceneImageUrl) {
     return buildApiUrl(details.sceneImageUrl);
   }
-  const key = sceneImageKey(details);
   const fromIndex = key ? run?.sceneImageUrls?.[key] : undefined;
   if (fromIndex) return buildApiUrl(fromIndex);
   if (key === "scene-turn-0" && run?.sceneImageUrl) return buildApiUrl(run.sceneImageUrl);
@@ -459,15 +461,24 @@ export function buildPlayRunStatusUrl(details: PlayToolDetails): string | null {
 }
 
 function PlaySceneImagePreview({ details }: { details: PlayToolDetails }) {
-  const runUrl = useMemo(() => buildPlayRunStatusUrl(details), [details]);
-  const directUrl = useMemo(() => buildPlaySceneImageUrl(details), [details]);
+  const turn = details.turn == null ? null : Math.trunc(details.turn);
+  const runUrl = useMemo(() => {
+    if (!details.worldId || !details.runId || turn == null) return null;
+    return buildApiUrl(
+      `/play/runs/${encodeURIComponent(details.worldId)}/${encodeURIComponent(details.runId)}`,
+    );
+  }, [details.worldId, details.runId, turn]);
+  const directUrl = useMemo(
+    () => buildPlaySceneImageUrl(details),
+    [details.sceneImageUrl, turn],
+  );
   const [readyUrl, setReadyUrl] = useState<string | null>(null);
 
   useEffect(() => {
-    setReadyUrl(null);
     if (directUrl) {
       setReadyUrl(directUrl);
-      return;
+    } else {
+      setReadyUrl(null);
     }
     if (!runUrl) return;
     let cancelled = false;
@@ -481,10 +492,12 @@ function PlaySceneImagePreview({ details }: { details: PlayToolDetails }) {
         if (response.ok) {
           const data = await response.json() as PlayRunImageIndex;
           const url = buildPlaySceneImageUrl(details, data);
-          if (url && !cancelled) {
+          if (cancelled) return;
+          if (url) {
             setReadyUrl(url);
             return;
           }
+          setReadyUrl(null);
         }
       } catch {
         // The run may not exist yet, or the image may still be generating.
@@ -501,7 +514,7 @@ function PlaySceneImagePreview({ details }: { details: PlayToolDetails }) {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [details, directUrl, runUrl]);
+  }, [details.worldId, details.runId, details.sceneImageUrl, turn, directUrl, runUrl]);
 
   if (!readyUrl) return null;
 
