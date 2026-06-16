@@ -2,6 +2,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { detectFormat } from "headroom-ai";
 import { createHash } from "node:crypto";
+import { estimateTokens } from "@actalk/inkos-core";
+import { compressHeadroomWithPython } from "./python-runtime.js";
 
 const REQUIRED_TOOLS = ["headroom_compress", "headroom_retrieve", "headroom_stats"] as const;
 const DEFAULT_TIMEOUT_MS = 8_000;
@@ -127,12 +129,6 @@ function cleanProcessError(command: string, message: string, stderr: string): st
   return [message, looksLikeMojibake(stderr) ? "" : stderr].filter(Boolean).join(" | ").slice(0, 2_000);
 }
 
-function estimateTokens(value: string): number {
-  const cjk = (value.match(/[\u3400-\u9fff]/g) ?? []).length;
-  const other = value.length - cjk;
-  return Math.max(1, Math.ceil(cjk / 1.7 + other / 4));
-}
-
 function bundledCompress(content: string): HeadroomCompressionResult {
   detectFormat([{ role: "user", content }]);
   const lines = content.split(/\r?\n/);
@@ -215,7 +211,17 @@ export class HeadroomMcpManager {
     if (!this.enabled || !content.trim()) return null;
     this.lastCompressionAt = new Date().toISOString();
     if (this.mode === "bundled") {
-      const result = bundledCompress(content);
+      const pythonResult = await compressHeadroomWithPython(content).catch(() => null);
+      const result: HeadroomCompressionResult = pythonResult?.ok && pythonResult.compressed.trim()
+        ? {
+            compressed: pythonResult.compressed,
+            ...(pythonResult.hash ? { hash: pythonResult.hash } : {}),
+            ...(pythonResult.originalTokens !== undefined ? { originalTokens: pythonResult.originalTokens } : {}),
+            ...(pythonResult.compressedTokens !== undefined ? { compressedTokens: pythonResult.compressedTokens } : {}),
+            ...(pythonResult.savingsPercent !== undefined ? { savingsPercent: pythonResult.savingsPercent } : {}),
+            transforms: pythonResult.transforms.length > 0 ? pythonResult.transforms : ["android-python-headroom"],
+          }
+        : bundledCompress(content);
       this.tools = [...REQUIRED_TOOLS];
       this.sessionCompressions += 1;
       this.sessionOriginalTokens += result.originalTokens ?? 0;
@@ -318,7 +324,7 @@ export class HeadroomMcpManager {
       this.transport = null;
       if (this.state === "online") this.state = "offline";
     };
-    const client = new Client({ name: "inkos-studio", version: "1.5.9" });
+    const client = new Client({ name: "inkos-studio", version: "1.6.0" });
     await client.connect(transport, { timeout: this.timeoutMs });
     this.client = client;
     this.transport = transport;

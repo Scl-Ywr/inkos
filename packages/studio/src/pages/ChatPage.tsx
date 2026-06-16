@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo, useState } from "react";
+import { useRef, useEffect, useMemo, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
@@ -158,9 +158,20 @@ interface WallpaperUploadResponse {
   readonly item: WallpaperLibraryItem;
 }
 
+interface KnowledgeSourceOption {
+  readonly id: string;
+  readonly name: string;
+  readonly chunkCount?: number;
+  readonly charCount?: number;
+}
+
+interface KnowledgeLibraryPayload {
+  readonly sources?: ReadonlyArray<KnowledgeSourceOption>;
+}
+
 // -- Component --
 
-export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-create", nav, theme, t, sse: _sse }: ChatPageProps) {
+export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-create", nav, theme, t, sse }: ChatPageProps) {
   // -- Store selectors --
   const messages = useChatStore(chatSelectors.activeMessages);
   const activeSession = useChatStore(chatSelectors.activeSession);
@@ -292,6 +303,10 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   const [wallpaperHistoryLoading, setWallpaperHistoryLoading] = useState(false);
   const [wallpaperUploading, setWallpaperUploading] = useState(false);
   const [wallpaperName, setWallpaperName] = useState("");
+  const [knowledgeEnabled, setKnowledgeEnabled] = useState(true);
+  const [knowledgeSourceId, setKnowledgeSourceId] = useState("all");
+  const [knowledgeSources, setKnowledgeSources] = useState<ReadonlyArray<KnowledgeSourceOption>>([]);
+  const [knowledgeLoading, setKnowledgeLoading] = useState(false);
   const worldPanelInsetClass = currentSessionKind === "play" && worldPanelOpen ? "lg:pr-[380px]" : "";
 
   useEffect(() => {
@@ -326,6 +341,32 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     };
   }, [backgroundMenuOpen]);
 
+  useEffect(() => {
+    if (!activeBookId || currentSessionKind !== "book") {
+      setKnowledgeSources([]);
+      setKnowledgeSourceId("all");
+      return;
+    }
+    let active = true;
+    setKnowledgeLoading(true);
+    void fetchJson<KnowledgeLibraryPayload>(`/books/${encodeURIComponent(activeBookId)}/knowledge`)
+      .then((payload) => {
+        if (!active) return;
+        const sources = payload.sources ?? [];
+        setKnowledgeSources(sources);
+        setKnowledgeSourceId((current) => current === "all" || sources.some((source) => source.id === current) ? current : "all");
+      })
+      .catch(() => {
+        if (active) setKnowledgeSources([]);
+      })
+      .finally(() => {
+        if (active) setKnowledgeLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeBookId, currentSessionKind]);
+
   // Derived: is the assistant currently streaming/thinking/executing tools?
   const isStreaming = useMemo(() => {
     const last = messages[messages.length - 1];
@@ -341,6 +382,42 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     if (!usage || usage.totalTokens <= 0) return null;
     return `${usage.estimated ? "约 " : ""}${usage.totalTokens.toLocaleString()} tokens`;
   }, [messages]);
+
+  const selectedKnowledgeSource = useMemo(
+    () => knowledgeSources.find((source) => source.id === knowledgeSourceId) ?? null,
+    [knowledgeSourceId, knowledgeSources],
+  );
+  const knowledgeSourceLabel = knowledgeSourceId === "all"
+    ? knowledgeLoading
+      ? (isZh ? "读取资料中..." : "Loading sources...")
+      : (isZh ? "自动检索全部资料" : "Search all sources")
+    : (selectedKnowledgeSource?.name ?? (isZh ? "已选资料" : "Selected source"));
+  const knowledgeStatusLabel = knowledgeEnabled
+    ? knowledgeSourceId === "all"
+      ? (isZh ? `${knowledgeSources.length} 份资料` : `${knowledgeSources.length} sources`)
+      : (selectedKnowledgeSource?.chunkCount ? `${selectedKnowledgeSource.chunkCount} chunks` : (isZh ? "单份资料" : "Single source"))
+    : (isZh ? "未注入" : "Off");
+  const compactTokenSavingsLabel = tokenSavingsLabel
+    ? tokenSavingsLabel.includes("enabled") || tokenSavingsLabel.includes("启用")
+      ? (isZh ? "Token 优化" : "Token on")
+      : tokenSavingsLabel
+    : null;
+
+  const latestTokenSavingsEventAt = useMemo(() => {
+    for (let index = sse.messages.length - 1; index >= 0; index -= 1) {
+      const event = sse.messages[index]?.event;
+      if (event === "context:compression"
+        || event === "agent:complete"
+        || event === "write:complete"
+        || event === "draft:complete"
+        || event === "audit:complete"
+        || event === "revise:complete"
+        || event === "rewrite:complete") {
+        return `${event}:${index}`;
+      }
+    }
+    return null;
+  }, [sse.messages]);
 
   // -- Model picker: read raw state, derive with useMemo (stable refs) --
   const services = useServiceStore((s) => s.services);
@@ -359,12 +436,9 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     void fetchBankModels();
     void fetchCustomModels();
   }, [fetchBankModels, fetchCustomModels]);
-  useEffect(() => {
-    let cancelled = false;
-    const refresh = async () => {
+  const refreshTokenSavings = useCallback(async () => {
       try {
         const payload = await fetchJson<TokenSavingsTelemetryPayload>("/runtime/token-savings");
-        if (cancelled) return;
         const telemetry = payload.telemetry;
         if (!telemetry) {
           setTokenSavingsLabel(null);
@@ -377,27 +451,37 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
         } else if (telemetry.ccrBlocksCompressed > 0) {
           setTokenSavingsLabel(`累计压缩 ${telemetry.ccrBlocksCompressed} 块 · 估算节省 ${saved.toLocaleString()}`);
         } else {
-          setTokenSavingsLabel("Token 节省待触发");
+          setTokenSavingsLabel(
+            isZh
+              ? "Token 优化已启用（当前会话尚未触发压缩）"
+              : "Token optimization enabled (no compression triggered yet)",
+          );
         }
       } catch {
-        if (!cancelled) setTokenSavingsLabel(null);
+        setTokenSavingsLabel(null);
       }
-    };
+  }, [isZh]);
+  useEffect(() => {
+    void refreshTokenSavings();
     const refreshWhenVisible = () => {
       if (document.visibilityState !== "visible") return;
-      void refresh();
+      void refreshTokenSavings();
     };
-    void refresh();
-    const id = window.setInterval(refreshWhenVisible, 10_000);
     document.addEventListener("visibilitychange", refreshWhenVisible);
     window.addEventListener("focus", refreshWhenVisible);
     return () => {
-      cancelled = true;
       document.removeEventListener("visibilitychange", refreshWhenVisible);
       window.removeEventListener("focus", refreshWhenVisible);
-      window.clearInterval(id);
     };
-  }, []);
+  }, [refreshTokenSavings]);
+  useEffect(() => {
+    if (!latestTokenSavingsEventAt) return;
+    void refreshTokenSavings();
+  }, [latestTokenSavingsEventAt, refreshTokenSavings]);
+  useEffect(() => {
+    if (!sse.connected) return;
+    void refreshTokenSavings();
+  }, [refreshTokenSavings, sse.connected]);
   useEffect(() => {
     let cancelled = false;
 
@@ -593,6 +677,17 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     };
   }, [activeBookId, activateSession, createSession, loadSessionDetail, loadSessionList, mode]);
 
+  const buildWriteNextActionPayload = () => ({
+    writeNext: {
+      knowledge: knowledgeEnabled
+        ? {
+            enabled: true,
+            ...(knowledgeSourceId !== "all" ? { sourceIds: [knowledgeSourceId] } : {}),
+          }
+        : { enabled: false },
+    },
+  });
+
   const onSend = (text: string) => {
     if (!activeSessionId) return;
     autoScrollPinnedRef.current = true;
@@ -614,6 +709,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
       sessionKind: currentSessionKind,
       playMode,
       actionSource: "free-text",
+      ...(activeBookId && currentSessionKind === "book" ? { actionPayload: buildWriteNextActionPayload() } : {}),
     }).finally(() => {
       window.setTimeout(() => void refreshChapterHealth(), 250);
     });
@@ -666,6 +762,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
       sessionKind: currentSessionKind,
       actionSource: "quick-action",
       requestedIntent,
+      ...(requestedIntent === "write_next" ? { actionPayload: buildWriteNextActionPayload() } : {}),
     });
   };
 
@@ -1174,11 +1271,66 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
       {hasBook && !showChoicePanel && (
         <div className={`relative z-10 shrink-0 transition-[padding] duration-200 ${worldPanelInsetClass}`}>
           <div className="mx-auto w-full max-w-5xl px-2.5 sm:px-4">
-            <QuickActions
-              onAction={handleQuickAction}
-              disabled={loading || !activeSessionId}
-              isZh={isZh}
-            />
+            <div className="legacy-chat-toolbar mb-2 flex items-center gap-2 overflow-x-auto rounded-2xl border border-border/45 bg-card/75 px-2.5 py-2 shadow-sm shadow-background/20 backdrop-blur">
+              <QuickActions
+                onAction={handleQuickAction}
+                disabled={loading || !activeSessionId}
+                isZh={isZh}
+              />
+              <button
+                type="button"
+                onClick={() => setKnowledgeEnabled((value) => !value)}
+                className={`legacy-chat-knowledge-toggle flex min-h-9 shrink-0 items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold shadow-sm transition-all active:scale-95 ${
+                  knowledgeEnabled
+                    ? "bg-primary/15 text-primary ring-1 ring-primary/25"
+                    : "bg-secondary/45 text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
+                }`}
+                aria-pressed={knowledgeEnabled}
+              >
+                <span className={`flex h-4 w-4 items-center justify-center rounded-[0.35rem] ${knowledgeEnabled ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
+                  {knowledgeEnabled ? <Check size={12} strokeWidth={3} /> : null}
+                </span>
+                {isZh ? "使用知识库" : "Use knowledge"}
+              </button>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  disabled={!knowledgeEnabled || knowledgeLoading}
+                  className="legacy-chat-knowledge-trigger flex min-h-9 min-w-[10.5rem] max-w-[13.5rem] shrink-0 items-center justify-between gap-2 rounded-full border border-border/45 bg-secondary/35 px-3.5 py-1.5 text-left text-xs font-semibold text-foreground shadow-sm transition-all hover:border-primary/35 hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
+                  title={isZh ? "选择本次写作参考的知识库资料" : "Choose the knowledge source for this write"}
+                >
+                  <span className="min-w-0 truncate">{knowledgeSourceLabel}</span>
+                  <ChevronDown size={13} className="shrink-0 text-muted-foreground" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" side="top" className="w-[min(22rem,calc(100vw-2rem))] rounded-3xl border-border/60 bg-popover/95 p-2 shadow-2xl shadow-primary/10 backdrop-blur">
+                  <div className="px-2 pb-2 pt-1">
+                    <div className="text-xs font-semibold text-foreground">{isZh ? "知识库检索" : "Knowledge retrieval"}</div>
+                    <div className="mt-0.5 text-[11px] text-muted-foreground">{isZh ? "选择本次写作要注入的参考资料。" : "Pick the references injected into this write."}</div>
+                  </div>
+                  <DropdownMenuItem
+                    onClick={() => setKnowledgeSourceId("all")}
+                    className="min-h-10 rounded-2xl px-3"
+                  >
+                    <Check size={14} className={knowledgeSourceId === "all" ? "opacity-100" : "opacity-0"} />
+                    <span className="min-w-0 flex-1 truncate">{isZh ? "自动检索全部资料" : "Search all sources"}</span>
+                    <span className="shrink-0 text-[11px] text-muted-foreground">{knowledgeSources.length}</span>
+                  </DropdownMenuItem>
+                  {knowledgeSources.map((source) => (
+                    <DropdownMenuItem
+                      key={source.id}
+                      onClick={() => setKnowledgeSourceId(source.id)}
+                      className="min-h-10 rounded-2xl px-3"
+                    >
+                      <Check size={14} className={knowledgeSourceId === source.id ? "opacity-100" : "opacity-0"} />
+                      <span className="min-w-0 flex-1 truncate">{source.name}</span>
+                      {source.chunkCount ? <span className="shrink-0 text-[11px] text-muted-foreground">{source.chunkCount}</span> : null}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <span className="legacy-chat-knowledge-status shrink-0 rounded-full border border-border/35 bg-background/30 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+                {knowledgeStatusLabel}
+              </span>
+            </div>
           </div>
         </div>
       )}
@@ -1202,10 +1354,10 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
         </div>
       )}
       {needsPlayModeChoice ? null : (
-      <div className={`relative z-30 shrink-0 border-t border-border/45 px-2.5 py-2 claude-topbar mobile-safe-bottom transition-[padding] duration-200 sm:px-4 sm:py-4 ${worldPanelInsetClass}`}>
+      <div className={`legacy-chat-composer-wrap relative z-30 shrink-0 border-t border-border/45 px-2.5 py-2 claude-topbar mobile-safe-bottom transition-[padding] duration-200 sm:px-4 sm:py-4 ${worldPanelInsetClass}`}>
         <div className="mx-auto max-w-5xl">
           <div className="flex items-start gap-2">
-            <div className="claude-composer flex-1 rounded-[1.15rem] transition-all sm:rounded-2xl">
+            <div className="legacy-chat-composer claude-composer flex-1 rounded-[1.15rem] transition-all sm:rounded-2xl">
               <div
                 className="flex items-end gap-2 px-3 py-2.5"
                 onClick={(event) => {
@@ -1450,9 +1602,9 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                     </>
                   )}
                 </div>
-                {tokenSavingsLabel && (
-                  <span className="col-span-2 row-start-2 max-w-full truncate rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400 sm:col-span-1 sm:col-start-2 sm:max-w-56 sm:justify-self-end sm:text-[11px]">
-                    {tokenSavingsLabel}
+                {compactTokenSavingsLabel && (
+                  <span className="col-span-2 row-start-2 max-w-[10rem] truncate rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400 sm:col-span-1 sm:col-start-2 sm:max-w-[8.5rem] sm:justify-self-end sm:text-[11px]">
+                    {compactTokenSavingsLabel}
                   </span>
                 )}
               </div>

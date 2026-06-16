@@ -19,6 +19,7 @@ import { GenreManager } from "./pages/GenreManager";
 import { StyleManager } from "./pages/StyleManager";
 import { ImportManager } from "./pages/ImportManager";
 import { ImageLibraryPage } from "./pages/ImageLibraryPage";
+import { KnowledgePage } from "./pages/KnowledgePage";
 import { RadarView } from "./pages/RadarView";
 import { DoctorView } from "./pages/DoctorView";
 import { LanguageSelector } from "./pages/LanguageSelector";
@@ -222,6 +223,93 @@ interface RuntimeNodeInfoPayload {
     readonly exports: string[];
     readonly error: string | null;
   };
+}
+
+interface PythonRuntimePayload {
+  readonly ok: boolean;
+  readonly python: {
+    readonly available: boolean;
+    readonly command: string | null;
+    readonly version: string | null;
+    readonly platform: string;
+    readonly arch: string;
+    readonly android: boolean;
+    readonly lastError: string | null;
+    readonly capabilities: readonly string[];
+  };
+}
+
+interface RepairPlanItem {
+  readonly action: string;
+  readonly title: string;
+  readonly detail: string;
+  readonly count: number;
+  readonly bytes: number;
+  readonly enabled: boolean;
+  readonly severity: "info" | "warning" | "danger";
+}
+
+interface RepairPlanPayload {
+  readonly ok: boolean;
+  readonly root?: string;
+  readonly actions?: readonly RepairPlanItem[];
+}
+
+interface RepairExecuteResult {
+  readonly ok: boolean;
+  readonly root?: string;
+  readonly actions?: readonly string[];
+  readonly results?: ReadonlyArray<{
+    readonly action: string;
+    readonly changed: number;
+    readonly bytes: number;
+    readonly message: string;
+  }>;
+}
+
+interface MaintenanceScanPayload {
+  readonly ok: boolean;
+  readonly method?: string;
+  readonly error?: string;
+  readonly python?: PythonRuntimePayload["python"];
+  readonly summary: {
+    readonly root: string;
+    readonly totalFiles: number;
+    readonly totalBytes: number;
+    readonly durationMs: number;
+    readonly issueCount: number;
+    readonly scannedAt: number;
+  };
+  readonly sections: Record<string, {
+    readonly name: string;
+    readonly path: string;
+    readonly exists: boolean;
+    readonly fileCount: number;
+    readonly dirCount: number;
+    readonly totalBytes: number;
+    readonly largestFiles?: ReadonlyArray<{ readonly path: string; readonly bytes: number }>;
+    readonly invalidFiles?: readonly unknown[];
+    readonly candidateCleanupFiles?: ReadonlyArray<{ readonly path: string; readonly bytes: number }>;
+    readonly knowledge?: {
+      readonly libraryCount: number;
+      readonly sourceCount: number;
+      readonly chunkCount: number;
+      readonly missingSearchIndexes: readonly string[];
+      readonly sourceChunkMismatches: readonly unknown[];
+    };
+  }>;
+  readonly duplicates?: readonly unknown[];
+  readonly issues: ReadonlyArray<{
+    readonly severity: "info" | "warning" | "danger";
+    readonly category: string;
+    readonly path: string;
+    readonly message: string;
+  }>;
+  readonly recommendations: ReadonlyArray<{
+    readonly title: string;
+    readonly detail: string;
+    readonly severity: "info" | "warning" | "danger";
+  }>;
 }
 
 async function readAndroidTextFile(path: string): Promise<string | null> {
@@ -713,12 +801,14 @@ function RuntimeStatusButton() {
   );
 }
 
-function RuntimeStatusRow({ icon, title, tone, message }: {
+function RuntimeStatusRow({ icon, title, tone, message, details }: {
   icon: React.ReactNode;
   title: string;
   tone: "ok" | "warn" | "wait";
-  message: string;
+  message?: string;
+  details?: ReadonlyArray<{ label: string; value: string }>;
 }) {
+  const prioritizeDetails = title === "Headroom MCP" && Boolean(details?.length);
   const toneClass =
     tone === "ok"
       ? "bg-emerald-500/12 text-emerald-500"
@@ -727,11 +817,21 @@ function RuntimeStatusRow({ icon, title, tone, message }: {
         : "bg-secondary text-muted-foreground";
   return (
     <section className="rounded-2xl border border-border/55 bg-background/45 p-4">
-      <div className="flex items-center gap-3">
+      <div className="flex items-start gap-3">
         <span className={`flex h-9 w-9 items-center justify-center rounded-full ${toneClass}`}>{icon}</span>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold text-foreground">{title}</div>
-          <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">{message}</p>
+          {message && !prioritizeDetails ? <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">{message}</p> : null}
+          {details && details.length > 0 ? (
+            <dl className="mt-3 grid gap-2 sm:grid-cols-2">
+              {details.map((detail) => (
+                <div key={`${title}-${detail.label}`} className="rounded-xl border border-border/45 bg-card/55 px-3 py-2">
+                  <dt className="text-[11px] font-medium text-muted-foreground/80">{detail.label}</dt>
+                  <dd className="mt-1 break-words text-xs leading-5 text-foreground">{detail.value}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
         </div>
       </div>
     </section>
@@ -742,6 +842,13 @@ function TokenDiagnosticsButton() {
   const [open, setOpen] = useState(false);
   const [diagnostics, setDiagnostics] = useState<TokenDiagnosticsPayload | null>(null);
   const [nodeInfo, setNodeInfo] = useState<RuntimeNodeInfoPayload | null>(null);
+  const [pythonInfo, setPythonInfo] = useState<PythonRuntimePayload["python"] | null>(null);
+  const [maintenanceReport, setMaintenanceReport] = useState<MaintenanceScanPayload | null>(null);
+  const [maintenanceLoading, setMaintenanceLoading] = useState(false);
+  const [repairPlan, setRepairPlan] = useState<RepairPlanPayload | null>(null);
+  const [repairPlanLoading, setRepairPlanLoading] = useState(false);
+  const [repairExecuting, setRepairExecuting] = useState(false);
+  const [selectedActions, setSelectedActions] = useState<Set<string>>(new Set());
   const [runtimeStatus, setRuntimeStatus] = useState<AndroidRuntimeFileStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [actionStatus, setActionStatus] = useState("");
@@ -749,13 +856,15 @@ function TokenDiagnosticsButton() {
   const refresh = async () => {
     setLoading(true);
     setActionStatus("");
-    const [tokenPayload, runtimeNodeInfo, androidDiagnostics] = await Promise.all([
+    const [tokenPayload, runtimeNodeInfo, pythonRuntimeInfo, androidDiagnostics] = await Promise.all([
       fetchJson<TokenDiagnosticsPayload>("/token-diagnostics").catch(() => null),
       fetchJson<RuntimeNodeInfoPayload>("/runtime/node-info").catch(() => null),
+      fetchJson<PythonRuntimePayload>("/runtime/python").catch(() => null),
       readAndroidRuntimeDiagnostics().catch(() => ({ status: null, output: null })),
     ]);
     setDiagnostics(tokenPayload);
     setNodeInfo(runtimeNodeInfo);
+    setPythonInfo(pythonRuntimeInfo?.python ?? null);
     setRuntimeStatus(androidDiagnostics.status);
     setLoading(false);
   };
@@ -795,6 +904,121 @@ function TokenDiagnosticsButton() {
       await refresh();
     }
   };
+
+  const checkPython = async () => {
+    setActionStatus("正在执行内置 Python 自检...");
+    try {
+      const result = await fetchJson<{
+        ok: boolean;
+        python?: PythonRuntimePayload["python"];
+        extraction?: {
+          readonly ok?: boolean;
+          readonly method?: string;
+          readonly text?: string;
+          readonly warnings?: readonly string[];
+        };
+      }>("/runtime/python/self-test", { method: "POST" });
+      const python = result.python;
+      const extraction = result.extraction;
+      setPythonInfo(python ?? null);
+      setActionStatus(result.ok && extraction?.ok
+        ? `Python 自检成功：${python?.command ?? "embedded-python"} · ${python?.version ?? "runtime ready"} · ${extraction.method ?? "extract"}`
+        : `Python 自检未通过：${python?.lastError ?? extraction?.warnings?.join("；") ?? "未知错误"}`);
+    } catch (error) {
+      setActionStatus(`Python 自检失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      await refresh();
+    }
+  };
+
+  const runProjectHealthScan = async () => {
+    setMaintenanceLoading(true);
+    setActionStatus("正在执行 Python 项目体检...");
+    try {
+      const result = await fetchJson<MaintenanceScanPayload>("/runtime/maintenance/scan");
+      setMaintenanceReport(result);
+      if (result.python) setPythonInfo(result.python);
+      setActionStatus(result.ok
+        ? `项目体检完成：扫描 ${result.summary.totalFiles.toLocaleString()} 个文件，发现 ${result.summary.issueCount} 个提示。`
+        : `项目体检未完成：${result.error ?? "Python 维护扫描不可用"}`);
+    } catch (error) {
+      setActionStatus(`项目体检失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setMaintenanceLoading(false);
+    }
+  };
+
+  const loadRepairPlan = async () => {
+    setRepairPlanLoading(true);
+    try {
+      const plan = await fetchJson<RepairPlanPayload>("/runtime/maintenance/repair-plan");
+      setRepairPlan(plan);
+      if (plan.actions) {
+        setSelectedActions(new Set(plan.actions.filter((item) => item.enabled).map((item) => item.action)));
+      }
+      setActionStatus(plan.ok && plan.actions
+        ? `修复计划已加载：${plan.actions.filter((item) => item.enabled).length} 项可操作。`
+        : "修复计划为空。");
+    } catch (error) {
+      setActionStatus(`加载修复计划失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setRepairPlanLoading(false);
+    }
+  };
+
+  const executeRepair = async () => {
+    if (selectedActions.size === 0) {
+      setActionStatus("请至少勾选一项修复操作。");
+      return;
+    }
+    setRepairExecuting(true);
+    try {
+      const result = await fetchJson<RepairExecuteResult>("/runtime/maintenance/repair", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true, actions: [...selectedActions] }),
+      });
+      if (result.ok && result.results) {
+        const summary = result.results
+          .map((item) => `${item.action}：已处理 ${item.changed} 项${item.bytes > 0 ? `，释放 ${formatBytes(item.bytes)}` : ""}`)
+          .join("；");
+        setActionStatus(`修复完成：${summary}`);
+        await loadRepairPlan();
+        if (maintenanceReport) await runProjectHealthScan();
+      } else {
+        setActionStatus("修复未返回有效结果。");
+      }
+    } catch (error) {
+      setActionStatus(`修复执行失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setRepairExecuting(false);
+    }
+  };
+
+  const toggleAction = (action: string) => {
+    setSelectedActions((prev) => {
+      const next = new Set(prev);
+      if (next.has(action)) {
+        next.delete(action);
+      } else {
+        next.add(action);
+      }
+      return next;
+    });
+  };
+
+  const maintenanceSections = maintenanceReport
+    ? Object.entries(maintenanceReport.sections)
+      .map(([key, section]) => ({ key, ...section }))
+      .sort((a, b) => b.totalBytes - a.totalBytes)
+    : [];
+  const maintenanceLargestFiles = maintenanceSections
+    .flatMap((section) => (section.largestFiles ?? []).map((file) => ({ ...file, section: section.key })))
+    .sort((a, b) => b.bytes - a.bytes)
+    .slice(0, 8);
+  const maintenanceInvalidFiles = maintenanceSections
+    .flatMap((section) => (section.invalidFiles ?? []).map((file) => ({ section: section.key, file })))
+    .slice(0, 8);
 
   const data = diagnostics?.diagnostics;
   const summary = data
@@ -872,6 +1096,70 @@ function TokenDiagnosticsButton() {
                       : "",
                     data.headroom.lastError ? `最近错误：${data.headroom.lastError}` : "",
                   ].filter(Boolean).join(" ")}
+                  details={[
+                    {
+                      label: "模式",
+                      value: data.headroom.mode === "bundled" ? "Bundled（APK 内置）" : "External MCP",
+                    },
+                    {
+                      label: "连接状态",
+                      value: data.headroom.state === "online"
+                        ? "在线"
+                        : data.headroom.state === "connecting"
+                          ? "连接中"
+                          : data.headroom.state === "idle"
+                            ? "待检查"
+                            : data.headroom.state === "disabled"
+                              ? "已禁用"
+                              : "离线（已回退本地压缩）",
+                    },
+                    {
+                      label: "本次会话压缩",
+                      value: data.headroom.session.compressions > 0
+                        ? `${data.headroom.session.compressions} 次，节省 ${data.headroom.session.tokensSaved.toLocaleString()} tokens`
+                        : "0 次（尚未触发）",
+                    },
+                    {
+                      label: "最近一次结果",
+                      value: data.headroom.lastCompressionOk === true
+                        ? `成功${data.headroom.lastCompressionAt ? ` · ${new Date(data.headroom.lastCompressionAt).toLocaleString()}` : ""}`
+                        : data.headroom.lastCompressionOk === false
+                          ? `失败${data.headroom.lastError ? ` · ${data.headroom.lastError}` : ""}`
+                          : "暂无记录",
+                    },
+                    {
+                      label: "累计节省",
+                      value: data.headroom.stats?.tokens_saved !== undefined
+                        ? `${data.headroom.stats.tokens_saved.toLocaleString()} tokens`
+                        : "暂无统计",
+                    },
+                    {
+                      label: data.headroom.mode === "external-mcp" ? "启动命令" : "运行来源",
+                      value: data.headroom.mode === "external-mcp" && data.headroom.configured
+                        ? `${data.headroom.command} ${data.headroom.args.join(" ")}`
+                        : data.headroom.mode === "bundled"
+                          ? "随 APK 内置，无需单独安装"
+                          : "尚未配置启动命令",
+                    },
+                    ...(data.headroom.tools.length > 0
+                      ? [{ label: "可用工具", value: data.headroom.tools.join(" / ") }]
+                      : []),
+                  ]}
+                />
+                <RuntimeStatusRow
+                  icon={<Cpu size={16} />}
+                  title="内置 Python"
+                  tone={pythonInfo?.available ? "ok" : pythonInfo ? "warn" : "wait"}
+                  message={pythonInfo
+                    ? [
+                        pythonInfo.available ? "可用" : "不可用",
+                        pythonInfo.command ? `运行时：${pythonInfo.command}` : "",
+                        pythonInfo.version ? `版本：${pythonInfo.version}` : "",
+                        pythonInfo.android ? "Android APK 内置桥接" : "桌面/系统 Python",
+                        pythonInfo.capabilities.length ? `能力：${pythonInfo.capabilities.join(" / ")}` : "",
+                        pythonInfo.lastError ? `最近错误：${pythonInfo.lastError}` : "",
+                      ].filter(Boolean).join(" · ")
+                    : "还未检测到 Python 状态，点击刷新或 Python 自检。"}
                 />
                 <RuntimeStatusRow
                   icon={<Activity size={16} />}
@@ -919,12 +1207,265 @@ function TokenDiagnosticsButton() {
                     runtimeStatus?.nativeLibSha256 ? `sha256=${runtimeStatus.nativeLibSha256.slice(0, 12)}` : "",
                   ].filter(Boolean).join(" · ")}
                 />
+                {maintenanceReport ? (
+                  <section className="rounded-2xl border border-border/55 bg-background/45 p-4">
+                    <div className="flex items-start gap-3">
+                      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${maintenanceReport.ok ? "bg-emerald-500/12 text-emerald-500" : "bg-amber-500/12 text-amber-500"}`}>
+                        <ShieldCheck size={16} />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold text-foreground">项目体检中心</div>
+                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                          {maintenanceReport.ok
+                            ? `扫描 ${maintenanceReport.summary.totalFiles.toLocaleString()} 个文件，${formatBytes(maintenanceReport.summary.totalBytes)}，耗时 ${maintenanceReport.summary.durationMs}ms，发现 ${maintenanceReport.summary.issueCount} 个提示。`
+                            : `体检不可用：${maintenanceReport.error ?? "Python 维护扫描未返回结果"}`}
+                        </p>
+                        <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
+                          {maintenanceSections.slice(0, 6).map((section) => (
+                            <div key={section.key} className="rounded-xl border border-border/35 bg-card/60 px-3 py-2">
+                              <div className="font-semibold text-foreground">{section.key}</div>
+                              <div className="mt-1 text-muted-foreground">{section.fileCount} files · {formatBytes(section.totalBytes)}</div>
+                            </div>
+                          ))}
+                        </div>
+                        {maintenanceReport.sections.knowledge?.knowledge ? (
+                          <p className="mt-3 rounded-xl border border-border/35 bg-card/55 px-3 py-2 text-xs leading-5 text-muted-foreground">
+                            知识库：{maintenanceReport.sections.knowledge.knowledge.libraryCount} 个库，
+                            {maintenanceReport.sections.knowledge.knowledge.sourceCount} 个资料，
+                            {maintenanceReport.sections.knowledge.knowledge.chunkCount} 个分块；
+                            缺失索引 {maintenanceReport.sections.knowledge.knowledge.missingSearchIndexes.length}，
+                            分块不一致 {maintenanceReport.sections.knowledge.knowledge.sourceChunkMismatches.length}。
+                          </p>
+                        ) : null}
+                        {maintenanceLargestFiles.length > 0 ? (
+                          <div className="mt-3">
+                            <div className="text-xs font-semibold text-foreground">大文件</div>
+                            <div className="mt-1 space-y-1">
+                              {maintenanceLargestFiles.map((file) => (
+                                <div key={`${file.section}:${file.path}`} className="truncate rounded-lg bg-secondary/35 px-2 py-1 text-xs text-muted-foreground">
+                                  {file.path} · {formatBytes(file.bytes)}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                        {maintenanceInvalidFiles.length > 0 ? (
+                          <div className="mt-3">
+                            <div className="text-xs font-semibold text-foreground">异常文件</div>
+                            <div className="mt-1 space-y-1">
+                              {maintenanceInvalidFiles.map((item, index) => (
+                                <div key={`${item.section}:${index}`} className="rounded-lg bg-destructive/8 px-2 py-1 text-xs leading-5 text-muted-foreground">
+                                  {typeof item.file === "object" && item.file && "path" in item.file ? String((item.file as { path?: unknown }).path) : JSON.stringify(item.file).slice(0, 120)}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                        {maintenanceReport.issues.length > 0 ? (
+                          <div className="mt-3">
+                            <div className="text-xs font-semibold text-foreground">提示</div>
+                            <div className="mt-1 space-y-1">
+                              {maintenanceReport.issues.slice(0, 8).map((issue, index) => (
+                                <div key={`${issue.category}:${issue.path}:${index}`} className="rounded-lg bg-secondary/35 px-2 py-1 text-xs leading-5 text-muted-foreground">
+                                  [{issue.severity}] {issue.category} · {issue.path}: {issue.message}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="mt-3 rounded-xl bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-500">项目健康，未发现需要关注的问题。</p>
+                        )}
+                        {maintenanceReport.recommendations.length > 0 ? (
+                          <div className="mt-3">
+                            <div className="text-xs font-semibold text-foreground">建议</div>
+                            <div className="mt-1 space-y-1">
+                              {maintenanceReport.recommendations.map((item) => (
+                                <div key={item.title} className="rounded-lg border border-border/35 bg-card/55 px-2 py-1 text-xs leading-5 text-muted-foreground">
+                                  {item.title}：{item.detail}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                        <div className="mt-4 rounded-2xl border border-border/55 bg-background/45 p-4">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-xs font-semibold uppercase text-muted-foreground">
+                              <Wrench size={14} />
+                              手动确认修复
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void loadRepairPlan()}
+                              disabled={repairPlanLoading}
+                              className="rounded-lg bg-primary/10 px-2.5 py-1 text-[11px] font-bold text-primary hover:bg-primary/15 transition-colors disabled:opacity-60"
+                            >
+                              {repairPlanLoading ? "加载中..." : "加载修复计划"}
+                            </button>
+                          </div>
+                          {repairPlan && repairPlan.actions ? (
+                            <>
+                              <div className="mt-3 space-y-2">
+                                {repairPlan.actions.map((item) => (
+                                  <label
+                                    key={item.action}
+                                    className={`flex items-start gap-3 rounded-xl border px-3 py-2.5 cursor-pointer transition-colors ${
+                                      item.enabled
+                                        ? selectedActions.has(item.action)
+                                          ? "border-primary/40 bg-primary/[0.06]"
+                                          : "border-border/40 bg-card/50 hover:border-border/60"
+                                        : "border-border/25 bg-secondary/20 opacity-60 cursor-default"
+                                    }`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedActions.has(item.action)}
+                                      disabled={!item.enabled}
+                                      onChange={() => toggleAction(item.action)}
+                                      className="mt-0.5 rounded border-border/50"
+                                    />
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-sm font-semibold text-foreground">{item.title}</span>
+                                        {item.count > 0 && (
+                                          <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
+                                            item.severity === "danger"
+                                              ? "bg-destructive/10 text-destructive"
+                                              : item.severity === "warning"
+                                                ? "bg-amber-500/10 text-amber-600"
+                                                : "bg-primary/10 text-primary"
+                                          }`}>
+                                            {item.count} 项
+                                          </span>
+                                        )}
+                                        {item.bytes > 0 && (
+                                          <span className="text-[10px] font-mono text-muted-foreground">{formatBytes(item.bytes)}</span>
+                                        )}
+                                        {!item.enabled && (
+                                          <span className="text-[10px] text-muted-foreground">无需操作</span>
+                                        )}
+                                      </div>
+                                      <p className="mt-1 text-xs leading-5 text-muted-foreground">{item.detail}</p>
+                                    </div>
+                                  </label>
+                                ))}
+                              </div>
+                              <div className="mt-3 flex items-center justify-between">
+                                <p className="text-[11px] text-muted-foreground/70">
+                                  勾选后点击「执行修复」，删除文件和压缩操作不可撤销。
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => void executeRepair()}
+                                  disabled={repairExecuting || selectedActions.size === 0}
+                                  className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-bold text-primary-foreground shadow-sm shadow-primary/20 transition-all hover:bg-primary/90 disabled:opacity-50"
+                                >
+                                  {repairExecuting ? (
+                                    <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-primary-foreground/20 border-t-primary-foreground" />
+                                  ) : (
+                                    <Wrench size={13} />
+                                  )}
+                                  {repairExecuting ? "执行中..." : "执行修复"}
+                                </button>
+                              </div>
+                            </>
+                          ) : (
+                            <p className="mt-3 text-xs text-muted-foreground">
+                              点击「加载修复计划」查看可执行的修复操作。
+                            </p>
+                          )}
+                        </div>
+                        <p className="mt-3 text-[11px] leading-5 text-muted-foreground/80">
+                          修复操作需要确认后才会执行，删除文件和压缩备份均不可撤销。
+                        </p>
+                      </div>
+                    </div>
+                  </section>
+                ) : null}
               </>
             ) : !loading ? (
               <p className="rounded-2xl border border-destructive/20 bg-destructive/8 px-4 py-3 text-sm text-muted-foreground">
                 暂时无法读取 Token 诊断。请确认本地 Node API 已启动。
               </p>
             ) : null}
+            {repairPlan && repairPlan.actions && repairPlan.actions.length > 0 && !maintenanceReport && (
+              <section className="rounded-2xl border border-border/55 bg-background/45 p-4">
+                <div className="flex items-start gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/12 text-primary">
+                    <Wrench size={16} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold text-foreground">手动确认修复</div>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      可执行的修复操作：{repairPlan.actions.filter((item) => item.enabled).length} 项。
+                      勾选后点击「执行修复」。
+                    </p>
+                    <div className="mt-3 space-y-2">
+                      {repairPlan.actions.map((item) => (
+                        <label
+                          key={item.action}
+                          className={`flex items-start gap-3 rounded-xl border px-3 py-2.5 cursor-pointer transition-colors ${
+                            item.enabled
+                              ? selectedActions.has(item.action)
+                                ? "border-primary/40 bg-primary/[0.06]"
+                                : "border-border/40 bg-card/50 hover:border-border/60"
+                              : "border-border/25 bg-secondary/20 opacity-60 cursor-default"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedActions.has(item.action)}
+                            disabled={!item.enabled}
+                            onChange={() => toggleAction(item.action)}
+                            className="mt-0.5 rounded border-border/50"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-semibold text-foreground">{item.title}</span>
+                              {item.count > 0 && (
+                                <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
+                                  item.severity === "danger"
+                                    ? "bg-destructive/10 text-destructive"
+                                    : item.severity === "warning"
+                                      ? "bg-amber-500/10 text-amber-600"
+                                      : "bg-primary/10 text-primary"
+                                }`}>
+                                  {item.count} 项
+                                </span>
+                              )}
+                              {item.bytes > 0 && (
+                                <span className="text-[10px] font-mono text-muted-foreground">{formatBytes(item.bytes)}</span>
+                              )}
+                              {!item.enabled && (
+                                <span className="text-[10px] text-muted-foreground">无需操作</span>
+                              )}
+                            </div>
+                            <p className="mt-1 text-xs leading-5 text-muted-foreground">{item.detail}</p>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="mt-3 flex items-center justify-between">
+                      <p className="text-[11px] text-muted-foreground/70">
+                        勾选后点击「执行修复」，删除文件和压缩操作不可撤销。
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void executeRepair()}
+                        disabled={repairExecuting || selectedActions.size === 0}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-bold text-primary-foreground shadow-sm shadow-primary/20 transition-all hover:bg-primary/90 disabled:opacity-50"
+                      >
+                        {repairExecuting ? (
+                          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-primary-foreground/20 border-t-primary-foreground" />
+                        ) : (
+                          <Wrench size={13} />
+                        )}
+                        {repairExecuting ? "执行中..." : "执行修复"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            )}
             {actionStatus && (
               <p className="rounded-2xl border border-primary/20 bg-primary/8 px-4 py-3 text-xs leading-5 text-muted-foreground">
                 {actionStatus}
@@ -932,7 +1473,7 @@ function TokenDiagnosticsButton() {
             )}
           </div>
 
-          <div className="grid shrink-0 grid-cols-2 gap-3 border-t border-border/45 bg-card/75 px-5 py-4 sm:grid-cols-[1fr_1fr_auto_auto] sm:px-6">
+          <div className="grid shrink-0 grid-cols-2 gap-3 border-t border-border/45 bg-card/75 px-5 py-4 sm:grid-cols-[1fr_1fr_1fr_1fr_1fr_auto_auto] sm:px-6">
             <button
               type="button"
               onClick={() => void checkHeadroom()}
@@ -940,6 +1481,32 @@ function TokenDiagnosticsButton() {
             >
               <Radio size={16} />
               压缩自检
+            </button>
+            <button
+              type="button"
+              onClick={() => void checkPython()}
+              className="soft-pill inline-flex h-12 items-center justify-center gap-2 rounded-2xl px-4 text-sm font-semibold text-foreground"
+            >
+              <Cpu size={16} />
+              Python 自检
+            </button>
+            <button
+              type="button"
+              onClick={() => void runProjectHealthScan()}
+              disabled={maintenanceLoading}
+              className="soft-pill inline-flex h-12 items-center justify-center gap-2 rounded-2xl px-4 text-sm font-semibold text-foreground disabled:opacity-60"
+            >
+              <ShieldCheck size={16} />
+              {maintenanceLoading ? "体检中" : "项目体检"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void loadRepairPlan()}
+              disabled={repairPlanLoading}
+              className="soft-pill inline-flex h-12 items-center justify-center gap-2 rounded-2xl px-4 text-sm font-semibold text-foreground disabled:opacity-60"
+            >
+              <Wrench size={16} />
+              {repairPlanLoading ? "加载中" : "修复计划"}
             </button>
             <button
               type="button"
@@ -1110,6 +1677,7 @@ export function App() {
     toProjectSettings: () => { setRoute({ page: "project-settings" }); closeSidebar(); },
     toServiceDetail: (id: string) => { setRoute({ page: "service-detail", serviceId: id }); closeSidebar(); },
     toTruth: (bookId: string) => { setRoute({ page: "truth", bookId }); closeSidebar(); },
+    toKnowledge: (bookId: string) => { setRoute({ page: "knowledge", bookId }); closeSidebar(); },
     toDaemon: () => { setRoute({ page: "daemon" }); closeSidebar(); },
     toLogs: () => { setRoute({ page: "logs" }); closeSidebar(); },
     toGenres: () => { setRoute({ page: "genres" }); closeSidebar(); },
@@ -1199,7 +1767,7 @@ export function App() {
 
   return (
     <AppDialogProvider>
-    <div className="h-[100dvh] claude-surface text-foreground flex overflow-hidden font-sans">
+    <div className="app-shell h-[100dvh] claude-surface text-foreground flex overflow-hidden font-sans">
       {/* Left Sidebar — hidden on mobile, shown as overlay when toggled */}
       <div className="hidden md:block h-full">
         <Sidebar nav={nav} activePage={activePage} sse={sse} t={t} />
@@ -1207,9 +1775,9 @@ export function App() {
       <Sidebar nav={nav} activePage={activePage} sse={sse} t={t} onClose={closeSidebar} mobileOpen={sidebarOpen} />
 
       {/* Center Content */}
-      <div className="flex-1 flex flex-col min-w-0 bg-background/20">
+      <div className="app-shell-content flex-1 flex flex-col min-w-0 bg-background/20">
         {/* Header Strip */}
-        <header className="relative z-40 min-h-13 sm:min-h-16 shrink-0 flex items-center gap-1.5 overflow-visible px-2 sm:gap-2 sm:px-4 md:px-8 border-b border-border/45 claude-topbar shadow-sm shadow-primary/5 mobile-safe-top">
+        <header className="app-shell-header relative z-40 min-h-13 sm:min-h-16 shrink-0 flex items-center gap-1.5 overflow-visible px-2 sm:gap-2 sm:px-4 md:px-8 border-b border-border/45 claude-topbar shadow-sm shadow-primary/5 mobile-safe-top">
           <div className="flex shrink-0 items-center gap-1 sm:gap-2">
              <button
                onClick={() => setSidebarOpen(true)}
@@ -1220,7 +1788,7 @@ export function App() {
              </button>
              <button
                onClick={nav.toDashboard}
-               className="soft-pill inline-flex h-10 w-10 shrink-0 touch-manipulation items-center justify-center gap-2 rounded-full px-0 text-sm font-medium text-foreground transition-colors hover:border-primary/40 sm:w-auto sm:max-w-none sm:justify-start sm:px-3.5"
+               className="app-shell-home-button soft-pill inline-flex h-10 w-10 shrink-0 touch-manipulation items-center justify-center gap-2 rounded-full px-0 text-sm font-medium text-foreground transition-colors hover:border-primary/40 sm:w-auto sm:max-w-none sm:justify-start sm:px-3.5"
              >
                <House size={14} />
                <span className="hidden sm:inline">首页</span>
@@ -1229,11 +1797,11 @@ export function App() {
              </button>
           </div>
 
-          <div className="flex min-w-0 flex-1 items-center justify-end gap-1 overflow-visible pl-0 pr-0 sm:gap-3">
+          <div className="app-shell-header-actions flex min-w-0 flex-1 items-center justify-end gap-1 overflow-visible pl-0 pr-0 sm:gap-3">
             <RuntimeStatusButton />
             <TokenDiagnosticsButton />
             <LocalStorageButton />
-            <div className="soft-pill flex h-10 shrink-0 gap-0 rounded-full p-0.5">
+            <div className="app-shell-lang-switch soft-pill flex h-10 shrink-0 gap-0 rounded-full p-0.5">
               <button
                 onClick={async () => {
                   publishLanguageChange("zh");
@@ -1267,7 +1835,7 @@ export function App() {
         </header>
 
         {/* Main Content Area */}
-        <main className="mobile-scroll-area mobile-safe-bottom flex-1 relative overflow-y-auto scroll-smooth">
+        <main className="app-shell-main mobile-scroll-area mobile-safe-bottom flex-1 relative overflow-y-auto scroll-smooth">
           {route.page === "dashboard" && (
             <div className="max-w-6xl mx-auto px-3 py-4 sm:px-4 sm:py-6 md:px-10 md:py-10 lg:py-12 fade-in">
               <Dashboard nav={nav} sse={sse} theme={theme} t={t} />
@@ -1305,8 +1873,8 @@ export function App() {
                 t={t}
                 sse={sse}
               />
-              <BookSidebar bookId={route.bookId} theme={theme} t={t} sse={sse} />
-              <BookSidebarToggle bookId={route.bookId} theme={theme} t={t} sse={sse} />
+              <BookSidebar bookId={route.bookId} theme={theme} t={t} sse={sse} onOpenKnowledge={nav.toKnowledge} />
+              <BookSidebarToggle bookId={route.bookId} theme={theme} t={t} sse={sse} onOpenKnowledge={nav.toKnowledge} />
             </div>
           )}
           {route.page === "book-settings" && (
@@ -1342,6 +1910,11 @@ export function App() {
           {route.page === "truth" && (
             <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
               <TruthFiles bookId={route.bookId} nav={nav} theme={theme} t={t} />
+            </div>
+          )}
+          {route.page === "knowledge" && (
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
+              <KnowledgePage bookId={route.bookId} nav={nav} theme={theme} t={t} />
             </div>
           )}
           {route.page === "daemon" && (
