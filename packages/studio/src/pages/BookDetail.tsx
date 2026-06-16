@@ -62,6 +62,7 @@ interface Nav {
   toChapter: (bookId: string, num: number) => void;
   toAnalytics: (bookId: string) => void;
   toTruth: (bookId: string) => void;
+  toKnowledge: (bookId: string) => void;
 }
 
 function translateChapterStatus(status: string, t: TFunction): string {
@@ -696,6 +697,13 @@ export function BookDetail({
           >
             <Database size={14} />
             {t("book.truthFiles")}
+          </button>
+          <button
+            onClick={() => nav.toKnowledge(bookId)}
+            className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-primary/10 text-primary rounded-lg hover:bg-primary/15 transition-all border border-primary/20"
+          >
+            <Sparkles size={14} />
+            知识库
           </button>
           <button
             onClick={() => nav.toAnalytics(bookId)}

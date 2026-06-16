@@ -4,7 +4,7 @@ import type { TFunction } from "../../hooks/use-i18n";
 import type { SSEMessage } from "../../hooks/use-sse";
 import { useChatStore } from "../../store/chat";
 import { fetchJson } from "../../hooks/use-api";
-import { PanelRightClose, PanelRightOpen, ArrowLeft, Loader2, Pencil, Save, X, Network } from "lucide-react";
+import { PanelRightClose, PanelRightOpen, ArrowLeft, Loader2, Pencil, Save, X, Network, Database } from "lucide-react";
 import { MarkdownView } from "../ai-elements/markdown-view";
 import { ProgressSection } from "../sidebar/ProgressSection";
 import { FoundationSection } from "../sidebar/FoundationSection";
@@ -32,6 +32,7 @@ export interface BookSidebarProps {
   readonly theme: Theme;
   readonly t: TFunction;
   readonly sse: { messages: ReadonlyArray<SSEMessage>; connected: boolean };
+  readonly onOpenKnowledge?: (bookId: string) => void;
 }
 
 // Friendly header label for an opened truth file: character files show the
@@ -211,7 +212,7 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
   );
 }
 
-function PanelView({ bookId, theme: _theme, t, sse }: BookSidebarProps) {
+function PanelView({ bookId, theme: _theme, t, sse, onOpenKnowledge }: BookSidebarProps) {
   const isZh = t("nav.connected") === "\u5DF2\u8FDE\u63A5";
   const openRelationshipGraph = useChatStore((s) => s.openRelationshipGraph);
 
@@ -263,6 +264,20 @@ function PanelView({ bookId, theme: _theme, t, sse }: BookSidebarProps) {
           <span className="text-[12px] leading-4 text-muted-foreground/60">Graph</span>
         </button>
       </SidebarCard>
+      <SidebarCard title="知识库">
+        <button
+          onClick={() => onOpenKnowledge?.(bookId)}
+          disabled={!onOpenKnowledge}
+          className="flex w-full items-center gap-2 rounded-lg bg-secondary/30 px-2.5 py-2 text-left transition-colors hover:bg-secondary/50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <Database size={16} className="shrink-0 text-primary" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[15px] font-medium leading-6 text-foreground">资料分析与仿写</span>
+            <span className="block truncate text-[12px] leading-4 text-muted-foreground/60">上传资料，生成风格参考</span>
+          </span>
+          <span className="text-[12px] leading-4 text-muted-foreground/60">KB</span>
+        </button>
+      </SidebarCard>
       <ProgressSection sse={sse} />
       <ChaptersSection bookId={bookId} isZh={isZh} />
       <CharacterSection bookId={bookId} />
@@ -280,7 +295,7 @@ function defaultSidebarWidth(): number {
   return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Math.round(window.innerWidth * SIDEBAR_RATIO)));
 }
 
-export function BookSidebar({ bookId, theme, t, sse }: BookSidebarProps) {
+export function BookSidebar({ bookId, theme, t, sse, onOpenKnowledge }: BookSidebarProps) {
   const sidebarView = useChatStore((s) => s.sidebarView);
   const closeArtifact = useChatStore((s) => s.closeArtifact);
   const [width, setWidth] = useState(defaultSidebarWidth);
@@ -320,13 +335,13 @@ export function BookSidebar({ bookId, theme, t, sse }: BookSidebarProps) {
       ) : sidebarView === "graph" ? (
         <RelationshipGraph source="book" bookId={bookId} sessionId={null} onClose={closeArtifact} />
       ) : (
-        <PanelView bookId={bookId} theme={theme} t={t} sse={sse} />
+        <PanelView bookId={bookId} theme={theme} t={t} sse={sse} onOpenKnowledge={onOpenKnowledge} />
       )}
     </aside>
   );
 }
 
-export function BookSidebarToggle({ bookId, theme, t, sse }: BookSidebarProps) {
+export function BookSidebarToggle({ bookId, theme, t, sse, onOpenKnowledge }: BookSidebarProps) {
   const [open, setOpen] = useState(false);
   const sidebarView = useChatStore((s) => s.sidebarView);
   const closeArtifact = useChatStore((s) => s.closeArtifact);
@@ -363,7 +378,7 @@ export function BookSidebarToggle({ bookId, theme, t, sse }: BookSidebarProps) {
             ) : sidebarView === "graph" ? (
               <RelationshipGraph source="book" bookId={bookId} sessionId={null} onClose={closeArtifact} />
             ) : (
-              <PanelView bookId={bookId} theme={theme} t={t} sse={sse} />
+              <PanelView bookId={bookId} theme={theme} t={t} sse={sse} onOpenKnowledge={onOpenKnowledge} />
             )}
           </aside>
         </div>

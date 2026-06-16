@@ -12,6 +12,7 @@ export type HashRoute =
   | { page: "chapter"; bookId: string; chapterNumber: number }
   | { page: "analytics"; bookId: string }
   | { page: "truth"; bookId: string }
+  | { page: "knowledge"; bookId: string }
   | { page: "daemon" }
   | { page: "logs" }
   | { page: "genres" }
@@ -60,6 +61,9 @@ function parseHash(hash: string): HashRoute {
   const truthMatch = path.match(/^book\/([^/]+)\/truth$/);
   if (truthMatch) return { page: "truth", bookId: decodeURIComponent(truthMatch[1]) };
 
+  const knowledgeMatch = path.match(/^book\/([^/]+)\/knowledge$/);
+  if (knowledgeMatch) return { page: "knowledge", bookId: decodeURIComponent(knowledgeMatch[1]) };
+
   const bookMatch = path.match(/^book\/([^/]+)$/);
   if (bookMatch) return { page: "book", bookId: decodeURIComponent(bookMatch[1]) };
 
@@ -83,6 +87,7 @@ function routeToHash(route: HashRoute): string {
     case "chapter": return `#/book/${encodeURIComponent(route.bookId)}/chapters/${route.chapterNumber}`;
     case "analytics": return `#/book/${encodeURIComponent(route.bookId)}/analytics`;
     case "truth": return `#/book/${encodeURIComponent(route.bookId)}/truth`;
+    case "knowledge": return `#/book/${encodeURIComponent(route.bookId)}/knowledge`;
     case "book-create": return "#/book/new";
     case "services": return "#/services";
     case "project-settings": return "#/settings";
@@ -110,6 +115,7 @@ const HASH_PAGES = new Set([
   "chapter",
   "analytics",
   "truth",
+  "knowledge",
   "services",
   "project-settings",
   "service-detail",
