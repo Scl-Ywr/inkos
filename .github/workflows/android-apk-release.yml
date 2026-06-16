@@ -6,12 +6,21 @@ on:
       - "apk-v*"
   workflow_dispatch:
     inputs:
+      release_tag:
+        description: "Existing release tag to publish assets to"
+        required: true
+        default: "v1.6.0"
       channel:
         description: "Update channel"
         required: true
         default: "stable"
       prerelease:
         description: "Create a prerelease"
+        type: boolean
+        required: true
+        default: false
+      skip_release_checks:
+        description: "Skip audit/typecheck/test gate for manual recovery uploads"
         type: boolean
         required: true
         default: false
@@ -23,6 +32,7 @@ jobs:
   build-release-apk:
     runs-on: ubuntu-latest
     env:
+      RELEASE_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
       APK_ASSET_NAME: inkos-studio.apk
       ANDROID_NODE_RUNTIME_URL: https://github.com/Scl-Ywr/inkos/releases/download/android-node-runtime-v1/inkos-android-node-runtime-arm64-v8a.zip
       ANDROID_NODE_RUNTIME_SHA256: 2b7c1cc4d7b49ed8dd9d07577e5d7da67d70759c47230a9f1d851007ad1f3521
@@ -34,6 +44,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - uses: pnpm/action-setup@v4
         with:
@@ -88,6 +100,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Verify official baseline and release checks
+        if: ${{ github.event.inputs.skip_release_checks != 'true' }}
         run: |
           git fetch https://github.com/Narcooo/inkos.git refs/tags/v1.5.0:refs/tags/v1.5.0 --force
           pnpm audit --prod --audit-level=high
@@ -117,7 +130,7 @@ jobs:
             --apk "dist/android-release/$APK_ASSET_NAME" \
             --out dist/android-release/update.json \
             --repo "$GITHUB_REPOSITORY" \
-            --tag "$GITHUB_REF_NAME" \
+            --tag "$RELEASE_TAG" \
             --asset-name "$APK_ASSET_NAME" \
             --channel "${{ github.event.inputs.channel || 'stable' }}"
 
@@ -126,19 +139,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             exit 0
           fi
 
-          gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' | while IFS= read -r asset; do
+          gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | while IFS= read -r asset; do
             if [ "$asset" = "$APK_ASSET_NAME" ] || [ "$asset" = "update.json" ]; then
               continue
             fi
-            gh release delete-asset "$GITHUB_REF_NAME" "$asset" -y
+            gh release delete-asset "$RELEASE_TAG" "$asset" -y
           done
 
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: |
             dist/android-release/${{ env.APK_ASSET_NAME }}
             dist/android-release/update.json
