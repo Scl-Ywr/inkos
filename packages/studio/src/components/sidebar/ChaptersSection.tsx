@@ -26,22 +26,37 @@ interface ChaptersSectionProps {
 
 export function ChaptersSection({ bookId, isZh }: ChaptersSectionProps) {
   const [chapters, setChapters] = useState<ReadonlyArray<ChapterMeta>>([]);
+  const [loading, setLoading] = useState(true);
   const bookDataVersion = useChatStore((s) => s.bookDataVersion);
 
   useEffect(() => {
+    setLoading(true);
     fetchJson<{ chapters: ChapterMeta[] }>(`/books/${bookId}`)
-      .then((data) => setChapters(data.chapters))
-      .catch(() => setChapters([]));
+      .then((data) => {
+        setChapters(data.chapters);
+        setLoading(false);
+      })
+      .catch(() => {
+        setChapters([]);
+        setLoading(false);
+      });
   }, [bookId, bookDataVersion]);
 
   return (
     <SidebarCard title={isZh ? "章节" : "Chapters"}>
-      {chapters.length === 0 ? (
-        <p className="text-[15px] leading-6 text-muted-foreground/50 italic">
+      {loading && chapters.length === 0 ? (
+        <div className="flex items-center justify-center py-4">
+          <div className="w-4 h-4 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
+        </div>
+      ) : chapters.length === 0 ? (
+        <p className="text-[15px] leading-6 text-muted-foreground/50 italic px-1">
           {isZh ? "暂无章节" : "No chapters"}
         </p>
       ) : (
-        <ul className="space-y-1 max-h-52 overflow-y-auto overflow-x-hidden">
+        <ul className={cn(
+          "space-y-1 max-h-52 overflow-y-auto overflow-x-hidden transition-opacity duration-200",
+          loading ? "opacity-50" : "opacity-100"
+        )}>
           {chapters.map((ch) => {
             const ind = STATUS_INDICATOR[ch.status] ?? { symbol: "○", color: "text-muted-foreground" };
             return (

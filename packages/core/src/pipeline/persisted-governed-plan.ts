@@ -233,6 +233,7 @@ async function loadLegacyIntentPlan(
       isGoldenOpening: false,
       body: intentMarkdown,
       threadRefs: [],
+      satisfactionBeats: [],
     },
     intentMarkdown,
     plannerInputs: [relativeToBookDir(bookDir, runtimePath)],

@@ -485,6 +485,7 @@ describe("ContinuityAuditor", () => {
           isGoldenOpening: false,
           body: memoBody,
           threadRefs: [],
+          satisfactionBeats: [],
         },
       });
 

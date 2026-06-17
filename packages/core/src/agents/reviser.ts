@@ -26,7 +26,7 @@ import {
   type TruthContextCache,
 } from "./truth-context-cache.js";
 
-export type ReviseMode = "auto" | "polish" | "rewrite" | "rework" | "anti-detect" | "spot-fix";
+export type ReviseMode = "auto" | "polish" | "rewrite" | "rework" | "anti-detect" | "spot-fix" | "format" | "expand" | "condense";
 
 export const DEFAULT_REVISE_MODE: ReviseMode = "auto";
 
@@ -103,6 +103,9 @@ const MODE_DESCRIPTIONS: Record<ReviseMode, string> = {
 8. 段落长度差异化：不再等长段落，有的段只有一句话，有的段七八行
 9. 消灭"不禁""仿佛""宛如"等AI标记词：换成具体感官描写`,
   "spot-fix": "定点修复：只修改审稿意见指出的具体句子或段落，其余所有内容必须原封不动保留。修改范围限定在问题句子及其前后各一句。禁止改动无关段落",
+  format: "排版格式化：统一标点符号格式（中文全角/英文半角）、规范化省略号和破折号、对话换行、去除多余空行。不改变任何文字内容，只调整格式",
+  expand: "扩写：在保持剧情和人物不变的前提下，丰富细节描写、增加环境氛围、补充人物心理活动。禁止改变剧情走向或增加新情节",
+  condense: "精简：去除冗余描写、重复表达、口水话，保留核心剧情和关键信息。目标是让文字更紧凑有力，不丢失重要内容",
 };
 
 export class ReviserAgent extends BaseAgent {
@@ -393,6 +396,193 @@ ${chapterContent}`;
     // Legacy rewrite/polish/rework/anti-detect: full content
     const revisedContent = extract("REVISED_CONTENT");
     return makeResult(revisedContent || originalChapter, revisedContent.length > 0);
+  }
+
+  /**
+   * Format chapter content without using LLM.
+   * Applies punctuation normalization, dialogue line-breaking, and blank line cleanup.
+   */
+  formatChapter(
+    chapterContent: string,
+    preset: "web-novel" | "publish" | "screenplay" | "short-story" = "web-novel",
+  ): ReviseOutput {
+    const { formatText, detectFormattingIssues } = require("../utils/text-formatter.js");
+    const originalLength = chapterContent.length;
+    const formatted = formatText(chapterContent, { preset });
+    const issues = detectFormattingIssues(chapterContent);
+
+    return {
+      revisedContent: formatted,
+      wordCount: formatted.length,
+      fixedIssues: issues.length > 0
+        ? issues.map((issue: string) => `格式修正：${issue}`)
+        : originalLength !== formatted.length
+          ? ["格式标准化：统一标点和段落格式"]
+          : [],
+      updatedState: "(排版模式：状态卡未变更)",
+      updatedLedger: "",
+      updatedHooks: "(伏笔池未变更)",
+    };
+  }
+
+  /**
+   * Expand chapter content using LLM.
+   * Adds detail, atmosphere, and psychological depth without changing plot.
+   */
+  async expandChapter(
+    bookDir: string,
+    chapterContent: string,
+    chapterNumber: number,
+    options?: {
+      chapterIntent?: string;
+      chapterMemo?: ChapterMemo;
+      lengthSpec?: LengthSpec;
+      contextCache?: TruthContextCache;
+    },
+  ): Promise<ReviseOutput> {
+    const langPrefix = await readBookLanguage(bookDir);
+    const resolvedLanguage = langPrefix === "en" ? "en" : "zh";
+    const isEnglish = resolvedLanguage === "en";
+
+    const systemPrompt = isEnglish
+      ? `You are an expert fiction editor specializing in expanding prose. Your task is to enrich the chapter with:
+1. Environmental details and atmosphere
+2. Character psychological depth and internal monologue
+3. Sensory descriptions (sight, sound, smell, touch, taste)
+4. Pacing variations (slow down important moments)
+5. Subtext and emotional undertones
+
+RULES:
+- Do NOT change the plot, character actions, or story outcomes
+- Do NOT add new characters or scenes
+- Do NOT alter established facts or character traits
+- Keep the original structure and flow
+- Output the expanded chapter in === EXPANDED_CONTENT === block`
+      : `你是一位擅长扩写的专业小说编辑。你的任务是丰富章节内容：
+1. 环境细节和氛围描写
+2. 人物心理深度和内心独白
+3. 感官描写（视觉、听觉、嗅觉、触觉、味觉）
+4. 节奏变化（放慢重要时刻）
+5. 潜台词和情感暗流
+
+规则：
+- 禁止改变剧情、人物行动或故事结果
+- 禁止增加新角色或新场景
+- 禁止改变已确立的事实或人物特征
+- 保持原有结构和流程
+- 输出扩写后的内容到 === EXPANDED_CONTENT === 标签`;
+
+    const lengthGuidance = options?.lengthSpec
+      ? (isEnglish
+          ? `\n\nTarget length: ${options.lengthSpec.target} characters (range: ${options.lengthSpec.softMin}-${options.lengthSpec.softMax}). Expand to fill this range naturally.`
+          : `\n\n目标字数：${options.lengthSpec.target}字（区间：${options.lengthSpec.softMin}-${options.lengthSpec.softMax}）。自然扩写到这个范围。`)
+      : "";
+
+    const userPrompt = isEnglish
+      ? `Expand the following chapter content:\n\n${chapterContent}${lengthGuidance}`
+      : `扩写以下章节内容：\n\n${chapterContent}${lengthGuidance}`;
+
+    const response = await this.chat(
+      [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      { temperature: 0.7 },
+    );
+
+    const content = response.content ?? "";
+    const expandedMatch = content.match(/=== EXPANDED_CONTENT ===\s*([\s\S]*?)(?==== [A-Z_]+ ===|$)/);
+    const expandedContent = expandedMatch?.[1]?.trim() ?? chapterContent;
+
+    return {
+      revisedContent: expandedContent,
+      wordCount: expandedContent.length,
+      fixedIssues: expandedContent !== chapterContent ? ["扩写：增加了细节和描写"] : [],
+      updatedState: "(扩写模式：状态卡未变更)",
+      updatedLedger: "",
+      updatedHooks: "(伏笔池未变更)",
+      tokenUsage: response.usage,
+    };
+  }
+
+  /**
+   * Condense chapter content using LLM.
+   * Removes redundancy while preserving core plot and key information.
+   */
+  async condenseChapter(
+    bookDir: string,
+    chapterContent: string,
+    chapterNumber: number,
+    options?: {
+      chapterIntent?: string;
+      chapterMemo?: ChapterMemo;
+      lengthSpec?: LengthSpec;
+      contextCache?: TruthContextCache;
+    },
+  ): Promise<ReviseOutput> {
+    const langPrefix = await readBookLanguage(bookDir);
+    const resolvedLanguage = langPrefix === "en" ? "en" : "zh";
+    const isEnglish = resolvedLanguage === "en";
+
+    const systemPrompt = isEnglish
+      ? `You are an expert fiction editor specializing in condensing prose. Your task is to make the text more concise by:
+1. Removing redundant descriptions and repeated information
+2. Cutting filler words and weak phrases
+3. Merging similar paragraphs
+4. Tightening dialogue without losing character voice
+5. Preserving core plot points, character development, and key information
+
+RULES:
+- Do NOT remove any plot-critical elements
+- Do NOT alter character motivations or key dialogue
+- Do NOT change the story structure or scene sequence
+- Keep essential atmosphere and emotional beats
+- Output the condensed chapter in === CONDENSED_CONTENT === block`
+      : `你是一位擅长精简的专业小说编辑。你的任务是让文字更紧凑：
+1. 去除冗余描写和重复信息
+2. 删除口水话和弱表达
+3. 合并相似段落
+4. 精简对话但保留人物语气
+5. 保留核心剧情、人物发展和关键信息
+
+规则：
+- 禁止删除剧情关键元素
+- 禁止改变人物动机或关键对话
+- 禁止改变故事结构或场景顺序
+- 保留必要的氛围和情感节拍
+- 输出精简后的内容到 === CONDENSED_CONTENT === 标签`;
+
+    const lengthGuidance = options?.lengthSpec
+      ? (isEnglish
+          ? `\n\nTarget length: ${options.lengthSpec.target} characters (range: ${options.lengthSpec.softMin}-${options.lengthSpec.softMax}). Condense to fit this range.`
+          : `\n\n目标字数：${options.lengthSpec.target}字（区间：${options.lengthSpec.softMin}-${options.lengthSpec.softMax}）。精简到这个范围。`)
+      : "";
+
+    const userPrompt = isEnglish
+      ? `Condense the following chapter content:\n\n${chapterContent}${lengthGuidance}`
+      : `精简以下章节内容：\n\n${chapterContent}${lengthGuidance}`;
+
+    const response = await this.chat(
+      [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      { temperature: 0.3 },
+    );
+
+    const content = response.content ?? "";
+    const condensedMatch = content.match(/=== CONDENSED_CONTENT ===\s*([\s\S]*?)(?==== [A-Z_]+ ===|$)/);
+    const condensedContent = condensedMatch?.[1]?.trim() ?? chapterContent;
+
+    return {
+      revisedContent: condensedContent,
+      wordCount: condensedContent.length,
+      fixedIssues: condensedContent !== chapterContent ? ["精简：去除了冗余内容"] : [],
+      updatedState: "(精简模式：状态卡未变更)",
+      updatedLedger: "",
+      updatedHooks: "(伏笔池未变更)",
+      tokenUsage: response.usage,
+    };
   }
 
   private buildAutoSystemPrompt(params: {

@@ -75,6 +75,7 @@ interface Nav {
   toGenres: () => void;
   toStyle: () => void;
   toImport: () => void;
+  toImageGen: () => void;
   toImages: () => void;
   toRadar: () => void;
   toDoctor: () => void;
@@ -466,6 +467,12 @@ export function Sidebar({ nav, activePage, sse, t, onClose, mobileOpen }: {
               icon={<Gamepad2 size={16} />}
               active={false}
               onClick={() => launchPlay("open")}
+            />
+            <SidebarItem
+              label="图片生成"
+              icon={<Pencil size={16} />}
+              active={activePage === "image-gen"}
+              onClick={nav.toImageGen}
             />
             <SidebarItem
               label="图片库"

@@ -80,6 +80,8 @@ export const STUDIO_SSE_EVENTS = [
   "operations:restore",
   "operations:update",
   "operations:history",
+  "events:replay:start",
+  "events:replay:end",
   "ping",
 ] as const;
 
@@ -127,6 +129,17 @@ function normalizeActiveOperations(operations: unknown): ActiveOperation[] {
     : [];
 }
 
+/** Operations not updated within this threshold are considered stale and removed. */
+const STALE_OPERATION_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+
+function filterStaleOperations(operations: ActiveOperation[]): ActiveOperation[] {
+  const now = Date.now();
+  return operations.filter((op) => {
+    const lastActivity = op.updatedAt ?? op.startedAt;
+    return lastActivity == null || now - lastActivity < STALE_OPERATION_THRESHOLD_MS;
+  });
+}
+
 export function activeOperationsSignature(operations: ReadonlyArray<ActiveOperation>): string {
   return JSON.stringify(operations.map((operation) => ({
     type: operation.type,
@@ -158,7 +171,7 @@ export function useSSE(url = "/events") {
         if (cancelled || !Array.isArray(data?.operations)) {
           return;
         }
-        const operations = normalizeActiveOperations(data.operations);
+        const operations = filterStaleOperations(normalizeActiveOperations(data.operations));
         const signature = activeOperationsSignature(operations);
         if (signature === lastOperationsSignature.current) return;
         lastOperationsSignature.current = signature;
@@ -195,6 +208,19 @@ export function useSSE(url = "/events") {
       if (timer !== null) window.clearTimeout(timer);
     };
   }, [connected, restoreActiveOperations]);
+
+  // Periodically clean up stale operations from local state
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setActiveOperations((current) => {
+        const filtered = filterStaleOperations([...current]);
+        if (filtered.length === current.length) return current;
+        lastOperationsSignature.current = activeOperationsSignature(filtered);
+        return filtered;
+      });
+    }, 30_000); // check every 30 seconds
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const reconnect = () => {
@@ -250,7 +276,7 @@ export function useSSE(url = "/events") {
           (e.type === "operations:restore" || e.type === "operations:update")
           && Array.isArray(data?.operations)
         ) {
-          const operations = normalizeActiveOperations(data.operations);
+          const operations = filterStaleOperations(normalizeActiveOperations(data.operations));
           const signature = activeOperationsSignature(operations);
           if (signature === lastOperationsSignature.current) return;
           lastOperationsSignature.current = signature;

@@ -214,6 +214,144 @@ export class ChapterAnalyzerAgent extends BaseAgent {
     };
   }
 
+  async generateHighlights(input: AnalyzeChapterInput): Promise<{
+    highlights: string[];
+    hookLine: string;
+    chapterSummary: string;
+  }> {
+    const { book, chapterNumber, chapterContent } = input;
+    const language = book.language ?? "zh";
+    const isZh = language !== "en";
+
+    const prompt = isZh
+      ? `请分析以下小说章节内容，生成：
+1. 2-3个看点亮点（读者最可能记住的情节、反转或名场面）
+2. 一句吸引人的"钩子"描述（像平台推荐语一样引人入胜）
+3. 一段简洁的章节摘要（50字以内）
+
+请用以下格式输出：
+## 看点
+- 看点1
+- 看点2
+- 看点3
+
+## 钩子
+一句推荐语
+
+## 摘要
+章节摘要
+
+章节内容：
+${chapterContent.slice(0, 8000)}`
+      : `Analyze this novel chapter and generate:
+1. 2-3 highlight points (readers' most memorable moments, twists or scenes)
+2. A one-line hook (like a platform blurb that draws readers in)
+3. A brief chapter summary (under 50 words)
+
+Format:
+## Highlights
+- highlight 1
+- highlight 2
+- highlight 3
+
+## Hook
+One-line hook
+
+## Summary
+Chapter summary
+
+Chapter content:
+${chapterContent.slice(0, 8000)}`;
+
+    const response = await this.chat(
+      [{ role: "user", content: prompt }],
+      { temperature: 0.5 },
+    );
+
+    const content = response.content ?? "";
+    const highlightsMatch = content.match(/## (?:看点|Highlights)\s*\n([\s\S]*?)(?=\n## |$)/);
+    const hookMatch = content.match(/## (?:钩子|Hook)\s*\n([\s\S]*?)(?=\n## |$)/);
+    const summaryMatch = content.match(/## (?:摘要|Summary)\s*\n([\s\S]*?)(?=\n## |$)/);
+
+    const highlights = highlightsMatch?.[1]
+      ?.split("\n")
+      .map((l: string) => l.replace(/^[-*]\s*/, "").trim())
+      .filter(Boolean) ?? [];
+
+    return {
+      highlights,
+      hookLine: hookMatch?.[1]?.trim() ?? "",
+      chapterSummary: summaryMatch?.[1]?.trim() ?? "",
+    };
+  }
+
+  async generateSatisfactionBeats(input: AnalyzeChapterInput): Promise<ReadonlyArray<{
+    type: string;
+    paragraph: number;
+    description: string;
+  }>> {
+    const { book, chapterContent } = input;
+    const language = book.language ?? "zh";
+    const isZh = language !== "en";
+
+    const paragraphs = chapterContent.split(/\n\n+/).filter(Boolean);
+    const truncatedParagraphs = paragraphs.map((p, i) => `[P${i}] ${p.slice(0, 200)}`).join("\n");
+
+    const prompt = isZh
+      ? `分析以下小说章节，标记每段的爽点类型。可用的爽点类型：
+- 打脸：主角反击、被轻视后证明自己
+- 升级：实力突破、获得新能力或资源
+- 反转：出乎意料的剧情转折
+- 悬念：留下未解之谜、章节钩子
+- 拯救：危机中被救援或救援他人
+- 复仇：对敌对势力的报复行动
+- 揭秘：揭示隐藏真相或身份
+
+如果某段没有明确爽点则不标记。输出格式（每行一条）：
+P0 反转 主角身份被揭穿令所有人震惊
+P5 打脸 当众击败嘲讽者
+
+章节段落：
+${truncatedParagraphs.slice(0, 12000)}`
+      : `Analyze this chapter and tag satisfaction beats per paragraph. Beat types:
+- 打脸(face-slap): Protagonist counters, proves doubters wrong
+- 升级(power-up): Breakthrough, new ability or resource
+- 反转(twist): Unexpected plot turn
+- 悬念(suspense): Unresolved mystery, chapter hook
+- 拯救(rescue): Saved from or saving others from crisis
+- 复仇(revenge): Retaliation against antagonists
+- 揭秘(reveal): Hidden truth or identity exposed
+
+Skip paragraphs with no clear beat. Format (one per line):
+P0 twist The protagonist's identity shocks everyone
+P5 face-slap Defeats the mocker in public
+
+Chapter paragraphs:
+${truncatedParagraphs.slice(0, 12000)}`;
+
+    const response = await this.chat(
+      [{ role: "user", content: prompt }],
+      { temperature: 0.3 },
+    );
+
+    const content = response.content ?? "";
+    const beatLineRegex = /^P(\d+)\s+(\S+)\s+(.+)$/gm;
+    const beats: Array<{ type: string; paragraph: number; description: string }> = [];
+    let match: RegExpExecArray | null;
+    while ((match = beatLineRegex.exec(content)) !== null) {
+      const paragraph = parseInt(match[1]!, 10);
+      const type = match[2]!.trim();
+      const description = match[3]!.trim();
+      // Validate type against known set
+      const validTypes = new Set(["打脸", "升级", "反转", "悬念", "拯救", "复仇", "揭秘",
+        "face-slap", "power-up", "twist", "suspense", "rescue", "revenge", "reveal"]);
+      if (validTypes.has(type) && Number.isFinite(paragraph)) {
+        beats.push({ type, paragraph, description });
+      }
+    }
+    return beats;
+  }
+
   private buildSystemPrompt(
     book: BookConfig,
     genreProfile: GenreProfile,

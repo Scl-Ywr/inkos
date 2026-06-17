@@ -324,7 +324,7 @@ export class HeadroomMcpManager {
       this.transport = null;
       if (this.state === "online") this.state = "offline";
     };
-    const client = new Client({ name: "inkos-studio", version: "1.6.0" });
+    const client = new Client({ name: "inkos-studio", version: "1.6.1" });
     await client.connect(transport, { timeout: this.timeoutMs });
     this.client = client;
     this.transport = transport;

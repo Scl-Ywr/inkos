@@ -52,6 +52,7 @@ function buildPlan(chapter: number): PlanChapterOutput {
       isGoldenOpening: true,
       threadRefs: ["H1"],
       body: MEMO_BODY,
+      satisfactionBeats: [],
     },
     intentMarkdown: "# Chapter Intent\n\n## Goal\n取回账册离开旧港\n",
     plannerInputs: ["story/volume_outline.md", "story/current_state.md"],

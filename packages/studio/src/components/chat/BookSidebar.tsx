@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { Theme } from "../../hooks/use-theme";
-import type { TFunction } from "../../hooks/use-i18n";
+import { useI18n, type TFunction } from "../../hooks/use-i18n";
 import type { SSEMessage } from "../../hooks/use-sse";
 import { useChatStore } from "../../store/chat";
 import { fetchJson } from "../../hooks/use-api";
@@ -51,6 +51,7 @@ function renderTruthBody(
   content: string,
   frontmatter: TruthFrontmatter | null,
   body: string | null,
+  t: (key: any) => string,
 ) {
   if (file === "pending_hooks.md") {
     return <PendingHooksView content={content} />;
@@ -59,7 +60,7 @@ function renderTruthBody(
     const { isEmpty, body: stateBody } = presentCurrentState(content);
     return isEmpty ? (
       <p className="text-[14px] leading-6 text-muted-foreground/60 italic">
-        还没有运行状态。开始写作后，每写完一章这里会自动记录最新的故事进展。
+        {t("truth.noState")}
       </p>
     ) : (
       <MarkdownView mode="static" preset="cjk">{stateBody}</MarkdownView>
@@ -68,7 +69,7 @@ function renderTruthBody(
   if (file === "emotional_arcs.md" && !hasTableRows(content)) {
     return (
       <p className="text-[14px] leading-6 text-muted-foreground/60 italic">
-        还没有情感弧线记录。开始写作后，这里会记录角色在各章的情绪变化。
+        {t("truth.noArcs")}
       </p>
     );
   }
@@ -83,6 +84,7 @@ function renderTruthBody(
 }
 
 function ArtifactView({ bookId }: { readonly bookId: string }) {
+  const { t } = useI18n();
   const artifactFile = useChatStore((s) => s.artifactFile);
   const artifactChapter = useChatStore((s) => s.artifactChapter);
   const closeArtifact = useChatStore((s) => s.closeArtifact);
@@ -96,7 +98,7 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
 
   const isChapter = artifactChapter !== null;
   const label = isChapter
-    ? `第 ${artifactChapter} 章`
+    ? t("truth.chapterLabel").replace("{n}", artifactChapter.toString())
     : artifactFile ? artifactLabel(artifactFile) : "";
 
   useEffect(() => {
@@ -204,7 +206,7 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
           />
         ) : (
           <div className="px-4 py-3 text-[15px] leading-7">
-            {renderTruthBody(isChapter ? null : artifactFile, content, frontmatter, body)}
+            {renderTruthBody(isChapter ? null : artifactFile, content, frontmatter, body, t)}
           </div>
         )}
       </div>

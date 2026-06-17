@@ -19,7 +19,14 @@ import { GenreManager } from "./pages/GenreManager";
 import { StyleManager } from "./pages/StyleManager";
 import { ImportManager } from "./pages/ImportManager";
 import { ImageLibraryPage } from "./pages/ImageLibraryPage";
+import { ImageGenPage } from "./pages/ImageGenPage";
 import { KnowledgePage } from "./pages/KnowledgePage";
+import { TimelinePage } from "./pages/TimelinePage";
+import { SchedulePage } from "./pages/SchedulePage";
+import { CharacterGraphPage } from "./pages/CharacterGraphPage";
+import { WorldSettingsPage } from "./pages/WorldSettingsPage";
+import { ForeshadowingPage } from "./pages/ForeshadowingPage";
+import { EndingsPage } from "./pages/EndingsPage";
 import { RadarView } from "./pages/RadarView";
 import { DoctorView } from "./pages/DoctorView";
 import { LanguageSelector } from "./pages/LanguageSelector";
@@ -1603,8 +1610,8 @@ export function App() {
     const wakeNode = () => {
       if (document.visibilityState === "visible") {
         void ensureEmbeddedNodeRunning();
-        window.setTimeout(() => refetchProject(), 800);
-        window.setTimeout(() => refetchProject(), 2200);
+        window.setTimeout(() => refetchProject(), 300);
+        window.setTimeout(() => refetchProject(), 1200);
       }
     };
     void ensureEmbeddedNodeRunning();
@@ -1678,11 +1685,18 @@ export function App() {
     toServiceDetail: (id: string) => { setRoute({ page: "service-detail", serviceId: id }); closeSidebar(); },
     toTruth: (bookId: string) => { setRoute({ page: "truth", bookId }); closeSidebar(); },
     toKnowledge: (bookId: string) => { setRoute({ page: "knowledge", bookId }); closeSidebar(); },
+    toTimeline: (bookId: string) => { setRoute({ page: "timeline", bookId }); closeSidebar(); },
+    toSchedule: (bookId: string) => { setRoute({ page: "schedule", bookId }); closeSidebar(); },
+    toCharacterGraph: (bookId: string) => { setRoute({ page: "character-graph", bookId }); closeSidebar(); },
+    toWorldSettings: (bookId: string) => { setRoute({ page: "world-settings", bookId }); closeSidebar(); },
+    toForeshadowing: (bookId: string) => { setRoute({ page: "foreshadowing", bookId }); closeSidebar(); },
+    toEndings: (bookId: string) => { setRoute({ page: "endings", bookId }); closeSidebar(); },
     toDaemon: () => { setRoute({ page: "daemon" }); closeSidebar(); },
     toLogs: () => { setRoute({ page: "logs" }); closeSidebar(); },
     toGenres: () => { setRoute({ page: "genres" }); closeSidebar(); },
     toStyle: () => { setRoute({ page: "style" }); closeSidebar(); },
     toImport: (tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation") => { setRoute({ page: "import", ...(tab ? { tab } : {}) }); closeSidebar(); },
+    toImageGen: () => { setRoute({ page: "image-gen" }); closeSidebar(); },
     toImages: () => { setRoute({ page: "images" }); closeSidebar(); },
     toRadar: () => { setRoute({ page: "radar" }); closeSidebar(); },
     toDoctor: () => { setRoute({ page: "doctor" }); closeSidebar(); },
@@ -1791,13 +1805,19 @@ export function App() {
                className="app-shell-home-button soft-pill inline-flex h-10 w-10 shrink-0 touch-manipulation items-center justify-center gap-2 rounded-full px-0 text-sm font-medium text-foreground transition-colors hover:border-primary/40 sm:w-auto sm:max-w-none sm:justify-start sm:px-3.5"
              >
                <House size={14} />
-               <span className="hidden sm:inline">首页</span>
+               <span className="hidden sm:inline">{t("bread.home")}</span>
                <span className="hidden sm:inline text-muted-foreground/70">/</span>
                <span className="hidden truncate font-serif sm:inline">InkOS Studio</span>
              </button>
           </div>
 
           <div className="app-shell-header-actions flex min-w-0 flex-1 items-center justify-end gap-1 overflow-visible pl-0 pr-0 sm:gap-3">
+            {!sse.connected && isNativeRuntime() && (
+              <span className="flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-600">
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+                {currentLang === "zh" ? "重连中" : "Reconnecting"}
+              </span>
+            )}
             <RuntimeStatusButton />
             <TokenDiagnosticsButton />
             <LocalStorageButton />
@@ -1827,7 +1847,7 @@ export function App() {
             <button
               onClick={() => setTheme(isDark ? "light" : "dark")}
               className="soft-pill flex h-10 w-10 shrink-0 touch-manipulation items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground"
-              aria-label={isDark ? "切换到亮色模式" : "切换到暗色模式"}
+              aria-label={isDark ? (currentLang === "zh" ? "切换到亮色模式" : "Switch to light mode") : (currentLang === "zh" ? "切换到暗色模式" : "Switch to dark mode")}
             >
               {isDark ? <Sun size={14} /> : <Moon size={14} />}
             </button>
@@ -1917,6 +1937,36 @@ export function App() {
               <KnowledgePage bookId={route.bookId} nav={nav} theme={theme} t={t} />
             </div>
           )}
+          {route.page === "timeline" && (
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
+              <TimelinePage bookId={route.bookId} nav={nav} theme={theme} t={t} />
+            </div>
+          )}
+          {route.page === "schedule" && (
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
+              <SchedulePage bookId={route.bookId} nav={nav} theme={theme} t={t} />
+            </div>
+          )}
+          {route.page === "character-graph" && (
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
+              <CharacterGraphPage bookId={route.bookId} nav={nav} theme={theme} t={t} />
+            </div>
+          )}
+          {route.page === "world-settings" && (
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
+              <WorldSettingsPage bookId={route.bookId} nav={nav} theme={theme} t={t} />
+            </div>
+          )}
+          {route.page === "foreshadowing" && (
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
+              <ForeshadowingPage bookId={route.bookId} nav={nav} theme={theme} t={t} />
+            </div>
+          )}
+          {route.page === "endings" && (
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
+              <EndingsPage bookId={route.bookId} nav={nav} theme={theme} t={t} />
+            </div>
+          )}
           {route.page === "daemon" && (
             <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
               <DaemonControl nav={nav} theme={theme} t={t} sse={sse} />
@@ -1940,6 +1990,11 @@ export function App() {
           {route.page === "import" && (
             <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
               <ImportManager nav={nav} theme={theme} t={t} initialTab={route.tab} />
+            </div>
+          )}
+          {route.page === "image-gen" && (
+            <div className="max-w-6xl mx-auto px-4 py-6 md:px-10 md:py-10 lg:py-12 fade-in">
+              <ImageGenPage nav={nav} />
             </div>
           )}
           {route.page === "images" && (

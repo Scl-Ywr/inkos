@@ -89,7 +89,7 @@ public class EmbeddedNodeService extends Service {
             "EmbeddedNodeService onCreate entered. SDK " + Build.VERSION.SDK_INT + ", ABIS: " + Arrays.toString(Build.SUPPORTED_ABIS)
         );
         acquireWakeLock();
-        safeStartForeground("InkOS local runtime starting");
+        safeStartForeground(pickIdleMessage());
         startProgressNotificationMonitor();
     }
 
@@ -178,7 +178,7 @@ public class EmbeddedNodeService extends Service {
         }
         if (startedNodeAlready) {
             writeRuntimeStatus("restart-skipped", "Node backend is already starting; restart request ignored.");
-            updateNotification("InkOS local runtime is already starting");
+            updateNotification("InkOS Studio", pickStartingMessage() + "（已在启动中）", false);
             return;
         }
         if (canConnectToNode()) {
@@ -211,7 +211,7 @@ public class EmbeddedNodeService extends Service {
             runtimeDeleted ? "runtime-reset" : "runtime-reset-warning",
             "Cleared embedded Node runtime cache in app private storage. User project files in Documents/InkOS Studio were not changed."
         );
-        updateNotification("InkOS local runtime cache cleared");
+        updateNotification("InkOS Studio", "缓存已清理，焕然一新 ✨", false);
     }
 
     private void startNode() {
@@ -224,7 +224,7 @@ public class EmbeddedNodeService extends Service {
             }
             if (!NATIVE_RUNNER_AVAILABLE) {
                 writeRuntimeStatus("node-runner-unavailable", NATIVE_RUNNER_LOAD_ERROR);
-                updateNotification("InkOS local runtime unavailable");
+                updateNotification("InkOS Studio", pickErrorMessage(), false);
                 return;
             }
             File nodeExecutable = resolveNodeExecutable();
@@ -234,7 +234,7 @@ public class EmbeddedNodeService extends Service {
                     "node24-executable-missing",
                     "Node24 executable is missing: " + nodeExecutable.getAbsolutePath() + ". SDK " + Build.VERSION.SDK_INT + ", ABIS: " + Arrays.toString(Build.SUPPORTED_ABIS)
                 );
-                updateNotification("InkOS local runtime unavailable");
+                updateNotification("InkOS Studio", pickErrorMessage(), false);
                 return;
             }
 
@@ -308,7 +308,7 @@ public class EmbeddedNodeService extends Service {
             }
 
             startPortMonitor(projectRoot);
-            updateNotification("InkOS local runtime starting on 127.0.0.1:4567");
+            updateNotification("InkOS Studio", pickStartingMessage(), false);
             Log.i(TAG, "Starting Node24 JNI runtime: " + server.getAbsolutePath());
             writeRuntimeStatus(
                 "node-starting",
@@ -335,7 +335,7 @@ public class EmbeddedNodeService extends Service {
         } catch (Throwable error) {
             Log.e(TAG, "Embedded Node runtime crashed before startup", error);
             writeRuntimeStatus("node-crash", error.getClass().getSimpleName() + ": " + error.getMessage());
-            updateNotification("InkOS local runtime crashed");
+            updateNotification("InkOS Studio", pickErrorMessage() + "（崩溃了）", false);
         } finally {
             synchronized (this) {
                 startedNodeAlready = false;
@@ -359,7 +359,7 @@ public class EmbeddedNodeService extends Service {
             + Arrays.toString(Build.SUPPORTED_ABIS)
             + "。请使用 Android 9+ 设备，或重新打包 legacy Node18/API24 版本。";
         writeRuntimeStatus("unsupported-android-version", message);
-        updateNotification("InkOS Node24 需要 Android 9.0+");
+        updateNotification("InkOS Studio", "需要 Android 9.0+ 才能运行哦~", false);
         releaseWakeLock();
     }
 
@@ -496,14 +496,14 @@ public class EmbeddedNodeService extends Service {
                     "node-stopped",
                     "Node backend stopped and automatic restart limit was reached. Open InkOS local runtime status and tap start."
                 );
-                updateNotification("InkOS local runtime stopped");
+                updateNotification("InkOS Studio", pickErrorMessage() + "（已停止）", false);
                 return;
             }
             autoRestartAttempts += 1;
         }
         final int attempt = autoRestartAttempts;
         writeRuntimeStatus("restart-scheduled", "Node backend stopped. Auto restart attempt " + attempt + "/" + MAX_AUTO_RESTARTS + " will run soon.");
-        updateNotification("InkOS local runtime restarting");
+        updateNotification("InkOS Studio", pickStartingMessage() + "（重启中）", false);
         new Thread(() -> {
             try {
                 Thread.sleep(Math.min(30000, 2000L * attempt));
@@ -527,7 +527,7 @@ public class EmbeddedNodeService extends Service {
                         "running",
                         "Node backend is listening on http://127.0.0.1:4567. Project root: " + projectRoot.getAbsolutePath()
                     );
-                    updateNotification("InkOS local runtime running on 127.0.0.1:4567");
+                    updateNotification("InkOS Studio", pickIdleMessage(), false);
                     return;
                 }
                 try {
@@ -542,7 +542,7 @@ public class EmbeddedNodeService extends Service {
                 "Node process was started, but port 4567 did not become reachable within 120 seconds. See node-output.log."
             );
             releaseWakeLock();
-            updateNotification("InkOS local runtime did not answer on port 4567");
+            updateNotification("InkOS Studio", pickErrorMessage() + "（端口无响应）", false);
         }, "inkos-node-port-monitor").start();
     }
 
@@ -1015,6 +1015,71 @@ public class EmbeddedNodeService extends Service {
         }
     }
 
+    // --- Cute notification messages ---
+
+    private static final String[] IDLE_MESSAGES = {
+        "准备就绪，等你回来~",
+        "后台待命中，随时可以开工 ✨",
+        "Node 小助手在打盹中…",
+        "服务器安静地运行着，岁月静好 ☕",
+        "在后台默默守护你的创作",
+        "没有任务在跑，但随时待命哦",
+    };
+
+    private static final String[] WRITING_MESSAGES = {
+        "正在奋笔疾书中…",
+        "灵感来了，正在创作中 ✍️",
+        "角色们正在你笔下鲜活起来",
+        "文字在流淌，故事在生长",
+        "正在为你编织新的篇章",
+        "笔耕不辍，精彩即将呈现",
+    };
+
+    private static final String[] STARTING_MESSAGES = {
+        "正在热身，马上就好…",
+        "Node 小助手正在上线 ⚡",
+        "启动中，稍等一下下",
+        "正在准备创作环境",
+    };
+
+    private static final String[] ERROR_MESSAGES = {
+        "遇到了一点小状况，正在恢复中",
+        "出了点小问题，别担心~",
+        "后台遇到了麻烦，正在自愈中",
+    };
+
+    private static final String[] BACKGROUND_MESSAGES = {
+        "在后台安静地工作着",
+        "你不在的时候，我在默默努力",
+        "后台守护中，创作不停歇",
+    };
+
+    private static java.util.Random messageRandom = new java.util.Random();
+
+    private static String pickRandom(String[] messages) {
+        return messages[messageRandom.nextInt(messages.length)];
+    }
+
+    static String pickIdleMessage() { return pickRandom(IDLE_MESSAGES); }
+    static String pickWritingMessage() { return pickRandom(WRITING_MESSAGES); }
+    static String pickStartingMessage() { return pickRandom(STARTING_MESSAGES); }
+    static String pickErrorMessage() { return pickRandom(ERROR_MESSAGES); }
+    static String pickBackgroundMessage() { return pickRandom(BACKGROUND_MESSAGES); }
+
+    static String pickBusyMessage(String taskType) {
+        if (taskType == null) return pickWritingMessage();
+        String lower = taskType.toLowerCase();
+        if (lower.contains("write") || lower.contains("draft")) return pickWritingMessage();
+        if (lower.contains("audit") || lower.contains("revise")) return "正在审稿中，精益求精…";
+        if (lower.contains("plan")) return "正在规划下一章的蓝图";
+        if (lower.contains("import")) return "正在整理导入的素材";
+        if (lower.contains("radar")) return "正在分析创作数据";
+        if (lower.contains("fanfic") || lower.contains("imitation")) return "同人/仿写模式启动中";
+        return pickWritingMessage();
+    }
+
+    // --- Notification helpers ---
+
     private Notification buildNotification(String text) {
         return buildNotification("InkOS Studio", text, false);
     }
@@ -1113,10 +1178,10 @@ public class EmbeddedNodeService extends Service {
 
     private void updateTaskNotification(String title, String text, boolean busy) {
         String safeTitle = title == null || title.trim().isEmpty()
-            ? (busy ? "InkOS 正在执行任务" : "InkOS Studio")
+            ? (busy ? "InkOS Studio" : "InkOS Studio")
             : title.trim();
         String safeText = text == null || text.trim().isEmpty()
-            ? (busy ? "任务正在运行" : "本地 Node 后端运行中")
+            ? (busy ? pickBusyMessage(title) : pickIdleMessage())
             : text.trim();
         String signature = notificationSignature(safeTitle, safeText, safeText, "", busy);
         if (signature.equals(lastProgressSignature)) {

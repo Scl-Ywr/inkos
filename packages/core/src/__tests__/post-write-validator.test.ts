@@ -259,6 +259,9 @@ describe("validatePostWrite", () => {
       additionalAuditDimensions: [],
       enableFullCastTracking: false,
       allowedDeviations: [],
+      bannedWords: [],
+      preferredWords: [],
+      domainTerms: [],
     };
     const content = "他一脸跪舔的样子让人恶心。";
     const result = validatePostWrite(content, baseProfile, bookRules);

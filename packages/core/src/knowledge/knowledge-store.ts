@@ -52,6 +52,11 @@ export interface AddKnowledgeSourceInput {
   readonly content: string;
 }
 
+export interface AddKnowledgeSourceResult extends KnowledgeLibrary {
+  readonly truncated: boolean;
+  readonly originalCharCount: number;
+}
+
 export interface KnowledgeSearchResult {
   readonly query: string;
   readonly sources: readonly KnowledgeSource[];
@@ -69,7 +74,7 @@ const SEARCH_INDEX_FILE = "search-index.json";
 const MAX_CHARS_PER_SOURCE = 800_000;
 const CHUNK_TARGET_CHARS = 1_200;
 const CHUNK_OVERLAP_CHARS = 160;
-const MAX_CONTEXT_CHARS = 5_000;
+const MAX_CONTEXT_CHARS = 8_000;
 const EMBEDDING_DIMENSIONS = 48;
 const MAX_SEARCH_CANDIDATES = 240;
 
@@ -118,9 +123,12 @@ export class KnowledgeStore {
     };
   }
 
-  async addSource(scope: KnowledgeScope, ownerId: string, input: AddKnowledgeSourceInput): Promise<KnowledgeLibrary> {
+  async addSource(scope: KnowledgeScope, ownerId: string, input: AddKnowledgeSourceInput): Promise<AddKnowledgeSourceResult> {
     const name = sanitizeSourceName(input.name);
-    const content = normalizeKnowledgeText(input.content).slice(0, MAX_CHARS_PER_SOURCE);
+    const normalized = normalizeKnowledgeText(input.content);
+    const originalCharCount = normalized.length;
+    const truncated = originalCharCount > MAX_CHARS_PER_SOURCE;
+    const content = normalized.slice(0, MAX_CHARS_PER_SOURCE);
     if (!content.trim()) {
       throw new Error("Knowledge source content is empty.");
     }
@@ -163,7 +171,8 @@ export class KnowledgeStore {
       ...chunks,
     ];
     await this.saveIndexes(scope, ownerId, nextSources, nextChunks);
-    return this.load(scope, ownerId);
+    const updated = await this.load(scope, ownerId);
+    return { ...updated, truncated, originalCharCount };
   }
 
   async removeSource(scope: KnowledgeScope, ownerId: string, sourceId: string): Promise<KnowledgeLibrary> {

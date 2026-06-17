@@ -55,7 +55,7 @@ export function buildWriterSystemPrompt(
         buildCreativeConstitution("en"),
         buildImmersionPillars("en"),
         buildGoldenOpeningDiscipline(chapterNumber, "en"),
-        buildGenreRules(genreProfile, genreBody),
+        buildGenreRules(genreProfile, genreBody, bookRules),
         buildProtagonistRules(bookRules),
         buildNarrativePersonRule(bookRules, isEnglish ? "en" : "zh"),
         buildBookRulesBody(bookRulesBody),
@@ -80,7 +80,7 @@ export function buildWriterSystemPrompt(
         buildGoldenOpeningDiscipline(chapterNumber, "zh"),
         buildGoldenChaptersRules(chapterNumber, isEnglish ? "en" : "zh"),
         bookRules?.enableFullCastTracking ? buildFullCastTracking() : "",
-        buildGenreRules(genreProfile, genreBody),
+        buildGenreRules(genreProfile, genreBody, bookRules),
         buildProtagonistRules(bookRules),
         buildNarrativePersonRule(bookRules, isEnglish ? "en" : "zh"),
         buildBookRulesBody(bookRulesBody),
@@ -652,9 +652,13 @@ function buildFullCastTracking(): string {
 // Genre-specific rules
 // ---------------------------------------------------------------------------
 
-function buildGenreRules(gp: GenreProfile, genreBody: string): string {
-  const fatigueLine = gp.fatigueWords.length > 0
-    ? `- 高疲劳词（${gp.fatigueWords.join("、")}）单章最多出现1次`
+function buildGenreRules(gp: GenreProfile, genreBody: string, bookRules?: BookRules | null): string {
+  // Fix: use bookRules override if set, otherwise fall back to genre profile
+  const fatigueWords = bookRules?.fatigueWordsOverride && bookRules.fatigueWordsOverride.length > 0
+    ? bookRules.fatigueWordsOverride
+    : gp.fatigueWords;
+  const fatigueLine = fatigueWords.length > 0
+    ? `- 高疲劳词（${fatigueWords.join("、")}）单章最多出现1次`
     : "";
 
   const chapterTypesLine = gp.chapterTypes.length > 0
@@ -665,11 +669,25 @@ function buildGenreRules(gp: GenreProfile, genreBody: string): string {
     ? `- 节奏规则：${gp.pacingRule}`
     : "";
 
+  const lexiconLines: string[] = [];
+  if (bookRules?.bannedWords && bookRules.bannedWords.length > 0) {
+    lexiconLines.push(`- 禁用词（绝不可出现）：${bookRules.bannedWords.join("、")}`);
+  }
+  if (bookRules?.preferredWords && bookRules.preferredWords.length > 0) {
+    const pairs = bookRules.preferredWords.map(p => `${p.avoid}→${p.prefer}`).join("；");
+    lexiconLines.push(`- 优先词汇替换：${pairs}`);
+  }
+  if (bookRules?.domainTerms && bookRules.domainTerms.length > 0) {
+    const terms = bookRules.domainTerms.map(d => d.definition ? `${d.term}（${d.definition}）` : d.term).join("、");
+    lexiconLines.push(`- 领域术语：${terms}`);
+  }
+
   return [
     `## 题材规范（${gp.name}）`,
     fatigueLine,
     pacingLine,
     chapterTypesLine,
+    lexiconLines.length > 0 ? `## 词库约束\n${lexiconLines.join("\n")}` : "",
     genreBody,
   ].filter(Boolean).join("\n\n");
 }

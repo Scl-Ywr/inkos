@@ -1,5 +1,6 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
 import { buildApiUrl } from "../lib/api-url";
+import { useI18n } from "../hooks/use-i18n";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useServiceStore } from "../store/service";
 import type { ActiveOperation, SSEMessage } from "../hooks/use-sse";
@@ -25,6 +26,8 @@ import {
   Download,
   FileInput,
   History,
+  Activity,
+  LayoutGrid,
 } from "lucide-react";
 
 interface BookSummary {
@@ -82,27 +85,6 @@ interface DashboardSseState {
   readonly activeOperations?: ReadonlyArray<ActiveOperation>;
 }
 
-const TASK_LABELS: Record<string, string> = {
-  "write:start": "开始写作",
-  "write:complete": "写作完成",
-  "write:error": "写作失败",
-  "draft:start": "开始起草",
-  "draft:complete": "起草完成",
-  "draft:error": "起草失败",
-  "rewrite:start": "开始重写",
-  "rewrite:complete": "重写完成",
-  "rewrite:error": "重写失败",
-  "audit:start": "开始审计",
-  "audit:complete": "审计完成",
-  "audit:error": "审计失败",
-  "revise:start": "开始修订",
-  "revise:complete": "修订完成",
-  "revise:error": "修订失败",
-  "agent:start": "Agent 启动",
-  "agent:complete": "Agent 完成",
-  "agent:error": "Agent 失败",
-};
-
 function getMessageBookId(message: SSEMessage): string | null {
   const data = message.data as { bookId?: unknown } | null;
   return typeof data?.bookId === "string" ? data.bookId : null;
@@ -126,7 +108,37 @@ function normalizeLogEvent(message: SSEMessage): TaskLogEntry | null {
   };
 }
 
-function normalizeTaskEvent(message: SSEMessage): TaskLogEntry | null {
+const TASK_LABELS: Record<string, string> = {
+  "write:start": "task.writing",
+  "write:complete": "chapter.approved",
+  "write:error": "chapter.auditFailed",
+  "draft:start": "task.drafting",
+  "draft:complete": "chapter.drafted",
+  "draft:error": "chapter.auditFailed",
+  "rewrite:start": "task.rewriting",
+  "rewrite:complete": "common.success",
+  "rewrite:error": "common.error",
+  "audit:start": "task.auditing",
+  "audit:complete": "common.success",
+  "audit:error": "common.error",
+  "revise:start": "task.revising",
+  "revise:complete": "common.success",
+  "revise:error": "common.error",
+  "agent:start": "task.agentRunning",
+  "agent:complete": "common.success",
+  "agent:error": "common.error",
+};
+
+function getTaskLabel(event: string, t: (key: any) => string): string {
+  const key = TASK_LABELS[event];
+  if (!key) return event;
+  if (event.includes("start")) return t("task.start").replace("{n}", t(key as any));
+  if (event.includes("complete")) return t("task.complete").replace("{n}", t(key as any));
+  if (event.includes("error")) return t("task.error").replace("{n}", t(key as any));
+  return t(key as any);
+}
+
+function normalizeTaskEvent(message: SSEMessage, t: (key: any) => string): TaskLogEntry | null {
   if (message.event === "operations:restore") {
     const operations = (message.data as { operations?: Array<{ type?: string }> } | null)?.operations ?? [];
     const operation = operations.at(-1);
@@ -134,12 +146,12 @@ function normalizeTaskEvent(message: SSEMessage): TaskLogEntry | null {
     return {
       tag: "task",
       level: "info",
-      message: `已恢复执行中的任务${operation.type ? `: ${operation.type}` : ""}`,
+      message: t("task.restored"),
       timestamp: message.timestamp,
     };
   }
 
-  const label = TASK_LABELS[message.event];
+  const label = getTaskLabel(message.event, t);
   if (!label) return null;
   const data = message.data as { error?: unknown; agent?: unknown; tool?: unknown } | null;
   const detail = typeof data?.error === "string"
@@ -157,11 +169,12 @@ function normalizeTaskEvent(message: SSEMessage): TaskLogEntry | null {
   };
 }
 
-function getCurrentTask(messages: ReadonlyArray<SSEMessage>): CurrentTask | null {
+function getCurrentTask(messages: ReadonlyArray<SSEMessage>, t: (key: any) => string): CurrentTask | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
-    const label = TASK_LABELS[message.event];
-    if (!label) continue;
+    const key = TASK_LABELS[message.event];
+    if (!key) continue;
+    const label = getTaskLabel(message.event, t);
     return {
       bookId: getMessageBookId(message),
       sessionId: getMessageSessionId(message),
@@ -188,7 +201,7 @@ function getCurrentTask(messages: ReadonlyArray<SSEMessage>): CurrentTask | null
   return {
     bookId: operation.bookId ?? null,
     sessionId: "sessionId" in operation && typeof operation.sessionId === "string" ? operation.sessionId : null,
-    label: operation.type === "agent" ? "Agent 正在执行" : "任务正在执行",
+    label: operation.type === "agent" ? t("task.agentRunning") : "任务正在执行",
     status: "running",
     timestamp: restored?.timestamp ?? Date.now(),
     startedAt: restored?.timestamp ?? Date.now(),
@@ -232,9 +245,10 @@ function getCurrentTaskFromOperations(operations: ReadonlyArray<ActiveOperation>
 export function pickCurrentTask(
   operations: ReadonlyArray<ActiveOperation> | undefined,
   messages: ReadonlyArray<SSEMessage>,
+  t: (key: any) => string,
 ): CurrentTask | null {
   const operationTask = getCurrentTaskFromOperations(operations);
-  const eventTask = getCurrentTask(messages);
+  const eventTask = getCurrentTask(messages, t);
   if (eventTask && eventTask.status !== "running") {
     if (!operationTask || eventTask.timestamp >= operationTask.timestamp) {
       return eventTask;
@@ -249,7 +263,7 @@ function restoredOperationMatchesBook(message: SSEMessage, bookId: string): bool
   return operations.some((operation) => operation.bookId === bookId);
 }
 
-function getRecentTaskLogs(messages: ReadonlyArray<SSEMessage>, bookId?: string): ReadonlyArray<TaskLogEntry> {
+function getRecentTaskLogs(messages: ReadonlyArray<SSEMessage>, t: (key: any) => string, bookId?: string): ReadonlyArray<TaskLogEntry> {
   const activeBookIds = deriveActiveBookIds(messages);
   const seen = new Set<string>();
   return messages
@@ -260,7 +274,7 @@ function getRecentTaskLogs(messages: ReadonlyArray<SSEMessage>, bookId?: string)
       if (restoredOperationMatchesBook(message, bookId)) return true;
       return message.event === "log" && activeBookIds.size <= 1;
     })
-    .map((message) => normalizeLogEvent(message) ?? normalizeTaskEvent(message))
+    .map((message) => normalizeLogEvent(message) ?? normalizeTaskEvent(message, t))
     .filter((entry): entry is TaskLogEntry => entry !== null)
     .filter((entry) => {
       const key = `${entry.timestamp}\u0000${entry.tag ?? ""}\u0000${entry.message}`;
@@ -347,6 +361,7 @@ function TaskExecutionLog({
   readonly onClear?: () => void;
   readonly startedAt?: number;
 }) {
+  const { t } = useI18n();
   const progress = progressEvent?.data as { elapsedMs?: number; totalChars?: number; status?: string } | null;
   const isLiveProgress = Boolean(progress && progress.status !== "done");
   const now = useLiveNow(isLiveProgress);
@@ -382,7 +397,7 @@ function TaskExecutionLog({
               <span className="h-3 w-px bg-primary/20" />
               <span className="flex items-center gap-1.5">
                 <Zap size={12} />
-                {(progress.totalChars ?? 0).toLocaleString()} 字
+                {(progress.totalChars ?? 0).toLocaleString()} {t("book.words")}
               </span>
             </div>
             {onClear && (
@@ -391,7 +406,7 @@ function TaskExecutionLog({
                 onClick={onClear}
                 className="rounded-full border border-border/45 bg-background/45 px-3 py-2 text-xs font-bold text-muted-foreground transition-colors hover:border-destructive/35 hover:bg-destructive/10 hover:text-destructive"
               >
-                清除
+                {t("common.clear")}
               </button>
             )}
           </div>
@@ -402,7 +417,7 @@ function TaskExecutionLog({
             onClick={onClear}
             className="rounded-full border border-border/45 bg-background/45 px-3 py-2 text-xs font-bold text-muted-foreground transition-colors hover:border-destructive/35 hover:bg-destructive/10 hover:text-destructive"
           >
-            清除
+            {t("common.clear")}
           </button>
         )}
       </div>
@@ -431,6 +446,7 @@ function TaskExecutionLog({
 }
 
 export function RecentTaskHistory({ items }: { readonly items: ReadonlyArray<OperationHistoryItem> }) {
+  const { t } = useI18n();
   if (items.length === 0) return null;
 
   return (
@@ -441,8 +457,8 @@ export function RecentTaskHistory({ items }: { readonly items: ReadonlyArray<Ope
             <History size={16} />
           </div>
           <div className="min-w-0">
-            <div className="text-sm font-bold text-foreground">最近任务</div>
-            <div className="mt-0.5 text-xs text-muted-foreground">完成、失败和停止记录</div>
+            <div className="text-sm font-bold text-foreground">{t("dash.recentEvents")}</div>
+            <div className="mt-0.5 text-xs text-muted-foreground">记录完成、失败和停止的历史</div>
           </div>
         </div>
       </div>
@@ -462,7 +478,7 @@ export function RecentTaskHistory({ items }: { readonly items: ReadonlyArray<Ope
                     <span className="truncate text-sm font-semibold text-foreground">{item.label}</span>
                     <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-bold ${statusView.className}`}>
                       <StatusIcon size={11} />
-                      {statusView.label}
+                      {item.status === "completed" ? t("common.success") : item.status === "cancelled" ? "已停止" : t("common.error")}
                     </span>
                   </div>
                   <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -582,8 +598,8 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: DashboardSseS
     operations: ReadonlyArray<OperationHistoryItem>;
   }>("/operations/history?limit=6");
   const currentTask = useMemo(
-    () => pickCurrentTask(sse.activeOperations, sse.messages),
-    [sse.activeOperations, sse.messages],
+    () => pickCurrentTask(sse.activeOperations, sse.messages, t),
+    [sse.activeOperations, sse.messages, t],
   );
   const visibleCurrentTask = currentTask && dismissedTaskAt !== currentTask.timestamp ? currentTask : null;
   const writingBooks = useMemo(() => {
@@ -605,7 +621,7 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: DashboardSseS
     () => selectLatestProgressEvent(sse.messages, visibleCurrentTask ?? undefined),
     [visibleCurrentTask, sse.messages],
   );
-  const currentTaskLogs = useMemo(() => getRecentTaskLogs(sse.messages), [sse.messages]);
+  const currentTaskLogs = useMemo(() => getRecentTaskLogs(sse.messages, t), [sse.messages, t]);
 
   const dismissCurrentTask = (timestamp: number) => {
     window.localStorage.setItem("inkos.dashboard.dismissedTaskAt", String(timestamp));
@@ -626,7 +642,7 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: DashboardSseS
   if (loading) return (
     <div className="flex flex-col items-center justify-center py-32 space-y-4">
       <div className="w-8 h-8 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
-      <span className="text-sm text-muted-foreground animate-pulse">Gathering manuscripts...</span>
+      <span className="text-sm text-muted-foreground animate-pulse">{t("common.loading")}</span>
     </div>
   );
 
@@ -724,7 +740,7 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: DashboardSseS
       <div className="grid gap-4 sm:gap-6">
         {data.books.map((book, index) => {
           const isWriting = writingBooks.has(book.id);
-          const bookTaskLogs = isWriting ? getRecentTaskLogs(sse.messages, book.id) : [];
+          const bookTaskLogs = isWriting ? getRecentTaskLogs(sse.messages, t, book.id) : [];
           const bookProgressEvent = isWriting
             ? selectLatestProgressEvent(sse.messages, {
                 bookId: book.id,

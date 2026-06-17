@@ -20,6 +20,30 @@ import { chatSelectors, useChatStore } from "../../store/chat";
 
 // -- Status rendering helpers --
 
+const STAGE_HINTS: Record<string, { detail: string; cute: string }> = {
+  "准备章节输入": { detail: "读取 truth files、book_rules、伏笔池", cute: "正在翻阅角色笔记… 📒" },
+  "撰写章节草稿": { detail: "LLM 生成章节正文内容", cute: "灵感来了，奋笔疾书中 ✍️" },
+  "落盘最终章节": { detail: "写入 books/{id}/chapters/*.md", cute: "把新章节小心翼翼地收好 📄" },
+  "生成最终真相文件": { detail: "更新 current_state.md、pending_hooks.md", cute: "整理角色关系和剧情走向 🗂️" },
+  "校验真相文件变更": { detail: "对比新旧 truth files 差异", cute: "检查一下有没有遗漏的细节 🔍" },
+  "同步记忆索引": { detail: "更新 chapter_summaries.md", cute: "把这一章的故事记在小本本上 📝" },
+  "更新章节索引与快照": { detail: "更新 manifest.json 和创建 checkpoint", cute: "拍照留念，记录这一刻 📸" },
+  "加载修订上下文": { detail: "读取审计报告和原始章节", cute: "看看审稿人说了什么… 📋" },
+  "修订章节": { detail: "根据审计意见修改正文", cute: "精益求精，修改中 ✨" },
+  "落盘修订结果": { detail: "保存修订后的章节文件", cute: "修改好了，放回书架 📚" },
+  "读取降级章节与现有状态": { detail: "加载 state-degraded 章节和 truth files", cute: "让我看看哪里出了问题 🔧" },
+  "重新结算章节 truth/state": { detail: "提取事实并更新状态卡和伏笔池", cute: "重新梳理角色状态和剧情线索… 🧵" },
+  "校验状态变更": { detail: "验证 state/hook 变更的合理性", cute: "确认一切恢复正常 🎯" },
+  "保存真相文件与记忆索引": { detail: "写入 updated current_state.md 等", cute: "修复完成，更新记录 📝" },
+  "恢复章节状态并创建快照": { detail: "创建修复后的 checkpoint", cute: "状态恢复，拍张照纪念 📸" },
+  "审计章节": { detail: "37 维度全面审查章节质量", cute: "仔细检查每一个细节… 🔍" },
+  "生成基础设定": { detail: "LLM 生成世界观、角色、大纲", cute: "正在构思一个全新的世界 🌍" },
+  "保存书籍配置": { detail: "写入 inkos.json 书籍配置", cute: "给新书写个出生证明 📋" },
+  "写入基础设定文件": { detail: "创建 story_frame.md、book_rules.md 等", cute: "搭建故事的骨架 🏗️" },
+  "初始化控制文档": { detail: "创建 truth files 和 session 模板", cute: "准备好角色档案和剧本模板 🎭" },
+  "创建初始快照": { detail: "保存初始 checkpoint", cute: "给新世界拍第一张照片 📸" },
+};
+
 const WRITING_HINTS = [
   "整理世界观与角色关系",
   "推演章节目标与冲突",
@@ -34,8 +58,24 @@ function activeWritingHint(startedAt: number): string {
 }
 
 function ExecStatusBadge({ exec }: { exec: ToolExecution }) {
-  const doneLabel = exec.agent === "state-repair" ? "恢复完成" : "写作完成";
-  const errorLabel = exec.agent === "state-repair" ? "恢复失败" : "写作失败";
+  const agent = exec.agent;
+  const doneMessages: Record<string, string> = {
+    writer: "章节写好了，快来看看吧 ✨",
+    reviser: "修订完成，焕然一新 🌟",
+    auditor: "审稿完成，质量过关 🎯",
+    architect: "基础设定已搭建完成 🏗️",
+    "state-repair": "状态恢复完成 🔧",
+    exporter: "导出完成，文件已就绪 📦",
+  };
+  const errorMessages: Record<string, string> = {
+    writer: "写作遇到了点小状况 😅",
+    reviser: "修订未能完成 😥",
+    auditor: "审稿发现了问题 ⚠️",
+    architect: "设定生成失败了 😢",
+    "state-repair": "状态恢复未成功 🔧",
+  };
+  const doneLabel = doneMessages[agent ?? ""] ?? (agent === "state-repair" ? "恢复完成" : "写作完成");
+  const errorLabel = errorMessages[agent ?? ""] ?? (agent === "state-repair" ? "恢复失败" : "写作失败");
   switch (exec.status) {
     case "running":
       return (
@@ -48,7 +88,7 @@ function ExecStatusBadge({ exec }: { exec: ToolExecution }) {
       return (
         <span className="inline-flex items-center gap-1.5 text-[11px] text-primary/70">
           <Loader2 size={12} className="animate-spin" style={{ animationDuration: "2s" }} />
-          <span>正在合并结果</span>
+          <span>正在整理结果…</span>
         </span>
       );
     case "completed":
@@ -95,23 +135,24 @@ function formatProgress(progress: NonNullable<PipelineStage["progress"]>, liveEl
   const secs = Math.floor(elapsedMs / 1000);
   const statusLabel = progress.status === "thinking" ? "思考设定" : progress.status === "streaming" ? "生成正文" : progress.status ?? "";
   const chars = progress.totalChars > 0
-    ? progress.chineseChars > 0 ? `已写 ${progress.totalChars} 字` : `${progress.totalChars} chars`
+    ? progress.chineseChars > 0 ? `${progress.totalChars} 字` : `${progress.totalChars} chars`
     : "";
   const tokens = progress.estimatedTokens && progress.estimatedTokens > 0
-    ? `约 ${progress.estimatedTokens.toLocaleString()} tokens`
+    ? `~${progress.estimatedTokens.toLocaleString()} tok`
     : "";
-  const parts = [statusLabel, `${secs}秒`, chars, tokens].filter(Boolean);
+  const parts = [statusLabel, `${secs}s`, chars, tokens].filter(Boolean);
   return parts.join(" · ");
 }
 
 function formatTokenUsage(exec: ToolExecution): string | null {
   const usage = exec.tokenUsage;
   if (!usage || usage.totalTokens <= 0) return null;
-  const completion = usage.completionTokens && usage.promptTokens
-    ? `输出 ${usage.completionTokens.toLocaleString()}`
-    : null;
-  const total = `${usage.estimated ? "约 " : ""}${usage.totalTokens.toLocaleString()} tokens`;
-  return completion ? `${total} · ${completion}` : total;
+  const prefix = usage.estimated ? "~" : "";
+  const total = `${prefix}${usage.totalTokens.toLocaleString()}`;
+  if (usage.promptTokens && usage.completionTokens) {
+    return `${total} tok (入${usage.promptTokens.toLocaleString()} / 出${usage.completionTokens.toLocaleString()})`;
+  }
+  return `${total} tok`;
 }
 
 function formatDuration(startedAt: number, completedAt?: number): string {
@@ -818,22 +859,35 @@ function PipelineExecution({
           )}
           {exec.stages && exec.stages.length > 0 && (
             <ol className="mb-3 space-y-1.5 rounded-xl border border-border/35 bg-background/25 p-2.5">
-              {exec.stages.map((stage) => (
-                <li
-                  key={stage.label}
-                  className="flex items-start gap-2 text-xs text-muted-foreground"
-                >
-                  <StageIcon status={stage.status} />
-                  <div className="min-w-0 flex-1">
-                    <div className="font-medium text-foreground/80">{stage.label}</div>
-                    {stage.progress && (
-                      <div className="mt-0.5 text-[11px] leading-5 text-muted-foreground/80">
-                        {formatProgress(stage.progress, stage.status === "active" && isActive ? elapsedMs : undefined)}
-                      </div>
-                    )}
-                  </div>
-                </li>
-              ))}
+              {exec.stages.map((stage) => {
+                const hint = STAGE_HINTS[stage.label];
+                return (
+                  <li
+                    key={stage.label}
+                    className="flex items-start gap-2 text-xs text-muted-foreground"
+                  >
+                    <StageIcon status={stage.status} />
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium text-foreground/80">{stage.label}</div>
+                      {hint && (
+                        <div className="mt-0.5 text-[11px] leading-5 text-muted-foreground/60">
+                          {hint.detail}
+                        </div>
+                      )}
+                      {stage.status === "active" && hint && (
+                        <div className="mt-0.5 text-[11px] leading-5 text-primary/70 italic">
+                          {hint.cute}
+                        </div>
+                      )}
+                      {stage.progress && (
+                        <div className="mt-0.5 text-[11px] leading-5 text-muted-foreground/80">
+                          {formatProgress(stage.progress, stage.status === "active" && isActive ? elapsedMs : undefined)}
+                        </div>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
             </ol>
           )}
           <LiveGenerationPreview exec={exec} active={isActive} />

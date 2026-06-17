@@ -36,7 +36,7 @@ export interface InteractionRuntimeTools {
     readonly currentFocus?: string;
   }) => Promise<unknown>;
   readonly exportBook?: (bookId: string, options: {
-    readonly format?: "txt" | "md" | "epub";
+    readonly format?: "txt" | "md" | "epub" | "pdf";
     readonly approvedOnly?: boolean;
     readonly outputPath?: string;
   }) => Promise<unknown>;

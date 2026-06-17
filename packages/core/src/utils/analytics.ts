@@ -1,3 +1,10 @@
+export interface WritingDayStat {
+  readonly date: string;
+  readonly wordsWritten: number;
+  readonly chaptersModified: number;
+  readonly chaptersApproved: number;
+}
+
 export interface TokenStats {
   readonly totalPromptTokens: number;
   readonly totalCompletionTokens: number;
@@ -16,6 +23,9 @@ export interface AnalyticsData {
   readonly chaptersWithMostIssues: ReadonlyArray<{ readonly chapter: number; readonly issueCount: number }>;
   readonly statusDistribution: Record<string, number>;
   readonly tokenStats?: TokenStats;
+  readonly dailyStats: ReadonlyArray<WritingDayStat>;
+  readonly consecutiveWritingDays: number;
+  readonly targetProgress: { readonly current: number; readonly target: number; readonly percentage: number };
 }
 
 export function computeAnalytics(
@@ -25,12 +35,14 @@ export function computeAnalytics(
     readonly status: string;
     readonly wordCount: number;
     readonly auditIssues: ReadonlyArray<string>;
+    readonly updatedAt?: string;
     readonly tokenUsage?: {
       readonly promptTokens: number;
       readonly completionTokens: number;
       readonly totalTokens: number;
     };
   }>,
+  bookConfig?: { readonly targetChapters?: number; readonly chapterWordCount?: number },
 ): AnalyticsData {
   const totalChapters = chapters.length;
   const totalWords = chapters.reduce((sum, ch) => sum + ch.wordCount, 0);
@@ -85,8 +97,50 @@ export function computeAnalytics(
     tokenStats = { totalPromptTokens, totalCompletionTokens, totalTokens, avgTokensPerChapter, recentTrend };
   }
 
+  // --- Daily writing stats (from updatedAt) ---
+  const dayMap = new Map<string, { words: number; modified: number; approved: number }>();
+  for (const ch of chapters) {
+    if (!ch.updatedAt) continue;
+    const day = ch.updatedAt.slice(0, 10);
+    const entry = dayMap.get(day) ?? { words: 0, modified: 0, approved: 0 };
+    // This is an estimate: it's the total words of chapters touched on that day.
+    entry.words += ch.wordCount;
+    entry.modified += 1;
+    if (ch.status === "approved") entry.approved += 1;
+    dayMap.set(day, entry);
+  }
+  const allWritingDays = new Set(dayMap.keys());
+  const dailyStats = [...dayMap.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-30)
+    .map(([date, v]) => ({ date, wordsWritten: v.words, chaptersModified: v.modified, chaptersApproved: v.approved }));
+
+  // --- Consecutive writing days ---
+  let consecutiveWritingDays = 0;
+  if (allWritingDays.size > 0) {
+    const today = new Date().toISOString().slice(0, 10);
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    
+    // If no activity today, check if streak is alive from yesterday
+    let d = allWritingDays.has(today) ? new Date(today) : (allWritingDays.has(yesterday) ? new Date(yesterday) : null);
+    
+    if (d) {
+      while (allWritingDays.has(d.toISOString().slice(0, 10))) {
+        consecutiveWritingDays++;
+        d.setDate(d.getDate() - 1);
+      }
+    }
+  }
+
+  // --- Target progress ---
+  const targetChapters = bookConfig?.targetChapters ?? 200;
+  const chapterWordCount = bookConfig?.chapterWordCount ?? 3000;
+  const target = targetChapters * chapterWordCount;
+  const targetProgress = { current: totalWords, target, percentage: target > 0 ? Math.min(100, Math.round((totalWords / target) * 100)) : 0 };
+
   return {
     bookId, totalChapters, totalWords, avgWordsPerChapter, auditPassRate,
     topIssueCategories, chaptersWithMostIssues, statusDistribution, tokenStats,
+    dailyStats, consecutiveWritingDays, targetProgress,
   };
 }

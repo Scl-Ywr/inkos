@@ -77,6 +77,8 @@ export default defineConfig({
     },
   },
   build: {
+    target: "chrome61",
+    cssTarget: "chrome61",
     chunkSizeWarningLimit: 900,
     rollupOptions: {
       output: {

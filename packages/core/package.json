@@ -1,6 +1,6 @@
 {
   "name": "@actalk/inkos-core",
-  "version": "1.5.9",
+  "version": "1.6.1",
   "description": "InkOS core engine — multi-agent novel writing pipeline with 33-dimension continuity audit, style cloning, and de-AI-ification",
   "keywords": [
     "ai-novel-writing",
@@ -50,11 +50,13 @@
     "dotenv": "^16.4.0",
     "epub-gen-memory": "^1.0.10",
     "js-yaml": "^4.1.1",
+    "pdfkit": "^0.19.1",
     "undici": "6.24.1",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
+    "@types/pdfkit": "^0.17.6",
     "typescript": "^5.8.0",
     "vitest": "^3.0.0"
   }

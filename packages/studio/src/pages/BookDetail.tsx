@@ -28,7 +28,14 @@ import {
   Trash2,
   Save,
   Hand,
-  Settings2
+  Settings2,
+  Clock,
+  Calendar,
+  Layers,
+  Users,
+  Globe,
+  Flag,
+  Bookmark
 } from "lucide-react";
 
 interface ChapterMeta {
@@ -53,8 +60,8 @@ interface BookData {
   readonly nextChapter: number;
 }
 
-type ReviseMode = "spot-fix" | "polish" | "rewrite" | "rework" | "anti-detect";
-type ExportFormat = "txt" | "md" | "epub";
+type ReviseMode = "spot-fix" | "polish" | "rewrite" | "rework" | "anti-detect" | "format" | "expand" | "condense";
+type ExportFormat = "txt" | "md" | "epub" | "pdf";
 type BookStatus = "active" | "paused" | "outlining" | "completed" | "dropped";
 
 interface Nav {
@@ -63,6 +70,12 @@ interface Nav {
   toAnalytics: (bookId: string) => void;
   toTruth: (bookId: string) => void;
   toKnowledge: (bookId: string) => void;
+  toTimeline: (bookId: string) => void;
+  toSchedule: (bookId: string) => void;
+  toCharacterGraph: (bookId: string) => void;
+  toWorldSettings: (bookId: string) => void;
+  toForeshadowing: (bookId: string) => void;
+  toEndings: (bookId: string) => void;
 }
 
 function translateChapterStatus(status: string, t: TFunction): string {
@@ -132,6 +145,8 @@ export function BookDetail({
   const [settingsStatus, setSettingsStatus] = useState<BookStatus | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("txt");
   const [exportApprovedOnly, setExportApprovedOnly] = useState(false);
+  const [selectedChapters, setSelectedChapters] = useState<Set<number>>(new Set());
+  const [batchAction, setBatchAction] = useState<string | null>(null);
   const [bookActionPending, setBookActionPending] = useState<string | null>(null);
   // C4a: auto (pipeline self-reviews) vs manual (write the draft and stop; you
   // run audit / revise / approve as checkpoint actions). Project-level setting.
@@ -380,6 +395,7 @@ export function BookDetail({
     if (!data) return;
     const reviewable = data.chapters.filter((ch) => ch.status === "ready-for-review");
     let failed = 0;
+
     for (const chapter of reviewable) {
       try {
         await postApi(`/books/${bookId}/chapters/${chapter.number}/approve`);
@@ -391,6 +407,23 @@ export function BookDetail({
       await appAlert({ title: "批量通过失败", message: `${failed}/${reviewable.length} approve(s) failed`, tone: "danger" });
     }
     refetch();
+  };
+
+  const handleBatchAction = async (action: "approve" | "reject" | "normalize" | "delete-empty-lines") => {
+    if (selectedChapters.size === 0) return;
+    setBatchAction(action);
+    try {
+      await postApi(`/books/${bookId}/chapters/batch`, {
+        chapterNumbers: [...selectedChapters],
+        action,
+      });
+      setSelectedChapters(new Set());
+      refetch();
+    } catch (e) {
+      await appAlert({ title: "批量操作失败", message: e instanceof Error ? e.message : "Batch failed", tone: "danger" });
+    } finally {
+      setBatchAction(null);
+    }
   };
 
   const runBookAction = async (key: string, action: () => Promise<string>) => {
@@ -713,6 +746,48 @@ export function BookDetail({
             {t("book.analytics")}
           </button>
           <button
+            onClick={() => nav.toTimeline(bookId)}
+            className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg hover:text-foreground hover:bg-secondary transition-all border border-border/50"
+          >
+            <Clock size={14} />
+            时间线
+          </button>
+          <button
+            onClick={() => nav.toSchedule(bookId)}
+            className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg hover:text-foreground hover:bg-secondary transition-all border border-border/50"
+          >
+            <Calendar size={14} />
+            日历
+          </button>
+          <button
+            onClick={() => nav.toCharacterGraph(bookId)}
+            className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg hover:text-foreground hover:bg-secondary transition-all border border-border/50"
+          >
+            <Users size={14} />
+            角色图谱
+          </button>
+          <button
+            onClick={() => nav.toWorldSettings(bookId)}
+            className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg hover:text-foreground hover:bg-secondary transition-all border border-border/50"
+          >
+            <Globe size={14} />
+            世界观
+          </button>
+          <button
+            onClick={() => nav.toForeshadowing(bookId)}
+            className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg hover:text-foreground hover:bg-secondary transition-all border border-border/50"
+          >
+            <Eye size={14} />
+            伏笔追踪
+          </button>
+          <button
+            onClick={() => nav.toEndings(bookId)}
+            className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg hover:text-foreground hover:bg-secondary transition-all border border-border/50"
+          >
+            <Flag size={14} />
+            多结局
+          </button>
+          <button
             onClick={handleEvaluate}
             disabled={bookActionPending === "eval"}
             className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg hover:text-foreground hover:bg-secondary transition-all border border-border/50 disabled:opacity-50"
@@ -760,6 +835,7 @@ export function BookDetail({
                 { value: "txt", label: "TXT" },
                 { value: "md", label: "MD" },
                 { value: "epub", label: "EPUB" },
+                { value: "pdf", label: "PDF" },
               ]}
               triggerClassName="h-10 w-28 bg-secondary/50 text-xs font-bold text-muted-foreground"
             />
@@ -793,6 +869,49 @@ export function BookDetail({
             >
               <Download size={14} />
               {t("book.export")}
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  const chaptersPerVolume = await appPrompt({
+                    title: "分卷导出",
+                    message: "每卷包含章节数量：",
+                    defaultValue: "30",
+                  });
+                  if (!chaptersPerVolume) return;
+
+                  const data = await fetchJson<{
+                    ok?: boolean;
+                    volumes?: Array<{ volumeTitle: string; chaptersIncluded: number; path: string }>;
+                    totalVolumes?: number;
+                  }>(`/books/${bookId}/export-volumes`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      format: exportFormat,
+                      approvedOnly: exportApprovedOnly,
+                      chaptersPerVolume: parseInt(chaptersPerVolume, 10) || 30,
+                    }),
+                  });
+
+                  if (data.ok && data.volumes) {
+                    const volumeList = data.volumes
+                      .map((v) => `${v.volumeTitle}: ${v.chaptersIncluded}章`)
+                      .join("\n");
+                    await appAlert({
+                      title: "分卷导出成功",
+                      message: `共 ${data.totalVolumes} 卷\n\n${volumeList}`,
+                      tone: "success",
+                    });
+                  }
+                } catch (e) {
+                  await appAlert({ title: "分卷导出失败", message: e instanceof Error ? e.message : "Export failed", tone: "danger" });
+                }
+              }}
+              className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg hover:text-foreground hover:bg-secondary transition-all border border-border/50"
+            >
+              <Layers size={14} />
+              分卷导出
             </button>
           </div>
       </div>
@@ -846,6 +965,17 @@ export function BookDetail({
       </div>
 
       {/* Chapters List */}
+      {selectedChapters.size > 0 && (
+        <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-primary/20 bg-primary/5 text-sm sticky top-0 z-10">
+          <span className="font-medium text-primary">{selectedChapters.size} 章选中</span>
+          <button onClick={() => handleBatchAction("approve")} disabled={!!batchAction} className="px-3 py-1 rounded-lg text-xs font-bold bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500 hover:text-white transition-colors disabled:opacity-40">批量通过</button>
+          <button onClick={() => handleBatchAction("reject")} disabled={!!batchAction} className="px-3 py-1 rounded-lg text-xs font-bold bg-destructive/10 text-destructive hover:bg-destructive hover:text-white transition-colors disabled:opacity-40">批量驳回</button>
+          <button onClick={() => handleBatchAction("normalize")} disabled={!!batchAction} className="px-3 py-1 rounded-lg text-xs font-bold bg-secondary/60 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40">整理排版</button>
+          <button onClick={() => handleBatchAction("delete-empty-lines")} disabled={!!batchAction} className="px-3 py-1 rounded-lg text-xs font-bold bg-secondary/60 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40">清理空行</button>
+          <button onClick={() => setSelectedChapters(new Set())} className="ml-auto text-xs text-muted-foreground hover:text-foreground">取消选择</button>
+          {batchAction && <span className="text-xs text-amber-600">处理中...</span>}
+        </div>
+      )}
       <div className="paper-sheet rounded-2xl overflow-hidden border border-border/40 shadow-xl shadow-primary/5">
         <div className="divide-y divide-border/30 md:hidden">
           {chapters.map((ch, index) => {
@@ -985,6 +1115,20 @@ export function BookDetail({
           <table className="w-full min-w-[760px] text-sm border-collapse">
             <thead>
               <tr className="bg-muted/30 border-b border-border/50">
+                <th className="text-left px-4 py-4 w-10">
+                  <input
+                    type="checkbox"
+                    checked={chapters.length > 0 && selectedChapters.size === chapters.length}
+                    onChange={() => {
+                      if (selectedChapters.size === chapters.length) {
+                        setSelectedChapters(new Set());
+                      } else {
+                        setSelectedChapters(new Set(chapters.map((ch) => ch.number)));
+                      }
+                    }}
+                    className="rounded border-border/50"
+                  />
+                </th>
                 <th className="text-left px-6 py-4 font-bold text-[11px] uppercase tracking-widest text-muted-foreground w-16">#</th>
                 <th className="text-left px-6 py-4 font-bold text-[11px] uppercase tracking-widest text-muted-foreground">{t("book.manuscriptTitle")}</th>
                 <th className="text-left px-6 py-4 font-bold text-[11px] uppercase tracking-widest text-muted-foreground w-28">{t("book.words")}</th>
@@ -996,7 +1140,10 @@ export function BookDetail({
               {chapters.map((ch, index) => {
                 const staggerClass = `stagger-${Math.min(index + 1, 5)}`;
                 return (
-                <tr key={ch.number} className={`group hover:bg-primary/[0.02] transition-colors fade-in ${staggerClass}`}>
+                <tr key={ch.number} className={`group hover:bg-primary/[0.02] transition-colors fade-in ${selectedChapters.has(ch.number) ? "bg-primary/[0.04]" : ""} ${staggerClass}`}>
+                  <td className="px-4 py-4">
+                    <input type="checkbox" checked={selectedChapters.has(ch.number)} onChange={() => { setSelectedChapters((prev) => { const next = new Set(prev); next.has(ch.number) ? next.delete(ch.number) : next.add(ch.number); return next; }); }} className="rounded border-border/50" />
+                  </td>
                   <td className="px-6 py-4 text-muted-foreground/60 font-mono text-xs">{ch.number.toString().padStart(2, '0')}</td>
                   <td className="px-6 py-4">
                     <button
@@ -1101,6 +1248,9 @@ export function BookDetail({
                           { value: "rewrite", label: t("book.rewrite") },
                           { value: "rework", label: t("book.rework") },
                           { value: "anti-detect", label: t("book.antiDetect") },
+                          { value: "format", label: "排版" },
+                          { value: "expand", label: "扩写" },
+                          { value: "condense", label: "精简" },
                         ]}
                         triggerClassName="h-9 rounded-lg bg-secondary px-2 text-[11px] font-bold text-muted-foreground hover:text-primary hover:bg-primary/10 disabled:opacity-50"
                       />

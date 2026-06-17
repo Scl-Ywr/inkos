@@ -100,6 +100,7 @@ describe("PolisherAgent", () => {
         isGoldenOpening: false,
         body: "## 当前任务\n陆焚拿回残刃。",
         threadRefs: [],
+        satisfactionBeats: [],
       },
     });
 

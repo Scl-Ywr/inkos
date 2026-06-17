@@ -20,6 +20,13 @@ type SliceGet = Parameters<StateCreator<ChatStore, [], [], MessageActions>>[1];
 type ContextCompressionCategory = "session_context" | "story_context";
 type ContextCompressionPhase = "start" | "end" | "error";
 
+function estimateTokensFromChars(totalChars: number, chineseChars: number): number {
+  const total = Math.max(0, totalChars);
+  const chinese = Math.max(0, Math.min(total, chineseChars));
+  const nonChinese = Math.max(0, total - chinese);
+  return Math.max(0, Math.ceil(chinese + nonChinese / 4));
+}
+
 interface ContextCompressionEventPayload {
   readonly sessionId?: string;
   readonly category?: ContextCompressionCategory;
@@ -37,15 +44,6 @@ interface AttachSessionStreamListenersInput {
   streamEs: EventSource;
   set: SliceSet;
   get: SliceGet;
-}
-
-function estimateTokensFromChars(totalChars: unknown, chineseChars: unknown): number {
-  const total = typeof totalChars === "number" && Number.isFinite(totalChars) ? Math.max(0, totalChars) : 0;
-  const chinese = typeof chineseChars === "number" && Number.isFinite(chineseChars)
-    ? Math.max(0, Math.min(total, chineseChars))
-    : 0;
-  const nonChinese = Math.max(0, total - chinese);
-  return Math.max(0, Math.ceil(chinese + nonChinese / 4));
 }
 
 function readTokenUsage(value: unknown): TokenUsageSnapshot | undefined {

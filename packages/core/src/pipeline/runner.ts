@@ -2110,8 +2110,8 @@ export class PipelineRunner {
           content,
           allowReapply: true,
           validationFeedback: pipelineLang === "en"
-            ? "Your previous settlement output was incomplete. Return the complete required settlement format. UPDATED_STATE and UPDATED_HOOKS are mandatory and must both be non-empty. Do not rewrite the chapter body."
-            : "你上一次的状态结算输出不完整。请严格返回完整的结算格式，UPDATED_STATE 与 UPDATED_HOOKS 都是必填且不得为空。不要改写章节正文。",
+            ? "IMPORTANT: Your previous settlement output could not be parsed. You MUST output EXACTLY this format with TAG blocks:\n\n=== POST_SETTLEMENT ===\n(brief summary)\n\n=== UPDATED_STATE ===\n(full state card content)\n\n=== UPDATED_HOOKS ===\n(full hooks table content)\n\nDo NOT output JSON. Do NOT rewrite the chapter body. Both UPDATED_STATE and UPDATED_HOOKS must be non-empty."
+            : "重要：你上一次的结算输出无法解析。你必须严格输出以下 TAG 块格式（不要输出 JSON）：\n\n=== POST_SETTLEMENT ===\n（简要说明）\n\n=== UPDATED_STATE ===\n（完整状态卡内容）\n\n=== UPDATED_HOOKS ===\n（完整伏笔池表格内容）\n\nUPDATED_STATE 和 UPDATED_HOOKS 都必须有实质内容，不能为空。不要改写章节正文。",
         });
       } catch (retryError) {
         if (!isIncompleteSettlementOutputError(retryError)) {

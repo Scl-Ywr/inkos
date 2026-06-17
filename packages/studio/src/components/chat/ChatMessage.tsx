@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Theme } from "../../hooks/use-theme";
 import type { TokenUsageSnapshot } from "../../store/chat/types";
+import { useI18n } from "../../hooks/use-i18n";
 import {
   Message,
   MessageAction,
@@ -37,31 +38,38 @@ export function ChatMessage({
   copyContent,
   showCopyAction = role === "assistant",
 }: ChatMessageProps) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const isUser = role === "user";
   const isError = content.startsWith("\u2717");
   const textToCopy = copyContent ?? content;
   const canCopy = !isUser && showCopyAction && !isStreaming && textToCopy.trim().length > 0;
+  
   const tokenLabel = tokenUsage && !isUser && tokenUsage.totalTokens > 0
-    ? `本次${tokenUsage.estimated ? "约 " : " "}${tokenUsage.totalTokens.toLocaleString()} tokens`
+    ? t("chat.tokens").replace("{n}", tokenUsage.totalTokens.toLocaleString())
     : null;
+    
   const savings = tokenUsage?.tokenSavings;
   const savedTokens = savings?.estimatedTokensSaved ?? 0;
   const hasTokenSavings = Boolean(savings && (savedTokens > 0 || (savings.cacheSkippedCalls ?? 0) > 0));
   const compressionPercent = savings && (savings.originalChars ?? 0) > 0
     ? Math.max(0, Math.min(100, Math.round((((savings.originalChars ?? 0) - (savings.optimizedChars ?? 0)) / (savings.originalChars ?? 1)) * 100)))
     : 0;
+    
   const savingsLabel = !isUser && savings && hasTokenSavings
     ? (savings.cacheSkippedCalls ?? 0) > 0
-      ? `Token 缓存已生效，估算节省 ${savedTokens.toLocaleString()} tokens`
+      ? t("chat.cacheSavings").replace("{n}", savedTokens.toLocaleString())
       : (savings.ccrBlocksCompressed ?? 0) > 0
-        ? `Headroom 压缩已生效，压缩 ${compressionPercent}% · 估算节省 ${savedTokens.toLocaleString()} tokens`
+        ? t("chat.compressionSavings").replace("{p}", compressionPercent.toString()).replace("{n}", savedTokens.toLocaleString())
         : null
     : null;
+    
   const pipeline = !isUser ? compactPipeline(savings?.pipeline ?? []) : [];
+  
   const triggerDelete = () => {
     window.setTimeout(() => onDelete?.(), 0);
   };
+  
   const copyMessage = async () => {
     try {
       await writeClipboardText(textToCopy);
@@ -110,7 +118,7 @@ export function ChatMessage({
             {pipeline.map((event, index) => {
               const Icon = pipelineIcon(event.kind);
               const detail = event.estimatedTokensSaved && event.estimatedTokensSaved > 0
-                ? ` · 估算省 ${event.estimatedTokensSaved.toLocaleString()}`
+                ? ` · ${t("chat.cacheSavings").split("，")[1].replace("{n}", event.estimatedTokensSaved.toLocaleString())}`
                 : event.similarity
                   ? ` · ${(event.similarity * 100).toFixed(0)}%`
                   : "";
@@ -131,13 +139,13 @@ export function ChatMessage({
           <MessageActions className="mt-1">
             <MessageAction
               onClick={() => void copyMessage()}
-              label={copied ? "已复制" : "复制消息"}
-              title={copied ? "已复制" : "复制消息"}
+              label={copied ? t("common.copied") : t("chat.copyMessage")}
+              title={copied ? t("common.copied") : t("chat.copyMessage")}
               className="h-8 gap-1.5 rounded-full px-2.5 text-xs text-muted-foreground/75 transition-colors hover:bg-muted/70 hover:text-foreground"
               size="sm"
             >
               {copied ? <Check size={14} /> : <Copy size={14} />}
-              <span aria-hidden="true">{copied ? "已复制" : "复制"}</span>
+              <span aria-hidden="true">{copied ? t("common.copied") : t("common.copy")}</span>
             </MessageAction>
           </MessageActions>
         ) : null}
@@ -145,8 +153,8 @@ export function ChatMessage({
           <DropdownMenu>
             <DropdownMenuTrigger
               className="mt-1 inline-flex h-10 w-10 touch-manipulation items-center justify-center rounded-full text-muted-foreground/65 transition-colors hover:bg-muted/70 hover:text-foreground sm:h-8 sm:w-8 sm:opacity-0 sm:group-hover:opacity-100"
-              aria-label={isUser ? "用户消息操作" : "AI 回复操作"}
-              title="消息操作"
+              aria-label={isUser ? t("chat.userAction") : t("chat.aiAction")}
+              title={t("chat.aiAction")}
             >
               <MoreHorizontal size={16} />
             </DropdownMenuTrigger>

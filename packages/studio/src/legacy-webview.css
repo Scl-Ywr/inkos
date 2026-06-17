@@ -251,10 +251,14 @@
   background: rgba(var(--legacy-card-rgb), 0.9);
   border-color: rgba(var(--legacy-border-rgb), 0.72);
   box-shadow: 0 12px 28px -24px rgba(0, 0, 0, 0.28);
+  flex-wrap: wrap;
+  overflow-x: visible;
 }
 
 .legacy-webview .legacy-chat-quick-actions {
   gap: 0.5rem;
+  flex: 0 1 auto;
+  overflow-x: visible;
 }
 
 .legacy-webview .legacy-chat-quick-action-chip,
@@ -277,6 +281,15 @@
 .legacy-webview .legacy-chat-knowledge-status {
   background: rgba(var(--legacy-background-rgb), 0.4);
   color: rgba(var(--legacy-muted-foreground-rgb), 0.96);
+  flex: 1 1 100%;
+  min-width: 0;
+  text-align: right;
+}
+
+.legacy-webview .legacy-chat-knowledge-trigger {
+  flex: 1 1 10rem;
+  min-width: 0;
+  max-width: none;
 }
 
 .legacy-webview .legacy-chat-composer-wrap {
@@ -361,5 +374,32 @@
 
   .legacy-webview .app-shell-main {
     overflow-x: hidden;
+  }
+
+  .legacy-webview .legacy-chat-toolbar {
+    gap: 0.45rem;
+    padding-inline: 0.65rem;
+  }
+
+  .legacy-webview .legacy-chat-quick-actions {
+    gap: 0.4rem;
+  }
+
+  .legacy-webview .legacy-chat-quick-action-chip,
+  .legacy-webview .legacy-chat-knowledge-toggle,
+  .legacy-webview .legacy-chat-knowledge-trigger {
+    min-height: 2.2rem;
+    padding-inline: 0.9rem;
+    font-size: 0.72rem;
+  }
+
+  .legacy-webview .legacy-chat-knowledge-trigger {
+    flex-basis: 9.5rem;
+  }
+
+  .legacy-webview .legacy-chat-knowledge-status {
+    padding-inline: 0.35rem;
+    font-size: 0.68rem;
+    text-align: left;
   }
 }

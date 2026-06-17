@@ -84,15 +84,9 @@ const RELATION_ROLE_TYPES = new Set(["relation", "relationship", "support", "sup
 const ROLE_RUNTIME_START = "<!-- INKOS:ROLE_RUNTIME_STATE_START -->";
 const ROLE_RUNTIME_END = "<!-- INKOS:ROLE_RUNTIME_STATE_END -->";
 const RELATION_LINE_PATTERN = /关系|敌对|冲突|盟友|同盟|对手|怀疑|信任|背叛|合作|支持|反对|亲属|家庭|亲情|父|母|兄|弟|姐|妹|情感|爱恋|恋人|情侣|暧昧|前任|朋友|relationship|alliance|ally|enemy|trust|doubt|family|romance|lover|partner|supports?|opposes?/i;
-const COLOR_BY_TYPE: Record<string, string> = {
-  actor: "fill-sky-500/28 stroke-sky-500/80 text-sky-800 dark:fill-sky-400/22 dark:stroke-sky-300/80 dark:text-sky-100",
-  location: "fill-emerald-500/25 stroke-emerald-500/80 text-emerald-800 dark:fill-emerald-400/20 dark:stroke-emerald-300/80 dark:text-emerald-100",
-  item: "fill-amber-500/28 stroke-amber-500/80 text-amber-800 dark:fill-amber-400/22 dark:stroke-amber-300/80 dark:text-amber-100",
-  clue: "fill-fuchsia-500/24 stroke-fuchsia-500/80 text-fuchsia-800 dark:fill-fuchsia-400/20 dark:stroke-fuchsia-300/80 dark:text-fuchsia-100",
-  evidence: "fill-rose-500/24 stroke-rose-500/80 text-rose-800 dark:fill-rose-400/20 dark:stroke-rose-300/80 dark:text-rose-100",
-};
+
 const ACCENT_BY_TYPE: Record<string, string> = {
-  actor: "#0ea5e9",
+  actor: "#d66f75",
   location: "#10b981",
   item: "#f59e0b",
   clue: "#d946ef",
@@ -805,44 +799,39 @@ export function RelationshipGraph(props: {
                 </span>
               ))}
             </div>
-            <div className="relative overflow-hidden rounded-lg border border-border/30 bg-[radial-gradient(circle_at_50%_45%,hsl(var(--primary)/0.10),transparent_34%),linear-gradient(180deg,hsl(var(--background)),hsl(var(--secondary)/0.30))] shadow-inner shadow-black/5">
-              <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-16 bg-gradient-to-b from-background/55 to-transparent" />
-              <svg viewBox={`20 20 ${W - 40} ${H - 40}`} className="block aspect-[1.18] min-h-[460px] w-full" role="img" aria-label="关系图谱">
+
+            <div className="relative overflow-hidden rounded-[2.2rem] border border-border/25 bg-[radial-gradient(circle_at_50%_40%,hsl(var(--primary)/0.07),transparent_48%),linear-gradient(180deg,hsl(var(--background)/0.65),hsl(var(--secondary)/0.15))] shadow-soft backdrop-blur-md">
+              <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-20 bg-gradient-to-b from-background/45 to-transparent" />
+              <svg viewBox={`0 0 ${W} ${H}`} className="block w-full aspect-[4/3] sm:aspect-[1.15]" role="img" aria-label="关系图谱">
                 <defs>
-                  <pattern id="relationship-grid" width="36" height="36" patternUnits="userSpaceOnUse">
-                    <path d="M36 0H0V36" fill="none" className="stroke-border/20" strokeWidth="0.8" />
-                    <circle cx="1" cy="1" r="1" className="fill-border/25" />
+                  <pattern id="relationship-grid" width="40" height="40" patternUnits="userSpaceOnUse">
+                    <path d="M 40 0 L 0 0 0 40" fill="none" className="stroke-border/12" strokeWidth="0.5" />
+                    <circle cx="0" cy="0" r="0.8" className="fill-border/15" />
                   </pattern>
-                  <filter id="relationship-node-shadow" x="-45%" y="-75%" width="190%" height="250%">
-                    <feDropShadow dx="0" dy="8" stdDeviation="9" floodColor="#000000" floodOpacity="0.18" />
+                  <filter id="node-glow-selected" x="-60%" y="-60%" width="220%" height="220%">
+                    <feGaussianBlur stdDeviation="15" result="blur" />
+                    <feComposite in="SourceGraphic" in2="blur" operator="over" />
                   </filter>
-                  <marker id="relationship-arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
-                    <path d="M0,0 L9,4.5 L0,9 Z" fill="context-stroke" />
+                  <marker id="relationship-arrow" markerWidth="8" markerHeight="8" refX="19" refY="4" orient="auto">
+                    <path d="M0,0 L8,4 L0,8 Z" fill="context-stroke" opacity="0.75" />
                   </marker>
                 </defs>
                 <rect width={W} height={H} fill="url(#relationship-grid)" />
+                
+                {/* Orbital Guides */}
                 <motion.circle
                   cx={CX}
                   cy={CY}
                   r={focused ? 116 : 188}
                   initial={false}
-                  animate={{ r: focused ? 116 : 188, opacity: focused ? 0.34 : 0.18 }}
-                  transition={{ type: "spring", stiffness: 90, damping: 20 }}
-                  className="fill-none stroke-primary/25"
-                  strokeWidth="1"
-                  strokeDasharray="3 9"
+                  animate={{ r: focused ? 116 : 188, opacity: focused ? 0.28 : 0.14 }}
+                  transition={{ type: "spring", stiffness: 85, damping: 22 }}
+                  className="fill-none stroke-primary/35"
+                  strokeWidth="0.5"
+                  strokeDasharray="4 10"
                 />
-                <motion.circle
-                  cx={CX}
-                  cy={CY}
-                  r={focused ? 178 : 0}
-                  initial={false}
-                  animate={{ r: focused ? 178 : 0, opacity: focused ? 0.18 : 0 }}
-                  transition={{ type: "spring", stiffness: 90, damping: 22 }}
-                  className="fill-none stroke-foreground/35"
-                  strokeWidth="1"
-                  strokeDasharray="1 11"
-                />
+                
+                {/* Edges */}
                 {model.edges.map((edge, index) => {
                   const from = displayNodeById.get(edge.fromId);
                   const to = displayNodeById.get(edge.toId);
@@ -851,22 +840,22 @@ export function RelationshipGraph(props: {
                   const visual = relationshipVisual(edge.type, edge.summary);
                   const path = edgePath(from, to, index);
                   const label = edgeLabelPosition(from, to, index);
-                  const showLabel = edgeSelected && (Boolean(focused) || model.edges.length <= 5);
+                  const showLabel = edgeSelected && (Boolean(focused) || model.edges.length <= 6);
                   return (
                     <motion.g
                       key={edge.id}
                       initial={{ opacity: 0 }}
-                      animate={{ opacity: edgeSelected ? 0.9 : 0.08 }}
-                      transition={{ duration: 0.28, delay: Math.min(index * 0.02, 0.24) }}
+                      animate={{ opacity: edgeSelected ? 1 : 0.04 }}
+                      transition={{ duration: 0.3, delay: Math.min(index * 0.015, 0.2) }}
                     >
                       <motion.path
                         initial={false}
                         animate={{ d: path }}
-                        transition={{ type: "spring", stiffness: 105, damping: 24 }}
+                        transition={{ type: "spring", stiffness: 110, damping: 26 }}
                         stroke={edgeSelected ? visual.color : "currentColor"}
-                        className={edgeSelected ? undefined : "text-muted-foreground/25"}
-                        strokeWidth={edgeSelected ? Math.max(1.8, Math.min(3.4, edge.strength ?? 2)) : 1}
-                        strokeDasharray={visual.key === "hostile" ? "8 5" : undefined}
+                        className={edgeSelected ? undefined : "text-muted-foreground/20"}
+                        strokeWidth={edgeSelected ? Math.max(2.2, Math.min(4.5, (edge.strength ?? 1.6) * 1.6)) : 1}
+                        strokeDasharray={visual.key === "hostile" ? "6 4" : undefined}
                         strokeLinecap="round"
                         fill="none"
                         markerEnd="url(#relationship-arrow)"
@@ -875,106 +864,109 @@ export function RelationshipGraph(props: {
                         <motion.g
                           initial={false}
                           animate={{ x: label.x, y: label.y }}
-                          transition={{ type: "spring", stiffness: 110, damping: 24 }}
+                          transition={{ type: "spring", stiffness: 110, damping: 26 }}
                           className="pointer-events-none"
                         >
                           <rect
-                            x={-Math.max(34, truncate(edge.type, 9).length * 6 + 12)}
-                            y={-12}
-                            width={Math.max(68, truncate(edge.type, 9).length * 12 + 24)}
-                            height="24"
-                            rx="12"
-                            className="fill-background/90 stroke-border/40"
+                            x={-Math.max(30, truncate(edge.type, 10).length * 5 + 10)}
+                            y={-11}
+                            width={Math.max(60, truncate(edge.type, 10).length * 10 + 20)}
+                            height="22"
+                            rx="11"
+                            className="fill-background/95 stroke-border/30 shadow-sm"
                           />
-                          <text textAnchor="middle" y="4" fontSize="12" fontWeight={650} fill={visual.color}>
-                            {truncate(edge.type, 9)}
+                          <text textAnchor="middle" y="4" fontSize="11" fontWeight={750} fill={visual.color} className="tracking-tight">
+                            {truncate(edge.type, 10)}
                           </text>
                         </motion.g>
                       ) : null}
                     </motion.g>
                   );
                 })}
+
+                {/* Nodes */}
                 {displayNodes.map((node, index) => {
                   const selectedNode = node.selected;
                   const connectedNode = node.connected || selectedNeighborIds.has(node.id);
                   const accent = ACCENT_BY_TYPE[node.type] ?? "#64748b";
-                  const label = truncate(node.label, selectedNode ? 18 : 14);
-                  const nodeWidth = selectedNode ? Math.max(196, Math.min(238, label.length * 18 + 56)) : Math.max(142, Math.min(190, label.length * 16 + 54));
-                  const nodeHeight = selectedNode ? 88 : 56;
+                  const label = truncate(node.label, selectedNode ? 22 : 18);
+                  const nodeWidth = selectedNode ? Math.max(188, label.length * 17 + 64) : Math.max(136, label.length * 15 + 54);
+                  const nodeHeight = selectedNode ? 84 : 56;
+                  
                   return (
                     <motion.g
                       key={node.id}
-                      initial={{ opacity: 0, scale: 0.78, x: node.displayX, y: node.displayY }}
+                      initial={{ opacity: 0, scale: 0.8, x: node.displayX, y: node.displayY }}
                       animate={{
-                        opacity: connectedNode ? 1 : 0.26,
-                        scale: selectedNode ? 1.06 : 1,
+                        opacity: connectedNode ? 1 : 0.18,
+                        scale: selectedNode ? 1.08 : 1,
                         x: node.displayX,
                         y: node.displayY,
                       }}
                       transition={{
                         opacity: { duration: 0.2 },
-                        scale: { type: "spring", stiffness: 300, damping: 22, delay: selectedId ? 0 : Math.min(index * 0.035, 0.28) },
-                        x: { type: "spring", stiffness: 120, damping: 23 },
-                        y: { type: "spring", stiffness: 120, damping: 23 },
+                        scale: { type: "spring", stiffness: 450, damping: 28, delay: selectedId ? 0 : Math.min(index * 0.03, 0.25) },
+                        x: { type: "spring", stiffness: 140, damping: 24 },
+                        y: { type: "spring", stiffness: 140, damping: 24 },
                       }}
-                      style={{ transformOrigin: "center" }}
                       className="cursor-pointer outline-none"
                       onClick={() => setSelectedId(selectedNode ? null : node.id)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") setSelectedId(selectedNode ? null : node.id);
-                      }}
                     >
-                      {selectedNode ? (
-                        <circle
-                          cx="0"
-                          cy="0"
-                          r="72"
-                          fill={accent}
-                          opacity="0.1"
-                          stroke={accent}
-                          strokeWidth="1"
-                        />
-                      ) : null}
+                      {selectedNode && (
+                        <circle r="65" fill={accent} opacity="0.12" filter="url(#node-glow-selected)" />
+                      )}
+                      
                       <rect
                         x={-nodeWidth / 2}
                         y={-nodeHeight / 2}
                         width={nodeWidth}
                         height={nodeHeight}
-                        rx={selectedNode ? 22 : 16}
-                        className={cn(
-                          COLOR_BY_TYPE[node.type] ?? "fill-secondary stroke-border text-foreground",
-                          "transition-colors duration-200",
-                        )}
+                        rx={selectedNode ? 26 : 18}
+                        className="transition-colors duration-300 shadow-lg"
                         style={{
-                          fill: `color-mix(in srgb, ${accent} ${selectedNode ? 24 : 17}%, var(--background))`,
+                          fill: selectedNode ? "var(--background)" : "color-mix(in srgb, var(--background) 96%, transparent)",
                           stroke: accent,
+                          strokeWidth: selectedNode ? 2.8 : 1.6,
                         }}
-                        strokeWidth={selectedNode ? 2.2 : 1.25}
-                        filter="url(#relationship-node-shadow)"
                       />
-                      <rect
-                        x={-nodeWidth / 2 + 10}
-                        y={nodeHeight / 2 - 21}
-                        width={Math.max(54, Math.min(nodeWidth - 20, node.type.length * 10 + 32))}
-                        height="18"
-                        rx="9"
-                        fill={accent}
-                        opacity={selectedNode ? 0.2 : 0.12}
-                        className="pointer-events-none"
-                      />
-                      <text x="0" y={selectedNode ? -10 : -8} textAnchor="middle" fontSize={selectedNode ? "23" : "17"} fontWeight={760} className="pointer-events-none fill-foreground">
-                        {label}
-                      </text>
-                      <text x="0" y={selectedNode ? 24 : 18} textAnchor="middle" fontSize={selectedNode ? "13" : "12"} fontWeight={650} fill={accent} className="pointer-events-none">
-                        {node.type} · {node.degree}
-                      </text>
+                      
+                      {/* Node Content */}
+                      <g className="pointer-events-none text-foreground">
+                        <text 
+                          y={selectedNode ? -8 : -6} 
+                          textAnchor="middle" 
+                          fontSize={selectedNode ? "22" : "17"} 
+                          fontWeight={850} 
+                          className="fill-current tracking-tight"
+                        >
+                          {label}
+                        </text>
+                        <rect
+                          x={-30}
+                          y={selectedNode ? 18 : 14}
+                          width="60"
+                          height="18"
+                          rx="9"
+                          fill={accent}
+                          opacity={selectedNode ? 0.28 : 0.16}
+                        />
+                        <text 
+                          y={selectedNode ? 31 : 27} 
+                          textAnchor="middle" 
+                          fontSize="10" 
+                          fontWeight={800} 
+                          fill={accent}
+                          className="uppercase tracking-[0.14em]"
+                        >
+                          {node.type}
+                        </text>
+                      </g>
                     </motion.g>
                   );
                 })}
               </svg>
             </div>
+
             {model.hiddenEdges > 0 ? (
               <p className="text-[12px] leading-5 text-muted-foreground/70">已按当前筛选隐藏 {model.hiddenEdges} 条连接。</p>
             ) : null}

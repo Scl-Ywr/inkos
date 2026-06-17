@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,7 +12,7 @@ import {
 
 const OFFICIAL_MANIFEST = "https://github.com/example/inkos/releases/latest/download/update.json";
 
-function createApp() {
+function createApp(root = "D:/inkos-test") {
   const app = new Hono();
   let headroomStatus: {
     enabled: boolean;
@@ -58,7 +58,7 @@ function createApp() {
     },
   };
   registerRuntimeRoutes(app, {
-    root: "D:/inkos-test",
+    root,
     state: {} as never,
     broadcast: vi.fn(),
     headroom: {
@@ -217,6 +217,132 @@ describe("Headroom diagnostics", () => {
         compressed: "compressed sample",
       },
     });
+  });
+});
+
+describe("Project maintenance diagnostics", () => {
+  it("returns a structured maintenance scan response without mutating files", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-maintenance-route-"));
+    try {
+      await writeFile(join(root, "runtime-status.json"), "{\"state\":\"test\"}\n", "utf-8");
+      const app = createApp(root);
+      const response = await app.request("http://localhost/api/v1/runtime/maintenance/scan");
+      expect(response.status).toBe(200);
+      const payload = await response.json() as {
+        ok: boolean;
+        summary: { root: string; issueCount: number };
+        sections: Record<string, unknown>;
+        issues: unknown[];
+        recommendations: unknown[];
+      };
+      expect(typeof payload.ok).toBe("boolean");
+      expect(payload.summary.root).toBe(root);
+      expect(payload.sections.books).toBeTruthy();
+      expect(payload.sections.worlds).toBeTruthy();
+      expect(payload.sections.knowledge).toBeTruthy();
+      expect(Array.isArray(payload.issues)).toBe(true);
+      expect(Array.isArray(payload.recommendations)).toBe(true);
+      await expect(readFile(join(root, "runtime-status.json"), "utf-8")).resolves.toContain("\"state\":\"test\"");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("requires explicit confirmation before running project maintenance repairs", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-maintenance-confirm-"));
+    try {
+      await mkdir(join(root, "logs"), { recursive: true });
+      await writeFile(join(root, "logs", "old.log"), "old log", "utf-8");
+      const oldDate = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000);
+      await utimes(join(root, "logs", "old.log"), oldDate, oldDate);
+
+      const app = createApp(root);
+      const response = await app.request("http://localhost/api/v1/runtime/maintenance/repair", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actions: ["cleanup-old-logs"] }),
+      });
+
+      expect(response.status).toBe(400);
+      await expect(readFile(join(root, "logs", "old.log"), "utf-8")).resolves.toBe("old log");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("runs confirmed maintenance repairs for logs, worlds, knowledge indexes, and backups", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-maintenance-repair-"));
+    try {
+      await mkdir(join(root, "logs"), { recursive: true });
+      await mkdir(join(root, "worlds", "orphan-world"), { recursive: true });
+      await mkdir(join(root, "worlds", "active-play"), { recursive: true });
+      await mkdir(join(root, ".inkos", "sessions"), { recursive: true });
+      await mkdir(join(root, "knowledge", "books", "demo"), { recursive: true });
+      await mkdir(join(root, ".inkos", "backups", "upgrade-old"), { recursive: true });
+
+      await writeFile(join(root, "logs", "old.log"), "old log", "utf-8");
+      await writeFile(join(root, "worlds", "orphan-world", "world.json"), JSON.stringify({
+        id: "orphan-world",
+        title: "Orphan",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }), "utf-8");
+      await writeFile(join(root, "worlds", "active-play", "world.json"), JSON.stringify({
+        id: "active-play",
+        title: "Active",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }), "utf-8");
+      await writeFile(join(root, ".inkos", "sessions", "active-play.json"), JSON.stringify({
+        sessionId: "active-play",
+        bookId: null,
+        title: "Active",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        sessionKind: "play",
+      }), "utf-8");
+      await writeFile(join(root, "knowledge", "books", "demo", "sources.json"), JSON.stringify([
+        { id: "source-1", name: "Source", chunkCount: 2 },
+      ]), "utf-8");
+      await writeFile(join(root, "knowledge", "books", "demo", "chunks.json"), JSON.stringify([
+        { id: "chunk-1", sourceId: "source-1", sourceName: "Source", text: "alpha beta", keywords: ["alpha"] },
+        { id: "chunk-2", sourceId: "missing", sourceName: "Missing", text: "orphan", keywords: [] },
+      ]), "utf-8");
+      await writeFile(join(root, ".inkos", "backups", "upgrade-old", "inkos.json"), "{\"name\":\"backup\"}", "utf-8");
+
+      const oldDate = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000);
+      await Promise.all([
+        utimes(join(root, "logs", "old.log"), oldDate, oldDate),
+        utimes(join(root, ".inkos", "backups", "upgrade-old"), oldDate, oldDate),
+      ]);
+
+      const app = createApp(root);
+      const planResponse = await app.request("http://localhost/api/v1/runtime/maintenance/repair-plan");
+      expect(planResponse.status).toBe(200);
+      const plan = await planResponse.json() as { actions: Array<{ action: string; enabled: boolean; count: number }> };
+      expect(plan.actions.find((item) => item.action === "cleanup-old-logs")).toMatchObject({ enabled: true, count: 1 });
+      expect(plan.actions.find((item) => item.action === "prune-orphan-worlds")).toMatchObject({ enabled: true, count: 1 });
+      expect(plan.actions.find((item) => item.action === "rebuild-knowledge-indexes")).toMatchObject({ enabled: true, count: 1 });
+      expect(plan.actions.find((item) => item.action === "compress-backups")).toMatchObject({ enabled: true, count: 1 });
+
+      const repairResponse = await app.request("http://localhost/api/v1/runtime/maintenance/repair", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          confirm: true,
+          actions: ["cleanup-old-logs", "prune-orphan-worlds", "rebuild-knowledge-indexes", "compress-backups"],
+        }),
+      });
+      expect(repairResponse.status).toBe(200);
+      await expect(readFile(join(root, "logs", "old.log"), "utf-8")).rejects.toThrow();
+      await expect(stat(join(root, "worlds", "orphan-world"))).rejects.toThrow();
+      await expect(stat(join(root, "worlds", "active-play"))).resolves.toBeTruthy();
+      await expect(readFile(join(root, "knowledge", "books", "demo", "search-index.json"), "utf-8")).resolves.toContain("\"chunkCount\":1");
+      await expect(readFile(join(root, "knowledge", "books", "demo", "chunks.json"), "utf-8")).resolves.not.toContain("missing");
+      await expect(stat(join(root, ".inkos", "backups", "upgrade-old"))).rejects.toThrow();
+      await expect(stat(join(root, ".inkos", "backups", "upgrade-old.json.gz"))).resolves.toBeTruthy();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

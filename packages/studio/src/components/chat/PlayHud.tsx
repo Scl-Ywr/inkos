@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Gamepad2, X, ChevronDown, ChevronLeft } from "lucide-react";
 import { fetchJson } from "../../hooks/use-api";
 import { buildApiUrl } from "../../lib/api-url";
+import { useI18n } from "../../hooks/use-i18n";
 import {
   HOLDING_TYPES, HOLDING_GLYPH, SLOT_GLYPH, EVIDENCE_LADDER,
   type HudDetail, type HudRow, type HoldingRow, type HoldingRelation, type HoldingLifecycle,

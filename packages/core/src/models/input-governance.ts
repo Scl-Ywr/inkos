@@ -1,11 +1,24 @@
 import { z } from "zod";
 
+export const BeatTypeSchema = z.enum([
+  "打脸", "升级", "反转", "悬念", "拯救", "复仇", "揭秘",
+]);
+export type BeatType = z.infer<typeof BeatTypeSchema>;
+
+export const SatisfactionBeatSchema = z.object({
+  type: BeatTypeSchema,
+  paragraph: z.number().int().min(0),
+  description: z.string().min(1),
+});
+export type SatisfactionBeat = z.infer<typeof SatisfactionBeatSchema>;
+
 export const ChapterMemoSchema = z.object({
   chapter: z.number().int().min(1),
   goal: z.string().min(1).max(50),
   isGoldenOpening: z.boolean().default(false),
   body: z.string().min(1),
   threadRefs: z.array(z.string()).default([]),
+  satisfactionBeats: z.array(SatisfactionBeatSchema).default([]),
 });
 
 export type ChapterMemo = z.infer<typeof ChapterMemoSchema>;

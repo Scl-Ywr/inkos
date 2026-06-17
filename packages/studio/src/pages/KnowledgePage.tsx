@@ -13,6 +13,9 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  BookMarked,
+  Plus,
+  X,
 } from "lucide-react";
 
 interface KnowledgeSource {
@@ -43,6 +46,8 @@ interface KnowledgeUploadResponse extends KnowledgeLibrary {
     readonly method?: string;
     readonly warnings?: readonly string[];
   };
+  readonly truncated?: boolean;
+  readonly originalCharCount?: number;
 }
 
 interface KnowledgeSearchResult {
@@ -74,6 +79,17 @@ export function KnowledgePage({ bookId, nav, theme: _theme, t: _t }: {
   const [searching, setSearching] = useState(false);
   const [searchResult, setSearchResult] = useState<KnowledgeSearchResult | null>(null);
   const [pythonStatus, setPythonStatus] = useState<string>("检测中");
+  const [lexiconTab, setLexiconTab] = useState<"banned" | "preferred" | "terms">("banned");
+  const [newBannedWord, setNewBannedWord] = useState("");
+  const [newAvoidWord, setNewAvoidWord] = useState("");
+  const [newPreferWord, setNewPreferWord] = useState("");
+  const [newTermName, setNewTermName] = useState("");
+  const [newTermDef, setNewTermDef] = useState("");
+  const { data: bookData } = useApi<{ book: { bookRules?: { bannedWords?: string[]; preferredWords?: Array<{ avoid: string; prefer: string }>; domainTerms?: Array<{ term: string; definition?: string }> } } }>(`/books/${bookId}`);
+  const bannedWords = bookData?.book?.bookRules?.bannedWords ?? [];
+  const preferredWords = bookData?.book?.bookRules?.preferredWords ?? [];
+  const domainTerms = bookData?.book?.bookRules?.domainTerms ?? [];
+  const [savingLexicon, setSavingLexicon] = useState(false);
 
   const canPaste = pastedName.trim().length > 0 && pastedText.trim().length > 0;
   const topKeywords = useMemo(() => {
@@ -108,7 +124,15 @@ export function KnowledgePage({ bookId, nav, theme: _theme, t: _t }: {
       setPastedText("");
       const method = next.extraction?.method ? `\n解析方式：${next.extraction.method}` : "";
       const warnings = next.extraction?.warnings?.length ? `\n提示：${next.extraction.warnings.join("；")}` : "";
-      await appAlert({ title: "知识库已更新", message: `已导入《${name}》。${method}${warnings}`, tone: "success" });
+      const truncationWarning = next.truncated
+        ? `\n警告：原文较长（${next.originalCharCount?.toLocaleString()} 字符），超出长度限制，内容已被截断。`
+        : "";
+      const tone = next.truncated ? "danger" : "success";
+      await appAlert({
+        title: next.truncated ? "知识库已更新（内容已截断）" : "知识库已更新",
+        message: `已导入《${name}》。${method}${warnings}${truncationWarning}`,
+        tone,
+      });
     } catch (e) {
       await appAlert({ title: "导入失败", message: e instanceof Error ? e.message : "Upload failed", tone: "danger" });
     } finally {
@@ -127,17 +151,25 @@ export function KnowledgePage({ bookId, nav, theme: _theme, t: _t }: {
   };
 
   const handleDelete = async (source: KnowledgeSource) => {
-    const next = await fetchJson<KnowledgeLibrary>(
-      `/books/${bookId}/knowledge/sources/${encodeURIComponent(source.id)}`,
-      { method: "DELETE" },
-    );
-    mutate(next);
+    try {
+      const next = await fetchJson<KnowledgeLibrary>(
+        `/books/${bookId}/knowledge/sources/${encodeURIComponent(source.id)}`,
+        { method: "DELETE" },
+      );
+      mutate(next);
+    } catch (e) {
+      await appAlert({ title: "删除失败", message: e instanceof Error ? e.message : "删除知识源失败", tone: "danger" });
+    }
   };
 
   const handleRebuild = async () => {
-    const next = await fetchJson<KnowledgeLibrary>(`/books/${bookId}/knowledge/rebuild`, { method: "POST" });
-    mutate(next);
-    await appAlert({ title: "索引已重建", message: "知识库分块和摘要已经刷新。", tone: "success" });
+    try {
+      const next = await fetchJson<KnowledgeLibrary>(`/books/${bookId}/knowledge/rebuild`, { method: "POST" });
+      mutate(next);
+      await appAlert({ title: "索引已重建", message: "知识库分块和摘要已经刷新。", tone: "success" });
+    } catch (e) {
+      await appAlert({ title: "重建失败", message: e instanceof Error ? e.message : "重建索引失败", tone: "danger" });
+    }
   };
 
   const handleSearch = async () => {
@@ -151,6 +183,46 @@ export function KnowledgePage({ bookId, nav, theme: _theme, t: _t }: {
     } finally {
       setSearching(false);
     }
+  };
+
+  const saveLexicon = async (patch: { bannedWords?: string[]; preferredWords?: Array<{ avoid: string; prefer: string }>; domainTerms?: Array<{ term: string; definition?: string }> }) => {
+    setSavingLexicon(true);
+    try {
+      await fetchJson(`/books/${bookId}/book-rules/lexicon`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+    } finally {
+      setSavingLexicon(false);
+    }
+  };
+
+  const addBannedWord = () => {
+    if (!newBannedWord.trim() || bannedWords.includes(newBannedWord.trim())) return;
+    void saveLexicon({ bannedWords: [...bannedWords, newBannedWord.trim()] });
+    setNewBannedWord("");
+  };
+  const removeBannedWord = (word: string) => {
+    void saveLexicon({ bannedWords: bannedWords.filter(w => w !== word) });
+  };
+  const addPreferredWord = () => {
+    if (!newAvoidWord.trim() || !newPreferWord.trim()) return;
+    void saveLexicon({ preferredWords: [...preferredWords, { avoid: newAvoidWord.trim(), prefer: newPreferWord.trim() }] });
+    setNewAvoidWord("");
+    setNewPreferWord("");
+  };
+  const removePreferredWord = (avoid: string) => {
+    void saveLexicon({ preferredWords: preferredWords.filter(p => p.avoid !== avoid) });
+  };
+  const addDomainTerm = () => {
+    if (!newTermName.trim()) return;
+    void saveLexicon({ domainTerms: [...domainTerms, { term: newTermName.trim(), definition: newTermDef.trim() || undefined }] });
+    setNewTermName("");
+    setNewTermDef("");
+  };
+  const removeDomainTerm = (term: string) => {
+    void saveLexicon({ domainTerms: domainTerms.filter(d => d.term !== term) });
   };
 
   if (loading) {
@@ -341,6 +413,119 @@ export function KnowledgePage({ bookId, nav, theme: _theme, t: _t }: {
             <BookOpen size={28} className="mx-auto text-primary" />
             <div className="mt-3 text-lg font-bold text-foreground">还没有资料</div>
             <p className="mt-2 text-sm text-muted-foreground">上传样章、设定集、人物资料或参考文本后，写作时会自动检索。</p>
+          </div>
+        )}
+      </section>
+
+      {/* Lexicon Section */}
+      <section className="rounded-3xl border border-border/45 bg-card/70 p-5 space-y-4">
+        <div className="flex items-center gap-2 font-bold text-foreground">
+          <BookMarked size={16} className="text-primary" />
+          词库管理
+        </div>
+        <p className="text-sm text-muted-foreground">自定义写作词库约束：禁用词不会出现在正文中，优先词在写作时自动替换，领域术语确保用词统一。</p>
+        <div className="flex gap-2">
+          {(["banned", "preferred", "terms"] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setLexiconTab(tab)}
+              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${lexiconTab === tab ? "bg-primary text-primary-foreground" : "bg-secondary/60 text-muted-foreground hover:text-foreground"}`}
+            >
+              {tab === "banned" ? "禁用词" : tab === "preferred" ? "优先词替换" : "领域术语"}
+            </button>
+          ))}
+        </div>
+
+        {lexiconTab === "banned" && (
+          <div className="space-y-3">
+            <div className="flex gap-2">
+              <input
+                value={newBannedWord}
+                onChange={(e) => setNewBannedWord(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") addBannedWord(); }}
+                className="h-10 flex-1 rounded-xl border border-border/50 bg-background/60 px-3 text-sm outline-none focus:border-primary/50"
+                placeholder="输入禁用词，回车添加"
+                disabled={savingLexicon}
+              />
+              <button onClick={addBannedWord} disabled={!newBannedWord.trim() || savingLexicon} className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 text-xs font-bold text-primary-foreground disabled:opacity-40">
+                <Plus size={12} />添加
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {bannedWords.length === 0 && <span className="text-xs text-muted-foreground/60">暂无禁用词</span>}
+              {bannedWords.map((word) => (
+                <span key={word} className="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2.5 py-1 text-xs text-destructive">
+                  {word}
+                  <button onClick={() => removeBannedWord(word)} className="hover:text-red-600"><X size={10} /></button>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {lexiconTab === "preferred" && (
+          <div className="space-y-3">
+            <div className="flex gap-2">
+              <input
+                value={newAvoidWord}
+                onChange={(e) => setNewAvoidWord(e.target.value)}
+                className="h-10 flex-1 rounded-xl border border-border/50 bg-background/60 px-3 text-sm outline-none focus:border-primary/50"
+                placeholder="避免的词"
+                disabled={savingLexicon}
+              />
+              <input
+                value={newPreferWord}
+                onChange={(e) => setNewPreferWord(e.target.value)}
+                className="h-10 flex-1 rounded-xl border border-border/50 bg-background/60 px-3 text-sm outline-none focus:border-primary/50"
+                placeholder="替换为"
+                disabled={savingLexicon}
+              />
+              <button onClick={addPreferredWord} disabled={!newAvoidWord.trim() || !newPreferWord.trim() || savingLexicon} className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 text-xs font-bold text-primary-foreground disabled:opacity-40">
+                <Plus size={12} />添加
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {preferredWords.length === 0 && <span className="text-xs text-muted-foreground/60">暂无替换规则</span>}
+              {preferredWords.map(({ avoid, prefer }) => (
+                <span key={avoid} className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2.5 py-1 text-xs text-amber-600 dark:text-amber-400">
+                  {avoid} → {prefer}
+                  <button onClick={() => removePreferredWord(avoid)} className="hover:text-red-600"><X size={10} /></button>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {lexiconTab === "terms" && (
+          <div className="space-y-3">
+            <div className="flex gap-2">
+              <input
+                value={newTermName}
+                onChange={(e) => setNewTermName(e.target.value)}
+                className="h-10 flex-1 rounded-xl border border-border/50 bg-background/60 px-3 text-sm outline-none focus:border-primary/50"
+                placeholder="术语名"
+                disabled={savingLexicon}
+              />
+              <input
+                value={newTermDef}
+                onChange={(e) => setNewTermDef(e.target.value)}
+                className="h-10 flex-1 rounded-xl border border-border/50 bg-background/60 px-3 text-sm outline-none focus:border-primary/50"
+                placeholder="释义（可选）"
+                disabled={savingLexicon}
+              />
+              <button onClick={addDomainTerm} disabled={!newTermName.trim() || savingLexicon} className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 text-xs font-bold text-primary-foreground disabled:opacity-40">
+                <Plus size={12} />添加
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {domainTerms.length === 0 && <span className="text-xs text-muted-foreground/60">暂无术语</span>}
+              {domainTerms.map(({ term, definition }) => (
+                <span key={term} className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-2.5 py-1 text-xs text-blue-600 dark:text-blue-400" title={definition}>
+                  {term}{definition ? `（${definition}）` : ""}
+                  <button onClick={() => removeDomainTerm(term)} className="hover:text-red-600"><X size={10} /></button>
+                </span>
+              ))}
+            </div>
           </div>
         )}
       </section>

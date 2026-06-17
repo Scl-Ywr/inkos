@@ -9,7 +9,7 @@ on:
       release_tag:
         description: "Existing release tag to publish assets to"
         required: true
-        default: "v1.6.0"
+        default: "v1.6.1"
       channel:
         description: "Update channel"
         required: true

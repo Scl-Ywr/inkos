@@ -926,8 +926,40 @@ export class WriterAgent extends BaseAgent {
         updatedEmotionalArcs: "",
         updatedCharacterMatrix: "",
       };
-    } catch {
-      const settlement = parseSettlementOutput(response.content, params.genreProfile);
+      // If the delta format was used, also try to extract legacy TAG blocks
+      // from the same output for validation compatibility.
+      if (!mergedSettlement.updatedState || !mergedSettlement.updatedHooks) {
+        try {
+          const legacyFallback = parseSettlementOutput(response.content, params.genreProfile);
+          mergedSettlement = {
+            ...mergedSettlement,
+            updatedState: legacyFallback.updatedState || mergedSettlement.updatedState,
+            updatedHooks: legacyFallback.updatedHooks || mergedSettlement.updatedHooks,
+            updatedLedger: legacyFallback.updatedLedger || mergedSettlement.updatedLedger,
+            chapterSummary: legacyFallback.chapterSummary || mergedSettlement.chapterSummary,
+            updatedSubplots: legacyFallback.updatedSubplots || mergedSettlement.updatedSubplots,
+            updatedEmotionalArcs: legacyFallback.updatedEmotionalArcs || mergedSettlement.updatedEmotionalArcs,
+            updatedCharacterMatrix: legacyFallback.updatedCharacterMatrix || mergedSettlement.updatedCharacterMatrix,
+          };
+        } catch {
+          // Legacy TAG blocks not found; keep delta-only output.
+        }
+      }
+    } catch (deltaError) {
+      // Delta format not found or invalid; try legacy TAG blocks.
+      let settlement: ReturnType<typeof parseSettlementOutput>;
+      try {
+        settlement = parseSettlementOutput(response.content, params.genreProfile);
+      } catch {
+        // Both delta and legacy formats failed. Log raw output for diagnostics
+        // then re-throw so the caller can retry with explicit format guidance.
+        const snippet = response.content.slice(0, 800);
+        this.logWarn(resolvedLang, {
+          zh: `第${params.chapterNumber}章结算输出解析失败（delta: ${String(deltaError).slice(0, 120)}）。LLM 输出前 800 字符：${snippet}`,
+          en: `Chapter ${params.chapterNumber} settlement output parse failed (delta: ${String(deltaError).slice(0, 120)}). First 800 chars of LLM output: ${snippet}`,
+        });
+        throw deltaError instanceof Error ? deltaError : new Error(String(deltaError));
+      }
       mergedSettlement = governedControlBlock
         ? {
             ...settlement,

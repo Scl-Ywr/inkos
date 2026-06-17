@@ -177,6 +177,38 @@ export function validatePostWrite(
     }
   }
 
+  // 4b. 禁用词检查（bannedWords — 绝对禁止出现）
+  if (bookRules?.bannedWords) {
+    for (const word of bookRules.bannedWords) {
+      const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const matches = content.match(new RegExp(escaped, "g"));
+      if (matches && matches.length > 0) {
+        violations.push({
+          rule: "禁用词",
+          severity: "error",
+          description: `禁用词"${word}"出现${matches.length}次`,
+          suggestion: `删除或替换"${word}"`,
+        });
+      }
+    }
+  }
+
+  // 4c. 优先词替换建议（preferredWords — 建议替换）
+  if (bookRules?.preferredWords) {
+    for (const { avoid, prefer } of bookRules.preferredWords) {
+      const escaped = avoid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const matches = content.match(new RegExp(escaped, "g"));
+      if (matches && matches.length > 0) {
+        violations.push({
+          rule: "优先词替换",
+          severity: "warning",
+          description: `"${avoid}"出现${matches.length}次，建议替换为"${prefer}"`,
+          suggestion: `将"${avoid}"替换为"${prefer}"`,
+        });
+      }
+    }
+  }
+
   // 5. 元叙事检查（编剧旁白）
   for (const pattern of META_NARRATION_PATTERNS) {
     const match = content.match(pattern);
@@ -321,7 +353,192 @@ export function validatePostWrite(
   const personViolation = detectNarrativePersonDrift(content, bookRules);
   if (personViolation) violations.push(personViolation);
 
+  // 13. Punctuation anomalies
+  // 13a. Repeated punctuation (3+ same marks in a row like ！！！ 。。。)
+  const repeatedPunct = content.match(/([！？。…])\1{2,}/g);
+  if (repeatedPunct) {
+    for (const match of repeatedPunct) {
+      violations.push({
+        rule: "标点异常",
+        severity: "warning",
+        description: `连续重复标点「${match.slice(0, 6)}」`,
+        suggestion: "单个标点即可表达语气",
+      });
+    }
+  }
+  // 13b. Half-width commas/periods in Chinese text
+  const halfWidthPunct = content.match(/[，。；：！？][^a-zA-Z0-9]*[,;]/g);
+  if (halfWidthPunct && halfWidthPunct.length > 2) {
+    violations.push({
+      rule: "标点异常",
+      severity: "warning",
+      description: `中文段落内出现半角标点（${halfWidthPunct.length}处）`,
+      suggestion: "统一使用全角标点",
+    });
+  }
+  // 13c. Mismatched quotation marks
+  const leftQuotes = (content.match(/["“「]/g) ?? []).length;
+  const rightQuotes = (content.match(/["”」]/g) ?? []).length;
+  if (Math.abs(leftQuotes - rightQuotes) > 1) {
+    violations.push({
+      rule: "标点异常",
+      severity: "warning",
+      description: `引号不成对（左${leftQuotes}个，右${rightQuotes}个）`,
+      suggestion: "检查引号是否配对",
+    });
+  }
+
+  // 14. Collocation errors (common Chinese mistakes)
+  for (const [wrong, correct] of COLLOCATION_ERRORS) {
+    if (content.includes(wrong)) {
+      violations.push({
+        rule: "搭配错误",
+        severity: "warning",
+        description: `可能的搭配错误：「${wrong}」→「${correct}」`,
+        suggestion: `改为「${correct}」`,
+      });
+    }
+  }
+
+  // 15. Sentence-skeleton repetition (structural repetition even with different words)
+  const lang = languageOverride ?? genreProfile.language;
+  const skeletonViolations = detectSentenceSkeletonRepetition(content, lang);
+  violations.push(...skeletonViolations);
+
   return violations;
+}
+
+function detectSentenceSkeletonRepetition(
+  content: string,
+  language: "zh" | "en",
+): ReadonlyArray<PostWriteViolation> {
+  const violations: PostWriteViolation[] = [];
+  // Split into sentences; filter out short ones (dialogue, interjections)
+  const minLen = language === "en" ? 50 : 20;
+  const sentences = content
+    .split(language === "en" ? /(?<=[.!?])\s+/ : /[。！？!?；；]/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= minLen);
+
+  const skeletons = sentences.map(extractSentenceSkeleton);
+  // Compare consecutive pairs within a window of 3
+  const windowSize = 3;
+  for (let i = 0; i < skeletons.length; i += 1) {
+    for (let j = i + 1; j <= Math.min(i + windowSize, skeletons.length - 1); j += 1) {
+      const sim = skeletonSimilarity(skeletons[i]!, skeletons[j]!);
+      if (sim >= 0.7) {
+        violations.push({
+          rule: "句式重复",
+          severity: "warning",
+          description: language === "en"
+            ? `Nearby sentences share the same structural skeleton (${Math.round(sim * 100)}% overlap)`
+            : `相邻句式骨架高度相似（${Math.round(sim * 100)}%重合）："${sentences[i]!.slice(0, 25)}…" vs "${sentences[j]!.slice(0, 25)}…"`,
+          suggestion: language === "en"
+            ? "Restructure one sentence with a different subject-verb order or clause arrangement."
+            : "改写其中一句的句式结构——换主语、变换从句顺序或用不同连接词。",
+        });
+        // Only report once per pair
+        return violations;
+      }
+    }
+  }
+  return violations;
+}
+
+type SkeletonToken = "S" | "V" | "O" | "M" | "C" | "X";
+
+function extractSentenceSkeleton(sentence: string): ReadonlyArray<SkeletonToken> {
+  if (/^[一-鿿]/.test(sentence)) {
+    return extractChineseSkeleton(sentence);
+  }
+  return extractEnglishSkeleton(sentence);
+}
+
+function extractChineseSkeleton(sentence: string): SkeletonToken[] {
+  const tokens: SkeletonToken[] = [];
+  // Pattern-based extraction for Chinese: identify subject-like, verb-like, modifier positions
+  const segments = sentence.split(/[,，、：:；;]/);
+  for (const seg of segments) {
+    const trimmed = seg.trim();
+    if (!trimmed) continue;
+    // Subject-like: starts with name/pronounnoun
+    if (/^[他她它我你您]/.test(trimmed) || /^[A-Z一-鿿]{1,4}(?:道|说|想|看|笑|叫|叹|怒)/.test(trimmed)) {
+      tokens.push("S");
+    }
+    // Verb-like: action/movement/state words
+    else if (/(?:了|着|过|起来|下去|出来|进来|回去|起来|下来|上去)(?:$|[，。！？，；])/.test(trimmed)
+      || /^(?:便|就|却|又|也|再|还|才|已|正|在|将|被|把|向|从|到|对|跟|和)/.test(trimmed)) {
+      tokens.push("V");
+    }
+    // Modifier-like: starts with adverb patterns
+    else if (/^(?:忽然|突然|猛然|渐渐|慢慢|悄悄|默默|终于|果然|竟然|居然|似乎|好像|仿佛|犹如)/.test(trimmed)) {
+      tokens.push("M");
+    }
+    // Complement-like: result/direction
+    else if (/(?:得|地|极|透|死|坏|光|完|尽)/.test(trimmed)) {
+      tokens.push("C");
+    }
+    else {
+      tokens.push("X");
+    }
+  }
+  return tokens;
+}
+
+function extractEnglishSkeleton(sentence: string): SkeletonToken[] {
+  const words = sentence.split(/\s+/).filter(w => w.length > 0);
+  const tokens: SkeletonToken[] = [];
+  let prevTag: SkeletonToken | null = null;
+  for (const word of words) {
+    const w = word.toLowerCase().replace(/[^a-z']/g, "");
+    if (!w) continue;
+    let tag: SkeletonToken;
+    if (/^(he|she|it|they|we|i|you|this|that|these|those|the|a|an)$/.test(w)) {
+      tag = "S";
+    } else if (/^(is|are|was|were|be|been|being|have|has|had|do|does|did|will|would|shall|should|can|could|may|might|must)$/.test(w)) {
+      tag = "V";
+    } else if (/^(quickly|slowly|suddenly|carefully|quietly|gently|finally|then|now|just|still|already|soon|almost|nearly|gradually|silently)$/i.test(w)) {
+      tag = "M";
+    } else if (/^(but|however|although|though|while|when|after|before|because|since|if|unless|until|once|as|so|and|or|nor|yet)$/i.test(w)) {
+      tag = "C";
+    } else {
+      tag = "X";
+    }
+    // Compress consecutive same tags
+    if (tag !== prevTag) {
+      tokens.push(tag);
+      prevTag = tag;
+    }
+  }
+  return tokens;
+}
+
+function skeletonSimilarity(a: ReadonlyArray<SkeletonToken>, b: ReadonlyArray<SkeletonToken>): number {
+  if (a.length === 0 || b.length === 0) return 0;
+  // Compressed skeleton comparison using edit distance
+  const la = a.join("");
+  const lb = b.join("");
+  const dist = levenshteinDistance(la, lb);
+  const maxLen = Math.max(la.length, lb.length);
+  return maxLen === 0 ? 1 : 1 - dist / maxLen;
+}
+
+function levenshteinDistance(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  const dp = Array.from({ length: m + 1 }, (_, i) => i);
+  for (let j = 1; j <= n; j += 1) {
+    let prev = dp[0]!;
+    dp[0] = j;
+    for (let i = 1; i <= m; i += 1) {
+      const temp = dp[i]!;
+      dp[i] = a[i - 1] === b[j - 1]
+        ? prev
+        : 1 + Math.min(prev, dp[i]!, dp[i - 1]!);
+      prev = temp;
+    }
+  }
+  return dp[m]!;
 }
 
 function detectNarrativePersonDrift(
@@ -1068,6 +1285,26 @@ function extractEnglishTitleQualifier(
     ? `${capitalize(first)} ${capitalize(second)}`
     : capitalize(first);
 }
+
+// --- Common Chinese collocation errors ---
+const COLLOCATION_ERRORS: ReadonlyArray<readonly [string, string]> = [
+  ["提高改善", "提高或改善"],
+  ["解决改善", "解决或改善"],
+  ["增加提高", "增加或提高"],
+  ["降低减少", "降低或减少"],
+  ["大约左右", "大约或左右"],
+  ["几乎全部", "几乎或全部"],
+  ["互相彼此", "互相或彼此"],
+  ["十分极其", "十分或极其"],
+  ["非常极其", "非常或极其"],
+  ["突然忽然", "突然或忽然"],
+  ["突然猛然", "突然或猛然"],
+  ["马上立刻", "马上或立刻"],
+  ["也许可能", "也许或可能"],
+  ["热热烈烈", "热烈"],
+  ["光靠依靠", "光靠或依靠"],
+  ["冒着顶着", "冒着或顶着"],
+];
 
 function extractChineseTitleQualifier(
   baseTitle: string,

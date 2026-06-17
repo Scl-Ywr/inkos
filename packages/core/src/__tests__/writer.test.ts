@@ -128,6 +128,7 @@ describe("WriterAgent", () => {
           readonly isGoldenOpening: boolean;
           readonly body: string;
           readonly threadRefs: readonly string[];
+          readonly satisfactionBeats: readonly string[];
         };
         readonly contextPackage: { readonly chapter: number; readonly selectedContext: readonly [] };
         readonly ruleStack: {
@@ -148,6 +149,7 @@ describe("WriterAgent", () => {
         isGoldenOpening: false,
         body: "## 当前任务\n围绕账本线推进。",
         threadRefs: [],
+        satisfactionBeats: [],
       },
       contextPackage: { chapter: 7, selectedContext: [] },
       ruleStack: {
@@ -1189,6 +1191,7 @@ describe("WriterAgent", () => {
           isGoldenOpening: false,
           body: "",
           threadRefs: ["ledger-fragment"],
+          satisfactionBeats: [],
         },
         contextPackage: {
           chapter: 4,
@@ -1319,6 +1322,7 @@ describe("WriterAgent", () => {
           isGoldenOpening: false,
           body: "",
           threadRefs: ["ledger-fragment"],
+          satisfactionBeats: [],
         },
         contextPackage: {
           chapter: 4,
@@ -1468,6 +1472,7 @@ describe("WriterAgent", () => {
           isGoldenOpening: false,
           body: "本章要做的是推进 ledger-fragment tension at the archive.",
           threadRefs: ["mentor-oath", "ledger-fragment"],
+          satisfactionBeats: [],
         },
         contextPackage: {
           chapter: 4,

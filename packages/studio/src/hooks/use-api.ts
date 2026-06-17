@@ -74,6 +74,10 @@ export function deriveInvalidationPaths(path: string): ReadonlyArray<string> {
     return [getApiCacheKey("/logs")];
   }
 
+  if (normalized === "/api/v1/images/generate") {
+    return [getApiCacheKey("/images/library")];
+  }
+
   return [];
 }
 
@@ -190,15 +194,23 @@ export function useApi<T>(path: string) {
       return null;
     }
 
+    // Don't update state when app is in background — the request will
+    // likely fail due to WebView network restrictions, and we don't
+    // want to show error screens for transient background failures.
+    const isBackground = typeof document !== "undefined"
+      && document.visibilityState !== "visible";
+
     setLoading(true);
-    setError(null);
+    if (!isBackground) setError(null);
     try {
       const json = await fetchJson<T>(url);
       apiDataCache.set(url, json);
       setData(json);
       return json;
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (!isBackground) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
       return null;
     } finally {
       setLoading(false);

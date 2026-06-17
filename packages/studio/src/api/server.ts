@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { bodyLimit } from "hono/body-limit";
 import { streamSSE } from "hono/streaming";
 import { serve } from "@hono/node-server";
 import {
@@ -70,6 +71,8 @@ import {
   type ActionSource,
   createGenerateCoverTool,
   generateShortFictionCover,
+  generateImageFromPrompt,
+  resolveCoverGenerationRequest,
   createPlayStartTool,
   createShortFictionRunTool,
   createSubAgentTool,
@@ -1149,6 +1152,18 @@ type EventHandler = (event: string, data: unknown) => void;
 const subscribers = new Set<EventHandler>();
 const bookCreateStatus = new Map<string, { status: "creating" | "error"; error?: string }>();
 
+// Event ring buffer: replays recent events to new SSE connections.
+// Only state-changing events are buffered (not high-frequency deltas).
+const EVENT_BUFFER_MAX = 200;
+const eventBuffer: Array<{ readonly event: string; readonly data: unknown; readonly ts: number }> = [];
+const BUFFERED_EVENT_PREFIXES = [
+  "write:", "draft:", "tool:", "agent:", "book:", "daemon:",
+  "audit:", "revise:", "rewrite:", "resync:", "radar:",
+  "import:", "style:", "fanfic:", "log", "llm:progress",
+  "context:", "operations:",
+];
+const SKIP_EVENT_PATTERNS = [".delta", ":update"];
+
 // 内存缓存：service -> 模型列表 + 更新时间戳；避免每次 sidebar 挂载时都打真实 LLM /models
 const modelListCache = new Map<string, { models: Array<{ id: string; name: string }>; at: number }>();
 
@@ -1197,6 +1212,15 @@ interface ServiceProbeResult {
 function broadcast(event: string, data: unknown): void {
   for (const handler of subscribers) {
     handler(event, data);
+  }
+  // Buffer state-changing events for replay to new connections.
+  const shouldBuffer = BUFFERED_EVENT_PREFIXES.some((prefix) => event.startsWith(prefix))
+    && !SKIP_EVENT_PATTERNS.some((pattern) => event.includes(pattern));
+  if (shouldBuffer) {
+    eventBuffer.push({ event, data, ts: Date.now() });
+    while (eventBuffer.length > EVENT_BUFFER_MAX) {
+      eventBuffer.shift();
+    }
   }
 }
 
@@ -2033,6 +2057,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
   let cachedConfig = initialConfig;
 
   app.use("/*", cors());
+  app.use("/*", async (c, next) => {
+    const isKnowledgeUpload = new URL(c.req.url).pathname.endsWith("/knowledge/sources");
+    return bodyLimit({ maxSize: isKnowledgeUpload ? 10 * 1024 * 1024 : 2 * 1024 * 1024 })(c, next);
+  });
 
   // Structured error handler — ApiError returns typed JSON, others return 500
   app.onError((error, c) => {
@@ -2376,7 +2404,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       const book = await state.loadBookConfig(id);
       const chapters = await state.loadChapterIndex(id);
       const nextChapter = await state.getNextChapterNumber(id);
-      return c.json({ book, chapters, nextChapter });
+      let bookRules: Record<string, unknown> | null = null;
+      try {
+        const rulesRaw = await readFile(join(state.bookDir(id), "story", "book_rules.md"), "utf-8");
+        const { parseBookRules } = await import("@actalk/inkos-core");
+        const parsed = parseBookRules(rulesRaw);
+        if (parsed) bookRules = parsed.rules as unknown as Record<string, unknown>;
+      } catch { /* no book_rules.md — null is fine */ }
+      return c.json({ book, chapters, nextChapter, bookRules });
     } catch {
       return c.json({ error: `Book "${id}" not found` }, 404);
     }
@@ -2660,7 +2695,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     const id = c.req.param("id");
     try {
       const chapters = await state.loadChapterIndex(id);
-      return c.json(computeAnalytics(id, chapters));
+      const book = await state.loadBookConfig(id).catch(() => null);
+      return c.json(computeAnalytics(id, chapters, book ? { targetChapters: book.targetChapters, chapterWordCount: book.chapterWordCount } : undefined));
     } catch {
       return c.json({ error: `Book "${id}" not found` }, 404);
     }
@@ -2675,12 +2711,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     const id = c.req.param("id");
     const body: { name?: string; content?: string; fileBase64?: string } = await c.req.json<{ name?: string; content?: string; fileBase64?: string }>().catch(() => ({}));
     const upload = await resolveKnowledgeUploadBody(body);
-    await knowledgeStore.addSource("book", id, {
+    const result = await knowledgeStore.addSource("book", id, {
       name: upload.name,
       content: upload.content,
     });
     const library = await knowledgeStore.loadOverview("book", id);
-    return c.json({ ...library, extraction: upload.extraction });
+    return c.json({ ...library, extraction: upload.extraction, truncated: result.truncated, originalCharCount: result.originalCharCount });
   });
 
   app.delete("/api/v1/books/:id/knowledge/sources/:sourceId", async (c) => {
@@ -2709,12 +2745,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
   app.post("/api/v1/knowledge/project/sources", async (c) => {
     const body: { name?: string; content?: string; fileBase64?: string } = await c.req.json<{ name?: string; content?: string; fileBase64?: string }>().catch(() => ({}));
     const upload = await resolveKnowledgeUploadBody(body);
-    await knowledgeStore.addSource("project", "global", {
+    const result = await knowledgeStore.addSource("project", "global", {
       name: upload.name,
       content: upload.content,
     });
     const library = await knowledgeStore.loadOverview("project", "global");
-    return c.json({ ...library, extraction: upload.extraction });
+    return c.json({ ...library, extraction: upload.extraction, truncated: result.truncated, originalCharCount: result.originalCharCount });
   });
 
   app.delete("/api/v1/knowledge/project/sources/:sourceId", async (c) => {
@@ -2732,7 +2768,1747 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     return c.json(await knowledgeStore.search("project", "global", body.query ?? "", body.limit ?? 6, { sourceIds: body.sourceIds }));
   });
 
-  // --- Actions ---
+  // --- Scratchpad (灵感速记) ---
+
+  app.get("/api/v1/books/:id/scratchpad", async (c) => {
+    const id = c.req.param("id");
+    const bookDir = state.bookDir(id);
+    const filePath = join(bookDir, "scratchpad.json");
+    try {
+      const raw = await readFile(filePath, "utf-8");
+      return c.json(JSON.parse(raw));
+    } catch {
+      return c.json([]);
+    }
+  });
+
+  app.post("/api/v1/books/:id/scratchpad", async (c) => {
+    const id = c.req.param("id");
+    const body: { text?: string; tags?: string[]; linkedChapter?: number } = await c.req.json<{ text?: string; tags?: string[]; linkedChapter?: number }>().catch(() => ({}));
+    if (!body.text?.trim()) return c.json({ error: "text is required" }, 400);
+    const bookDir = state.bookDir(id);
+    const filePath = join(bookDir, "scratchpad.json");
+    let entries: Array<{ id: string; text: string; tags: string[]; createdAt: string; linkedChapter?: number }>;
+    try {
+      entries = JSON.parse(await readFile(filePath, "utf-8"));
+    } catch {
+      entries = [];
+    }
+    const entry = {
+      id: crypto.randomUUID(),
+      text: body.text.trim(),
+      tags: body.tags ?? [],
+      createdAt: new Date().toISOString(),
+      ...(body.linkedChapter != null ? { linkedChapter: body.linkedChapter } : {}),
+    };
+    entries.push(entry);
+    await mkdir(bookDir, { recursive: true });
+    await writeFile(filePath, JSON.stringify(entries, null, 2), "utf-8");
+    return c.json(entries);
+  });
+
+  app.delete("/api/v1/books/:id/scratchpad/:entryId", async (c) => {
+    const id = c.req.param("id");
+    const entryId = c.req.param("entryId");
+    const bookDir = state.bookDir(id);
+    const filePath = join(bookDir, "scratchpad.json");
+    let entries: Array<{ id: string; text: string; tags: string[]; createdAt: string; linkedChapter?: number }>;
+    try {
+      entries = JSON.parse(await readFile(filePath, "utf-8"));
+    } catch {
+      return c.json([]);
+    }
+    const filtered = entries.filter((e) => e.id !== entryId);
+    await writeFile(filePath, JSON.stringify(filtered, null, 2), "utf-8");
+    return c.json(filtered);
+  });
+
+  // --- Clipboard (素材悬浮剪贴板) ---
+
+  app.get("/api/v1/books/:id/clipboard", async (c) => {
+    const id = c.req.param("id");
+    const bookDir = state.bookDir(id);
+    const filePath = join(bookDir, "clipboard.json");
+    try {
+      const raw = await readFile(filePath, "utf-8");
+      return c.json(JSON.parse(raw));
+    } catch {
+      return c.json([]);
+    }
+  });
+
+  app.post("/api/v1/books/:id/clipboard", async (c) => {
+    const id = c.req.param("id");
+    const body: { text?: string; label?: string; category?: string } = await c.req.json<{ text?: string; label?: string; category?: string }>().catch(() => ({}));
+    if (!body.text?.trim()) return c.json({ error: "text is required" }, 400);
+    const bookDir = state.bookDir(id);
+    const filePath = join(bookDir, "clipboard.json");
+    let entries: Array<{ id: string; text: string; label: string; category: string; createdAt: string }>;
+    try {
+      entries = JSON.parse(await readFile(filePath, "utf-8"));
+    } catch {
+      entries = [];
+    }
+    const entry = {
+      id: crypto.randomUUID(),
+      text: body.text.trim(),
+      label: body.label?.trim() || body.text.trim().slice(0, 20),
+      category: body.category?.trim() || "general",
+      createdAt: new Date().toISOString(),
+    };
+    entries.unshift(entry);
+    // Keep max 50 entries
+    if (entries.length > 50) entries = entries.slice(0, 50);
+    await mkdir(bookDir, { recursive: true });
+    await writeFile(filePath, JSON.stringify(entries, null, 2), "utf-8");
+    return c.json(entries);
+  });
+
+  app.delete("/api/v1/books/:id/clipboard/:entryId", async (c) => {
+    const id = c.req.param("id");
+    const entryId = c.req.param("entryId");
+    const bookDir = state.bookDir(id);
+    const filePath = join(bookDir, "clipboard.json");
+    let entries: Array<{ id: string; text: string; label: string; category: string; createdAt: string }>;
+    try {
+      entries = JSON.parse(await readFile(filePath, "utf-8"));
+    } catch {
+      return c.json([]);
+    }
+    const filtered = entries.filter((e) => e.id !== entryId);
+    await writeFile(filePath, JSON.stringify(filtered, null, 2), "utf-8");
+    return c.json(filtered);
+  });
+
+  // --- Writing Schedule Calendar (更新排班日历) ---
+
+  app.get("/api/v1/books/:id/schedule", async (c) => {
+    const id = c.req.param("id");
+    const bookDir = state.bookDir(id);
+    const schedulePath = join(bookDir, "schedule.json");
+
+    // Load chapter index for activity data
+    const index = await state.loadChapterIndex(id);
+
+    // Build activity map from chapter updates
+    const activityMap = new Map<string, { chaptersWritten: number; chaptersUpdated: number; wordsAdded: number }>();
+
+    for (const chapter of index) {
+      if (chapter.updatedAt) {
+        const date = chapter.updatedAt.split("T")[0];
+        const existing = activityMap.get(date) ?? { chaptersWritten: 0, chaptersUpdated: 0, wordsAdded: 0 };
+        if (chapter.status === "drafted" || chapter.status === "approved") {
+          existing.chaptersWritten++;
+        }
+        existing.chaptersUpdated++;
+        existing.wordsAdded += chapter.wordCount ?? 0;
+        activityMap.set(date, existing);
+      }
+    }
+
+    // Load custom schedule entries
+    let scheduleEntries: Array<{ id: string; date: string; title: string; type: "deadline" | "goal" | "milestone"; completed: boolean }> = [];
+    try {
+      scheduleEntries = JSON.parse(await readFile(schedulePath, "utf-8"));
+    } catch {
+      // No schedule file yet
+    }
+
+    // Build calendar data for last 90 days
+    const today = new Date();
+    const calendarDays: Array<{
+      date: string;
+      activity: { chaptersWritten: number; chaptersUpdated: number; wordsAdded: number } | null;
+      schedule: Array<{ id: string; title: string; type: string; completed: boolean }>;
+    }> = [];
+
+    for (let i = 89; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().split("T")[0];
+      calendarDays.push({
+        date: dateStr,
+        activity: activityMap.get(dateStr) ?? null,
+        schedule: scheduleEntries.filter((e) => e.date === dateStr),
+      });
+    }
+
+    // Calculate stats
+    const totalDaysActive = activityMap.size;
+    const totalWordsWritten = index.reduce((sum, ch) => sum + (ch.wordCount ?? 0), 0);
+    const avgWordsPerDay = totalDaysActive > 0 ? Math.round(totalWordsWritten / totalDaysActive) : 0;
+
+    // Calculate streak
+    let currentStreak = 0;
+    let maxStreak = 0;
+    let tempStreak = 0;
+
+    // Calculate max streak from the calendarDays (last 90 days)
+    for (let i = 0; i < calendarDays.length; i++) {
+      if (calendarDays[i].activity) {
+        tempStreak++;
+        if (tempStreak > maxStreak) maxStreak = tempStreak;
+      } else {
+        tempStreak = 0;
+      }
+    }
+
+    // Current streak: count backwards from today/yesterday
+    const todayStr = today.toISOString().split("T")[0];
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split("T")[0];
+
+    if (activityMap.has(todayStr) || activityMap.has(yesterdayStr)) {
+      let d = activityMap.has(todayStr) ? new Date(today) : yesterday;
+      while (activityMap.has(d.toISOString().split("T")[0])) {
+        currentStreak++;
+        d.setDate(d.getDate() - 1);
+      }
+    }
+
+    return c.json({
+      calendarDays,
+      stats: {
+        totalDaysActive,
+        totalWordsWritten,
+        avgWordsPerDay,
+        currentStreak,
+        maxStreak,
+      },
+      scheduleEntries,
+    });
+  });
+
+  app.post("/api/v1/books/:id/schedule", async (c) => {
+    const id = c.req.param("id");
+    const body: { date?: string; title?: string; type?: "deadline" | "goal" | "milestone" } = await c.req.json().catch(() => ({}));
+    if (!body.date || !body.title) return c.json({ error: "date and title are required" }, 400);
+
+    const bookDir = state.bookDir(id);
+    const schedulePath = join(bookDir, "schedule.json");
+    let entries: Array<{ id: string; date: string; title: string; type: "deadline" | "goal" | "milestone"; completed: boolean }>;
+    try {
+      entries = JSON.parse(await readFile(schedulePath, "utf-8"));
+    } catch {
+      entries = [];
+    }
+
+    const entry = {
+      id: crypto.randomUUID(),
+      date: body.date,
+      title: body.title.trim(),
+      type: body.type ?? "goal",
+      completed: false,
+    };
+    entries.push(entry);
+    await mkdir(bookDir, { recursive: true });
+    await writeFile(schedulePath, JSON.stringify(entries, null, 2), "utf-8");
+    return c.json(entry);
+  });
+
+  app.put("/api/v1/books/:id/schedule/:entryId", async (c) => {
+    const id = c.req.param("id");
+    const entryId = c.req.param("entryId");
+    const body: { completed?: boolean; title?: string; date?: string } = await c.req.json().catch(() => ({}));
+
+    const bookDir = state.bookDir(id);
+    const schedulePath = join(bookDir, "schedule.json");
+    let entries: Array<{ id: string; date: string; title: string; type: string; completed: boolean }>;
+    try {
+      entries = JSON.parse(await readFile(schedulePath, "utf-8"));
+    } catch {
+      return c.json({ error: "Schedule not found" }, 404);
+    }
+
+    const index = entries.findIndex((e) => e.id === entryId);
+    if (index === -1) return c.json({ error: "Entry not found" }, 404);
+
+    if (body.completed !== undefined) entries[index].completed = body.completed;
+    if (body.title) entries[index].title = body.title;
+    if (body.date) entries[index].date = body.date;
+
+    await writeFile(schedulePath, JSON.stringify(entries, null, 2), "utf-8");
+    return c.json(entries[index]);
+  });
+
+  app.delete("/api/v1/books/:id/schedule/:entryId", async (c) => {
+    const id = c.req.param("id");
+    const entryId = c.req.param("entryId");
+
+    const bookDir = state.bookDir(id);
+    const schedulePath = join(bookDir, "schedule.json");
+    let entries: Array<{ id: string; date: string; title: string; type: string; completed: boolean }>;
+    try {
+      entries = JSON.parse(await readFile(schedulePath, "utf-8"));
+    } catch {
+      return c.json({ error: "Schedule not found" }, 404);
+    }
+
+    entries = entries.filter((e) => e.id !== entryId);
+    await writeFile(schedulePath, JSON.stringify(entries, null, 2), "utf-8");
+    return c.json({ ok: true });
+  });
+
+  // --- Reader Comments Simulation (读者评论模拟分析) ---
+
+  app.post("/api/v1/books/:id/chapters/:chapter/simulate-comments", async (c) => {
+    const id = c.req.param("id");
+    const chapterNum = parseInt(c.req.param("chapter"), 10);
+
+    try {
+      const bookDir = state.bookDir(id);
+      const chaptersDir = join(bookDir, "chapters");
+      const files = await readdir(chaptersDir);
+      const paddedNum = String(chapterNum).padStart(4, "0");
+      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+      if (!match) return c.json({ error: "Chapter not found" }, 404);
+
+      const content = await readFile(join(chaptersDir, match), "utf-8");
+      const book = await state.loadBookConfig(id);
+
+      // Build prompt for simulating reader comments
+      const prompt = `你是一个网文读者评论模拟器。请根据以下章节内容，模拟 5-8 条真实读者可能发表的评论。
+
+要求：
+1. 评论风格要像真实网文读者（口语化、有梗、有情绪）
+2. 包含不同类型的读者：理性分析型、情感共鸣型、吐槽型、催更型、细节控
+3. 每条评论包含：用户名（随机生成）、评论内容、情绪标签（正面/中性/负面）、点赞数（模拟）
+4. 最后给出一段整体读者反馈总结
+
+书名：${book.title}
+章节号：第${chapterNum}章
+
+章节内容：
+${content.slice(0, 3000)}${content.length > 3000 ? "\n...(内容截断)" : ""}
+
+请以JSON格式返回：
+{
+  "comments": [
+    {
+      "username": "用户名",
+      "content": "评论内容",
+      "sentiment": "positive|neutral|negative",
+      "likes": 123,
+      "timestamp": "模拟时间"
+    }
+  ],
+  "summary": "整体读者反馈总结",
+  "highlights": ["亮点1", "亮点2"],
+  "concerns": ["问题1", "问题2"]
+}`;
+
+      // Use LLM to generate comments
+      const pipelineConfig = await buildPipelineConfig();
+      const response = await chatCompletion(pipelineConfig.client, pipelineConfig.model, [{ role: "user", content: prompt }]);
+      const result = response.content;
+
+      // Parse JSON from response
+      let parsed;
+      try {
+        const jsonMatch = result.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          parsed = JSON.parse(jsonMatch[0]);
+        }
+      } catch {
+        // If parsing fails, return raw text
+        parsed = { rawResponse: result };
+      }
+
+      // Cache the result
+      const cachePath = join(bookDir, "runtime", `chapter-${paddedNum}.comments.json`);
+      await mkdir(join(bookDir, "runtime"), { recursive: true });
+      await writeFile(cachePath, JSON.stringify(parsed, null, 2), "utf-8");
+
+      return c.json(parsed);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.get("/api/v1/books/:id/chapters/:chapter/comments", async (c) => {
+    const id = c.req.param("id");
+    const chapterNum = parseInt(c.req.param("chapter"), 10);
+
+    try {
+      const bookDir = state.bookDir(id);
+      const paddedNum = String(chapterNum).padStart(4, "0");
+      const cachePath = join(bookDir, "runtime", `chapter-${paddedNum}.comments.json`);
+
+      try {
+        const raw = await readFile(cachePath, "utf-8");
+        return c.json(JSON.parse(raw));
+      } catch {
+        return c.json(null);
+      }
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- Chapter Translation (翻译转换) ---
+
+  app.post("/api/v1/books/:id/chapters/:chapter/translate", async (c) => {
+    const id = c.req.param("id");
+    const chapterNum = parseInt(c.req.param("chapter"), 10);
+    const body: { targetLanguage?: string; style?: "literal" | "literary" | "colloquial" } = await c.req.json().catch(() => ({}));
+    const targetLanguage = body.targetLanguage ?? "en";
+    const style = body.style ?? "literary";
+
+    try {
+      const bookDir = state.bookDir(id);
+      const chaptersDir = join(bookDir, "chapters");
+      const files = await readdir(chaptersDir);
+      const paddedNum = String(chapterNum).padStart(4, "0");
+      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+      if (!match) return c.json({ error: "Chapter not found" }, 404);
+
+      const content = await readFile(join(chaptersDir, match), "utf-8");
+      const book = await state.loadBookConfig(id);
+
+      // Build translation prompt
+      const styleDescriptions = {
+        literal: "直译，保持原文结构和表达方式",
+        literary: "文学翻译，注重意境和文采",
+        colloquial: "口语化翻译，通俗易懂",
+      };
+
+      const languageNames: Record<string, string> = {
+        en: "英语",
+        ja: "日语",
+        ko: "韩语",
+        fr: "法语",
+        de: "德语",
+        es: "西班牙语",
+        ru: "俄语",
+      };
+
+      const targetLangName = languageNames[targetLanguage] ?? targetLanguage;
+
+      const prompt = `你是一位专业的文学翻译家。请将以下中文小说章节翻译成${targetLangName}。
+
+翻译风格：${styleDescriptions[style]}
+
+要求：
+1. 保持原文的叙事节奏和情感基调
+2. 人名音译要统一，首次出现时在括号内注明原文
+3. 文化特定的表达要适当本地化，但保留原意
+4. 对话要自然流畅，符合目标语言的表达习惯
+5. 章节标题也要翻译
+
+书名：${book.title}
+章节号：第${chapterNum}章
+
+原文：
+${content}
+
+请直接输出翻译结果，保持原文的Markdown格式。`;
+
+      // Use LLM for translation
+      const pipelineConfig = await buildPipelineConfig();
+      const response = await chatCompletion(pipelineConfig.client, pipelineConfig.model, [{ role: "user", content: prompt }]);
+      const result = response.content;
+
+      // Save translated version
+      const translatedDir = join(bookDir, "translations");
+      await mkdir(translatedDir, { recursive: true });
+      const translatedPath = join(translatedDir, `${paddedNum}_${targetLanguage}.md`);
+      await writeFile(translatedPath, result, "utf-8");
+
+      return c.json({
+        translatedContent: result,
+        savedPath: translatedPath,
+        targetLanguage,
+        style,
+        wordCount: result.length,
+      });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.get("/api/v1/books/:id/chapters/:chapter/translations", async (c) => {
+    const id = c.req.param("id");
+    const chapterNum = parseInt(c.req.param("chapter"), 10);
+
+    try {
+      const bookDir = state.bookDir(id);
+      const translatedDir = join(bookDir, "translations");
+      const paddedNum = String(chapterNum).padStart(4, "0");
+
+      try {
+        const files = await readdir(translatedDir);
+        const translations = files
+          .filter((f) => f.startsWith(paddedNum) && f.endsWith(".md"))
+          .map((f) => {
+            const lang = f.replace(`${paddedNum}_`, "").replace(".md", "");
+            return { language: lang, filename: f };
+          });
+        return c.json(translations);
+      } catch {
+        return c.json([]);
+      }
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- Audiobook Adaptation (有声书适配优化) ---
+
+  app.post("/api/v1/books/:id/chapters/:chapter/audiobook-adapt", async (c) => {
+    const id = c.req.param("id");
+    const chapterNum = parseInt(c.req.param("chapter"), 10);
+    const body: { voiceStyle?: string; pacing?: "slow" | "normal" | "fast" } = await c.req.json().catch(() => ({}));
+    const voiceStyle = body.voiceStyle ?? "标准朗读";
+    const pacing = body.pacing ?? "normal";
+
+    try {
+      const bookDir = state.bookDir(id);
+      const chaptersDir = join(bookDir, "chapters");
+      const files = await readdir(chaptersDir);
+      const paddedNum = String(chapterNum).padStart(4, "0");
+      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+      if (!match) return c.json({ error: "Chapter not found" }, 404);
+
+      const content = await readFile(join(chaptersDir, match), "utf-8");
+      const book = await state.loadBookConfig(id);
+
+      // Build audiobook adaptation prompt
+      const pacingDescriptions = {
+        slow: "慢速朗读，适合抒情、描写段落",
+        normal: "正常语速，适合一般叙述",
+        fast: "快速朗读，适合紧张、动作场景",
+      };
+
+      const prompt = `你是一位专业的有声书制作顾问。请将以下小说章节优化为适合有声书朗读的版本。
+
+朗读风格：${voiceStyle}
+语速节奏：${pacingDescriptions[pacing]}
+
+优化要求：
+1. 添加适当的停顿标记（用"..."表示短停顿，"......"表示长停顿）
+2. 为对话添加说话人提示（如：[旁白]、[角色名]）
+3. 调整标点符号以符合口语表达习惯
+4. 为特殊场景添加音效提示（如：[脚步声]、[风声]）
+5. 将书面化的表达转换为更口语化的表达
+6. 保持原文的核心内容和情感基调
+7. 在章节开头添加章节标题朗读提示
+8. 在章节结尾添加结束标记
+
+书名：${book.title}
+章节号：第${chapterNum}章
+
+原文：
+${content}
+
+请输出优化后的有声书版本，并在最后附上：
+1. 预计朗读时长（按每分钟200字计算）
+2. 关键情感节点标注
+3. 建议的背景音乐类型`;
+
+      // Use LLM for adaptation
+      const pipelineConfig = await buildPipelineConfig();
+      const response = await chatCompletion(pipelineConfig.client, pipelineConfig.model, [{ role: "user", content: prompt }]);
+      const result = response.content;
+
+      // Save adapted version
+      const adaptedDir = join(bookDir, "audiobook");
+      await mkdir(adaptedDir, { recursive: true });
+      const adaptedPath = join(adaptedDir, `${paddedNum}_adapted.md`);
+      await writeFile(adaptedPath, result, "utf-8");
+
+      // Calculate estimated duration
+      const wordCount = result.length;
+      const estimatedMinutes = Math.ceil(wordCount / 200);
+
+      return c.json({
+        adaptedContent: result,
+        savedPath: adaptedPath,
+        wordCount,
+        estimatedDuration: `${estimatedMinutes}分钟`,
+        voiceStyle,
+        pacing,
+      });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.get("/api/v1/books/:id/chapters/:chapter/audiobook", async (c) => {
+    const id = c.req.param("id");
+    const chapterNum = parseInt(c.req.param("chapter"), 10);
+
+    try {
+      const bookDir = state.bookDir(id);
+      const paddedNum = String(chapterNum).padStart(4, "0");
+      const adaptedPath = join(bookDir, "audiobook", `${paddedNum}_adapted.md`);
+
+      try {
+        const content = await readFile(adaptedPath, "utf-8");
+        return c.json({ content, path: adaptedPath });
+      } catch {
+        return c.json(null);
+      }
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- Auto Summary (自动摘要生成) ---
+
+  app.post("/api/v1/books/:id/chapters/:chapter/summary", async (c) => {
+    const id = c.req.param("id");
+    const chapterNum = parseInt(c.req.param("chapter"), 10);
+    const body: { style?: "brief" | "detailed" | "bullet" } = await c.req.json().catch(() => ({}));
+    const style = body.style ?? "brief";
+
+    try {
+      const bookDir = state.bookDir(id);
+      const chaptersDir = join(bookDir, "chapters");
+      const files = await readdir(chaptersDir);
+      const paddedNum = String(chapterNum).padStart(4, "0");
+      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+      if (!match) return c.json({ error: "Chapter not found" }, 404);
+
+      const content = await readFile(join(chaptersDir, match), "utf-8");
+      const book = await state.loadBookConfig(id);
+
+      const stylePrompts = {
+        brief: "生成一段简洁的摘要（100-150字），概括主要情节",
+        detailed: "生成详细摘要（300-500字），包含主要情节、角色互动和关键转折",
+        bullet: "以要点列表形式生成摘要，包含：主要事件、角色变化、情感转折、伏笔线索",
+      };
+
+      const prompt = `你是一位专业的文学编辑。请为以下小说章节生成摘要。
+
+书名：${book.title}
+章节号：第${chapterNum}章
+
+要求：${stylePrompts[style]}
+
+章节内容：
+${content.slice(0, 4000)}
+
+请直接输出摘要内容。`;
+
+      const pipelineConfig = await buildPipelineConfig();
+      const response = await chatCompletion(pipelineConfig.client, pipelineConfig.model, [{ role: "user", content: prompt }]);
+      const result = response.content;
+
+      // Cache summary
+      const cachePath = join(bookDir, "runtime", `chapter-${paddedNum}.summary.json`);
+      await mkdir(join(bookDir, "runtime"), { recursive: true });
+      await writeFile(cachePath, JSON.stringify({ summary: result, style, generatedAt: new Date().toISOString() }, null, 2), "utf-8");
+
+      return c.json({ summary: result, style });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.get("/api/v1/books/:id/chapters/:chapter/summary", async (c) => {
+    const id = c.req.param("id");
+    const chapterNum = parseInt(c.req.param("chapter"), 10);
+
+    try {
+      const bookDir = state.bookDir(id);
+      const paddedNum = String(chapterNum).padStart(4, "0");
+      const cachePath = join(bookDir, "runtime", `chapter-${paddedNum}.summary.json`);
+
+      try {
+        const raw = await readFile(cachePath, "utf-8");
+        return c.json(JSON.parse(raw));
+      } catch {
+        return c.json(null);
+      }
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- Sensitive Content Detection (敏感内容检测) ---
+
+  app.post("/api/v1/books/:id/chapters/:chapter/detect-sensitive", async (c) => {
+    const id = c.req.param("id");
+    const chapterNum = parseInt(c.req.param("chapter"), 10);
+
+    try {
+      const bookDir = state.bookDir(id);
+      const chaptersDir = join(bookDir, "chapters");
+      const files = await readdir(chaptersDir);
+      const paddedNum = String(chapterNum).padStart(4, "0");
+      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+      if (!match) return c.json({ error: "Chapter not found" }, 404);
+
+      const content = await readFile(join(chaptersDir, match), "utf-8");
+
+      // Built-in sensitive word patterns
+      const sensitivePatterns = [
+        { category: "政治敏感", pattern: /习近平|毛泽东|共产党|国民党|六四|天安门|法轮功|藏独|疆独|台独/gi },
+        { category: "色情内容", pattern: /做爱|性交|淫荡|骚逼|鸡巴|阴茎|阴道|乳房|高潮|口交|肛交/gi },
+        { category: "暴力血腥", pattern: /砍死|杀死|捅死|血流成河|肢解|虐杀|自杀|割腕|上吊/gi },
+        { category: "赌博相关", pattern: /赌博|赌场|老虎机|扑克|麻将|赌钱|赌注|赌局/gi },
+        { category: "毒品相关", pattern: /毒品|大麻|可卡因|冰毒|摇头丸|吸毒|贩毒|戒毒/gi },
+        { category: "歧视用语", pattern: /黑鬼|白猪|支那|东亚病夫|残废|弱智|神经病/gi },
+      ];
+
+      const findings: Array<{ category: string; word: string; position: number; context: string }> = [];
+
+      for (const { category, pattern } of sensitivePatterns) {
+        let match;
+        const regex = new RegExp(pattern.source, pattern.flags);
+        while ((match = regex.exec(content)) !== null) {
+          const start = Math.max(0, match.index - 20);
+          const end = Math.min(content.length, match.index + match[0].length + 20);
+          findings.push({
+            category,
+            word: match[0],
+            position: match.index,
+            context: content.slice(start, end),
+          });
+        }
+      }
+
+      // Cache results
+      const cachePath = join(bookDir, "runtime", `chapter-${paddedNum}.sensitive.json`);
+      await mkdir(join(bookDir, "runtime"), { recursive: true });
+      await writeFile(cachePath, JSON.stringify({ findings, checkedAt: new Date().toISOString() }, null, 2), "utf-8");
+
+      return c.json({
+        findings,
+        totalFindings: findings.length,
+        categories: [...new Set(findings.map((f) => f.category))],
+      });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- Style Consistency Check (风格一致性检查) ---
+
+  app.post("/api/v1/books/:id/check-style-consistency", async (c) => {
+    const id = c.req.param("id");
+
+    try {
+      const bookDir = state.bookDir(id);
+      const chaptersDir = join(bookDir, "chapters");
+      const files = await readdir(chaptersDir);
+      const book = await state.loadBookConfig(id);
+
+      // Sample up to 5 chapters for style analysis
+      const chapterFiles = files
+        .filter((f) => f.endsWith(".md") && /^\d{4}/.test(f))
+        .sort()
+        .slice(0, 5);
+
+      if (chapterFiles.length < 2) {
+        return c.json({ error: "需要至少2个章节进行风格分析" }, 400);
+      }
+
+      const chaptersContent: Array<{ number: number; content: string }> = [];
+      for (const file of chapterFiles) {
+        const chapterNum = parseInt(file.slice(0, 4), 10);
+        const content = await readFile(join(chaptersDir, file), "utf-8");
+        chaptersContent.push({ number: chapterNum, content: content.slice(0, 1500) });
+      }
+
+      const prompt = `你是一位文学风格分析专家。请分析以下${chaptersContent.length}个章节的写作风格一致性。
+
+书名：${book.title}
+
+${chaptersContent.map((ch) => `--- 第${ch.number}章 ---\n${ch.content}`).join("\n\n")}
+
+请分析并返回JSON格式：
+{
+  "overallConsistency": 0.85,
+  "aspects": {
+    "vocabulary": { "score": 0.9, "notes": "用词风格分析" },
+    "sentenceStructure": { "score": 0.8, "notes": "句式结构分析" },
+    "tone": { "score": 0.85, "notes": "语气语调分析" },
+    "narrativeStyle": { "score": 0.9, "notes": "叙事风格分析" }
+  },
+  "inconsistencies": [
+    { "chapters": [1, 3], "issue": "具体不一致描述", "suggestion": "修改建议" }
+  ],
+  "summary": "整体风格一致性总结"
+}`;
+
+      const pipelineConfig = await buildPipelineConfig();
+      const response = await chatCompletion(pipelineConfig.client, pipelineConfig.model, [{ role: "user", content: prompt }]);
+      const result = response.content;
+
+      let parsed;
+      try {
+        const jsonMatch = result.match(/\{[\s\S]*\}/);
+        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+      } catch {
+        parsed = { rawResponse: result };
+      }
+
+      return c.json(parsed);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- Character Dialogue Analysis (角色对话风格分析) ---
+
+  app.post("/api/v1/books/:id/chapters/:chapter/analyze-dialogue", async (c) => {
+    const id = c.req.param("id");
+    const chapterNum = parseInt(c.req.param("chapter"), 10);
+
+    try {
+      const bookDir = state.bookDir(id);
+      const chaptersDir = join(bookDir, "chapters");
+      const files = await readdir(chaptersDir);
+      const paddedNum = String(chapterNum).padStart(4, "0");
+      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+      if (!match) return c.json({ error: "Chapter not found" }, 404);
+
+      const content = await readFile(join(chaptersDir, match), "utf-8");
+      const book = await state.loadBookConfig(id);
+
+      const prompt = `你是一位角色分析专家。请分析以下章节中的角色对话风格。
+
+书名：${book.title}
+章节号：第${chapterNum}章
+
+要求：
+1. 识别所有说话的角色
+2. 分析每个角色的对话特点（语气、用词、句式）
+3. 评估对话是否符合角色人设
+4. 指出对话中的问题（如角色声音雷同、不符合性格等）
+
+章节内容：
+${content.slice(0, 4000)}
+
+请返回JSON格式：
+{
+  "characters": [
+    {
+      "name": "角色名",
+      "dialogueCount": 5,
+      "style": "对话风格描述",
+      "consistency": 0.85,
+      "issues": ["问题1"]
+    }
+  ],
+  "overallQuality": 0.8,
+  "suggestions": ["建议1", "建议2"]
+}`;
+
+      const pipelineConfig = await buildPipelineConfig();
+      const response = await chatCompletion(pipelineConfig.client, pipelineConfig.model, [{ role: "user", content: prompt }]);
+      const result = response.content;
+
+      let parsed;
+      try {
+        const jsonMatch = result.match(/\{[\s\S]*\}/);
+        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+      } catch {
+        parsed = { rawResponse: result };
+      }
+
+      return c.json(parsed);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- Plot Pacing Analysis (剧情节奏分析) ---
+
+  app.post("/api/v1/books/:id/analyze-pacing", async (c) => {
+    const id = c.req.param("id");
+
+    try {
+      const bookDir = state.bookDir(id);
+      const chaptersDir = join(bookDir, "chapters");
+      const files = await readdir(chaptersDir);
+      const book = await state.loadBookConfig(id);
+      const index = await state.loadChapterIndex(id);
+
+      // Get chapter summaries for pacing analysis
+      const chaptersData: Array<{ number: number; wordCount: number; content: string }> = [];
+      const chapterFiles = files
+        .filter((f) => f.endsWith(".md") && /^\d{4}/.test(f))
+        .sort()
+        .slice(0, 10);
+
+      for (const file of chapterFiles) {
+        const chapterNum = parseInt(file.slice(0, 4), 10);
+        const content = await readFile(join(chaptersDir, file), "utf-8");
+        const meta = index.find((ch) => ch.number === chapterNum);
+        chaptersData.push({
+          number: chapterNum,
+          wordCount: meta?.wordCount ?? content.length,
+          content: content.slice(0, 800),
+        });
+      }
+
+      const prompt = `你是一位剧情节奏分析专家。请分析以下小说的剧情节奏。
+
+书名：${book.title}
+章节数：${chaptersData.length}章
+
+章节数据：
+${chaptersData.map((ch) => `第${ch.number}章 (${ch.wordCount}字): ${ch.content.slice(0, 200)}...`).join("\n")}
+
+请分析并返回JSON格式：
+{
+  "overallPacing": "fast|medium|slow|mixed",
+  "pacingCurve": [
+    { "chapter": 1, "pacing": "fast", "tension": 0.8 }
+  ],
+  "issues": [
+    { "type": "too_fast|too_slow|uneven", "chapters": [3, 4], "description": "问题描述" }
+  ],
+  "suggestions": ["建议1"],
+  "summary": "整体节奏分析总结"
+}`;
+
+      const pipelineConfig = await buildPipelineConfig();
+      const response = await chatCompletion(pipelineConfig.client, pipelineConfig.model, [{ role: "user", content: prompt }]);
+      const result = response.content;
+
+      let parsed;
+      try {
+        const jsonMatch = result.match(/\{[\s\S]*\}/);
+        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+      } catch {
+        parsed = { rawResponse: result };
+      }
+
+      return c.json(parsed);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- Plot Conflict Detection (剧情冲突检测) ---
+
+  app.post("/api/v1/books/:id/detect-conflicts", async (c) => {
+    const id = c.req.param("id");
+
+    try {
+      const bookDir = state.bookDir(id);
+      const chaptersDir = join(bookDir, "chapters");
+      const files = await readdir(chaptersDir);
+      const book = await state.loadBookConfig(id);
+
+      // Load truth files for context
+      const truthDir = join(bookDir, "story");
+      let truthContent = "";
+      try {
+        const truthFiles = await readdir(truthDir);
+        for (const file of truthFiles.slice(0, 3)) {
+          if (file.endsWith(".md")) {
+            truthContent += await readFile(join(truthDir, file), "utf-8") + "\n";
+          }
+        }
+      } catch { /* ignore */ }
+
+      // Sample chapters
+      const chapterFiles = files
+        .filter((f) => f.endsWith(".md") && /^\d{4}/.test(f))
+        .sort()
+        .slice(0, 6);
+
+      const chaptersContent: Array<{ number: number; content: string }> = [];
+      for (const file of chapterFiles) {
+        const chapterNum = parseInt(file.slice(0, 4), 10);
+        const content = await readFile(join(chaptersDir, file), "utf-8");
+        chaptersContent.push({ number: chapterNum, content: content.slice(0, 1000) });
+      }
+
+      const prompt = `你是一位剧情逻辑分析专家。请检测以下小说中的剧情冲突和逻辑问题。
+
+书名：${book.title}
+
+背景设定：
+${truthContent.slice(0, 1500)}
+
+章节内容：
+${chaptersContent.map((ch) => `--- 第${ch.number}章 ---\n${ch.content}`).join("\n\n")}
+
+请检测以下类型的冲突：
+1. 时间线矛盾（事件顺序不合理）
+2. 角色行为矛盾（角色行为与人设不符）
+3. 设定矛盾（前后设定不一致）
+4. 因果关系问题（事件缺乏合理因果）
+
+请返回JSON格式：
+{
+  "conflicts": [
+    {
+      "type": "timeline|character|setting|causality",
+      "severity": "high|medium|low",
+      "chapters": [1, 3],
+      "description": "冲突描述",
+      "suggestion": "修复建议"
+    }
+  ],
+  "totalConflicts": 3,
+  "summary": "整体逻辑性评估"
+}`;
+
+      const pipelineConfig = await buildPipelineConfig();
+      const response = await chatCompletion(pipelineConfig.client, pipelineConfig.model, [{ role: "user", content: prompt }]);
+      const result = response.content;
+
+      let parsed;
+      try {
+        const jsonMatch = result.match(/\{[\s\S]*\}/);
+        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+      } catch {
+        parsed = { rawResponse: result };
+      }
+
+      return c.json(parsed);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- Foreshadowing Tracking (伏笔/线索追踪) ---
+
+  app.get("/api/v1/books/:id/foreshadowing", async (c) => {
+    const id = c.req.param("id");
+
+    try {
+      const bookDir = state.bookDir(id);
+      const filePath = join(bookDir, "foreshadowing.json");
+
+      try {
+        const raw = await readFile(filePath, "utf-8");
+        return c.json(JSON.parse(raw));
+      } catch {
+        return c.json({ items: [] });
+      }
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.post("/api/v1/books/:id/foreshadowing/scan", async (c) => {
+    const id = c.req.param("id");
+
+    try {
+      const bookDir = state.bookDir(id);
+      const chaptersDir = join(bookDir, "chapters");
+      const files = await readdir(chaptersDir);
+      const book = await state.loadBookConfig(id);
+
+      const chapterFiles = files
+        .filter((f) => f.endsWith(".md") && /^\d{4}/.test(f))
+        .sort();
+
+      const chaptersContent: Array<{ number: number; content: string }> = [];
+      for (const file of chapterFiles.slice(0, 8)) {
+        const chapterNum = parseInt(file.slice(0, 4), 10);
+        const content = await readFile(join(chaptersDir, file), "utf-8");
+        chaptersContent.push({ number: chapterNum, content: content.slice(0, 1000) });
+      }
+
+      const prompt = `你是一位伏笔分析专家。请分析以下小说中的伏笔和线索。
+
+书名：${book.title}
+
+章节内容：
+${chaptersContent.map((ch) => `--- 第${ch.number}章 ---\n${ch.content}`).join("\n\n")}
+
+请识别：
+1. 已埋设的伏笔（未回收）
+2. 已回收的伏笔
+3. 潜在的线索
+4. 伏笔的强弱程度
+
+请返回JSON格式：
+{
+  "items": [
+    {
+      "type": "planted|resolved|clue",
+      "content": "伏笔内容描述",
+      "plantedChapter": 1,
+      "resolvedChapter": null,
+      "strength": "strong|medium|weak",
+      "importance": "high|medium|low"
+    }
+  ],
+  "summary": "伏笔分布总结"
+}`;
+
+      const pipelineConfig = await buildPipelineConfig();
+      const response = await chatCompletion(pipelineConfig.client, pipelineConfig.model, [{ role: "user", content: prompt }]);
+      const result = response.content;
+
+      let parsed;
+      try {
+        const jsonMatch = result.match(/\{[\s\S]*\}/);
+        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+      } catch {
+        parsed = { items: [] };
+      }
+
+      // Save to file
+      const filePath = join(bookDir, "foreshadowing.json");
+      await writeFile(filePath, JSON.stringify(parsed, null, 2), "utf-8");
+
+      return c.json(parsed);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.post("/api/v1/books/:id/foreshadowing", async (c) => {
+    const id = c.req.param("id");
+    const body: { type?: string; content?: string; plantedChapter?: number; importance?: string } = await c.req.json().catch(() => ({}));
+
+    if (!body.content) return c.json({ error: "content is required" }, 400);
+
+    try {
+      const bookDir = state.bookDir(id);
+      const filePath = join(bookDir, "foreshadowing.json");
+
+      let data: { items: Array<{ id: string; type: string; content: string; plantedChapter: number; resolvedChapter: number | null; strength: string; importance: string }> };
+      try {
+        data = JSON.parse(await readFile(filePath, "utf-8"));
+      } catch {
+        data = { items: [] };
+      }
+
+      data.items.push({
+        id: crypto.randomUUID(),
+        type: body.type ?? "planted",
+        content: body.content,
+        plantedChapter: body.plantedChapter ?? 0,
+        resolvedChapter: null,
+        strength: "medium",
+        importance: body.importance ?? "medium",
+      });
+
+      await writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+      return c.json(data);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.put("/api/v1/books/:id/foreshadowing/:itemId", async (c) => {
+    const id = c.req.param("id");
+    const itemId = c.req.param("itemId");
+    const body: { type?: string; content?: string; plantedChapter?: number; resolvedChapter?: number | null; strength?: string; importance?: string } = await c.req.json().catch(() => ({}));
+
+    try {
+      const bookDir = state.bookDir(id);
+      const filePath = join(bookDir, "foreshadowing.json");
+
+      let data: { items: Array<{ id: string; type: string; content: string; plantedChapter: number; resolvedChapter: number | null; strength: string; importance: string }> };
+      try {
+        data = JSON.parse(await readFile(filePath, "utf-8"));
+      } catch {
+        return c.json({ error: "foreshadowing.json not found" }, 404);
+      }
+
+      const idx = data.items.findIndex((item) => item.id === itemId);
+      if (idx === -1) return c.json({ error: "item not found" }, 404);
+
+      const existing = data.items[idx];
+      data.items[idx] = {
+        ...existing,
+        ...(body.type !== undefined && { type: body.type }),
+        ...(body.content !== undefined && { content: body.content }),
+        ...(body.plantedChapter !== undefined && { plantedChapter: body.plantedChapter }),
+        ...(body.resolvedChapter !== undefined && { resolvedChapter: body.resolvedChapter }),
+        ...(body.strength !== undefined && { strength: body.strength }),
+        ...(body.importance !== undefined && { importance: body.importance }),
+      };
+
+      await writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+      return c.json(data);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.delete("/api/v1/books/:id/foreshadowing/:itemId", async (c) => {
+    const id = c.req.param("id");
+    const itemId = c.req.param("itemId");
+
+    try {
+      const bookDir = state.bookDir(id);
+      const filePath = join(bookDir, "foreshadowing.json");
+
+      let data: { items: Array<{ id: string; [key: string]: unknown }> };
+      try {
+        data = JSON.parse(await readFile(filePath, "utf-8"));
+      } catch {
+        return c.json({ error: "foreshadowing.json not found" }, 404);
+      }
+
+      data.items = data.items.filter((item) => item.id !== itemId);
+      await writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+      return c.json(data);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- Character Relationship Graph (角色关系图谱) ---
+
+  app.get("/api/v1/books/:id/character-graph", async (c) => {
+    const id = c.req.param("id");
+
+    try {
+      const bookDir = state.bookDir(id);
+      const filePath = join(bookDir, "character-graph.json");
+
+      try {
+        const raw = await readFile(filePath, "utf-8");
+        return c.json(JSON.parse(raw));
+      } catch {
+        return c.json({ characters: [], relationships: [] });
+      }
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.post("/api/v1/books/:id/character-graph/build", async (c) => {
+    const id = c.req.param("id");
+
+    try {
+      const bookDir = state.bookDir(id);
+      const chaptersDir = join(bookDir, "chapters");
+      const files = await readdir(chaptersDir);
+      const book = await state.loadBookConfig(id);
+
+      // Load character files if available
+      const truthDir = join(bookDir, "story");
+      let characterContent = "";
+      try {
+        const truthFiles = await readdir(truthDir);
+        for (const file of truthFiles) {
+          if (file.includes("character") || file.includes("角色")) {
+            characterContent += await readFile(join(truthDir, file), "utf-8") + "\n";
+          }
+        }
+      } catch { /* ignore */ }
+
+      const chapterFiles = files
+        .filter((f) => f.endsWith(".md") && /^\d{4}/.test(f))
+        .sort()
+        .slice(0, 5);
+
+      const chaptersContent: Array<{ number: number; content: string }> = [];
+      for (const file of chapterFiles) {
+        const chapterNum = parseInt(file.slice(0, 4), 10);
+        const content = await readFile(join(chaptersDir, file), "utf-8");
+        chaptersContent.push({ number: chapterNum, content: content.slice(0, 1500) });
+      }
+
+      const prompt = `你是一位角色关系分析专家。请分析以下小说中的角色关系。
+
+书名：${book.title}
+
+角色设定：
+${characterContent.slice(0, 2000) || "（无角色设定文件）"}
+
+章节内容：
+${chaptersContent.map((ch) => `--- 第${ch.number}章 ---\n${ch.content}`).join("\n\n")}
+
+请返回JSON格式：
+{
+  "characters": [
+    {
+      "id": "char_1",
+      "name": "角色名",
+      "role": "主角|配角|反派|龙套",
+      "description": "简短描述"
+    }
+  ],
+  "relationships": [
+    {
+      "source": "char_1",
+      "target": "char_2",
+      "type": "friend|enemy|lover|family|colleague|rival",
+      "strength": 0.8,
+      "description": "关系描述"
+    }
+  ]
+}`;
+
+      const pipelineConfig = await buildPipelineConfig();
+      const response = await chatCompletion(pipelineConfig.client, pipelineConfig.model, [{ role: "user", content: prompt }]);
+      const result = response.content;
+
+      let parsed;
+      try {
+        const jsonMatch = result.match(/\{[\s\S]*\}/);
+        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+      } catch {
+        parsed = { characters: [], relationships: [] };
+      }
+
+      // Save to file
+      const filePath = join(bookDir, "character-graph.json");
+      await writeFile(filePath, JSON.stringify(parsed, null, 2), "utf-8");
+
+      return c.json(parsed);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.post("/api/v1/books/:id/character-graph/character", async (c) => {
+    const id = c.req.param("id");
+    const body: { name?: string; role?: string; description?: string } = await c.req.json().catch(() => ({}));
+
+    if (!body.name) return c.json({ error: "name is required" }, 400);
+
+    try {
+      const bookDir = state.bookDir(id);
+      const filePath = join(bookDir, "character-graph.json");
+
+      let data: { characters: Array<{ id: string; name: string; role: string; description: string }>; relationships: Array<{ source: string; target: string; type: string; strength: number; description: string }> };
+      try {
+        data = JSON.parse(await readFile(filePath, "utf-8"));
+      } catch {
+        data = { characters: [], relationships: [] };
+      }
+
+      const newChar = {
+        id: `char_${crypto.randomUUID().slice(0, 8)}`,
+        name: body.name,
+        role: body.role ?? "配角",
+        description: body.description ?? "",
+      };
+
+      data.characters.push(newChar);
+      await writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+      return c.json(data);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.post("/api/v1/books/:id/character-graph/relationship", async (c) => {
+    const id = c.req.param("id");
+    const body: { source?: string; target?: string; type?: string; description?: string } = await c.req.json().catch(() => ({}));
+
+    if (!body.source || !body.target) return c.json({ error: "source and target are required" }, 400);
+
+    try {
+      const bookDir = state.bookDir(id);
+      const filePath = join(bookDir, "character-graph.json");
+
+      let data: { characters: Array<{ id: string; name: string; role: string; description: string }>; relationships: Array<{ source: string; target: string; type: string; strength: number; description: string }> };
+      try {
+        data = JSON.parse(await readFile(filePath, "utf-8"));
+      } catch {
+        return c.json({ error: "Character graph not found. Build it first." }, 404);
+      }
+
+      data.relationships.push({
+        source: body.source,
+        target: body.target,
+        type: body.type ?? "friend",
+        strength: 0.5,
+        description: body.description ?? "",
+      });
+
+      await writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+      return c.json(data);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.put("/api/v1/books/:id/character-graph/character/:charId", async (c) => {
+    const id = c.req.param("id");
+    const charId = c.req.param("charId");
+    const body: { name?: string; role?: string; description?: string } = await c.req.json().catch(() => ({}));
+
+    try {
+      const bookDir = state.bookDir(id);
+      const filePath = join(bookDir, "character-graph.json");
+
+      let data: { characters: Array<{ id: string; name: string; role: string; description: string }>; relationships: Array<{ source: string; target: string; type: string; strength: number; description: string }> };
+      try {
+        data = JSON.parse(await readFile(filePath, "utf-8"));
+      } catch {
+        return c.json({ error: "Character graph not found" }, 404);
+      }
+
+      const idx = data.characters.findIndex((ch) => ch.id === charId);
+      if (idx === -1) return c.json({ error: "Character not found" }, 404);
+
+      const existing = data.characters[idx];
+      data.characters[idx] = {
+        ...existing,
+        ...(body.name !== undefined && { name: body.name }),
+        ...(body.role !== undefined && { role: body.role }),
+        ...(body.description !== undefined && { description: body.description }),
+      };
+
+      await writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+      return c.json(data);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.delete("/api/v1/books/:id/character-graph/character/:charId", async (c) => {
+    const id = c.req.param("id");
+    const charId = c.req.param("charId");
+
+    try {
+      const bookDir = state.bookDir(id);
+      const filePath = join(bookDir, "character-graph.json");
+
+      let data: { characters: Array<{ id: string; [key: string]: unknown }>; relationships: Array<{ source: string; target: string; [key: string]: unknown }> };
+      try {
+        data = JSON.parse(await readFile(filePath, "utf-8"));
+      } catch {
+        return c.json({ error: "Character graph not found" }, 404);
+      }
+
+      data.characters = data.characters.filter((ch) => ch.id !== charId);
+      data.relationships = data.relationships.filter((r) => r.source !== charId && r.target !== charId);
+
+      await writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+      return c.json(data);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.delete("/api/v1/books/:id/character-graph/relationship", async (c) => {
+    const id = c.req.param("id");
+    const body: { source?: string; target?: string } = await c.req.json().catch(() => ({}));
+
+    if (!body.source || !body.target) return c.json({ error: "source and target are required" }, 400);
+
+    try {
+      const bookDir = state.bookDir(id);
+      const filePath = join(bookDir, "character-graph.json");
+
+      let data: { characters: unknown[]; relationships: Array<{ source: string; target: string; [key: string]: unknown }> };
+      try {
+        data = JSON.parse(await readFile(filePath, "utf-8"));
+      } catch {
+        return c.json({ error: "Character graph not found" }, 404);
+      }
+
+      data.relationships = data.relationships.filter(
+        (r) => !(r.source === body.source && r.target === body.target) && !(r.source === body.target && r.target === body.source)
+      );
+
+      await writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+      return c.json(data);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- Multiple Endings Management (多结局分支管理) ---
+
+  app.get("/api/v1/books/:id/endings", async (c) => {
+    const id = c.req.param("id");
+
+    try {
+      const bookDir = state.bookDir(id);
+      const filePath = join(bookDir, "endings.json");
+
+      try {
+        const raw = await readFile(filePath, "utf-8");
+        return c.json(JSON.parse(raw));
+      } catch {
+        return c.json({ endings: [], activeEnding: null });
+      }
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.post("/api/v1/books/:id/endings", async (c) => {
+    const id = c.req.param("id");
+    const body: { name?: string; description?: string; type?: "good" | "bad" | "neutral" | "hidden" } = await c.req.json().catch(() => ({}));
+
+    if (!body.name) return c.json({ error: "name is required" }, 400);
+
+    try {
+      const bookDir = state.bookDir(id);
+      const filePath = join(bookDir, "endings.json");
+
+      let data: { endings: Array<{ id: string; name: string; description: string; type: string; chapters: number[]; createdAt: string }>; activeEnding: string | null };
+      try {
+        data = JSON.parse(await readFile(filePath, "utf-8"));
+      } catch {
+        data = { endings: [], activeEnding: null };
+      }
+
+      const newEnding = {
+        id: crypto.randomUUID(),
+        name: body.name,
+        description: body.description ?? "",
+        type: body.type ?? "neutral",
+        chapters: [],
+        createdAt: new Date().toISOString(),
+      };
+
+      data.endings.push(newEnding);
+      if (!data.activeEnding) data.activeEnding = newEnding.id;
+
+      await writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+      return c.json(data);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.put("/api/v1/books/:id/endings/:endingId", async (c) => {
+    const id = c.req.param("id");
+    const endingId = c.req.param("endingId");
+    const body: { name?: string; description?: string; chapters?: number[]; isActive?: boolean } = await c.req.json().catch(() => ({}));
+
+    try {
+      const bookDir = state.bookDir(id);
+      const filePath = join(bookDir, "endings.json");
+
+      let data: { endings: Array<{ id: string; name: string; description: string; type: string; chapters: number[]; createdAt: string }>; activeEnding: string | null };
+      try {
+        data = JSON.parse(await readFile(filePath, "utf-8"));
+      } catch {
+        return c.json({ error: "Endings file not found" }, 404);
+      }
+
+      const endingIndex = data.endings.findIndex((e) => e.id === endingId);
+      if (endingIndex === -1) return c.json({ error: "Ending not found" }, 404);
+
+      if (body.name) data.endings[endingIndex].name = body.name;
+      if (body.description) data.endings[endingIndex].description = body.description;
+      if (body.chapters) data.endings[endingIndex].chapters = body.chapters;
+      if (body.isActive) data.activeEnding = endingId;
+
+      await writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+      return c.json(data);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.delete("/api/v1/books/:id/endings/:endingId", async (c) => {
+    const id = c.req.param("id");
+    const endingId = c.req.param("endingId");
+
+    try {
+      const bookDir = state.bookDir(id);
+      const filePath = join(bookDir, "endings.json");
+
+      let data: { endings: Array<{ id: string; name: string; description: string; type: string; chapters: number[]; createdAt: string }>; activeEnding: string | null };
+      try {
+        data = JSON.parse(await readFile(filePath, "utf-8"));
+      } catch {
+        return c.json({ error: "Endings file not found" }, 404);
+      }
+
+      data.endings = data.endings.filter((e) => e.id !== endingId);
+      if (data.activeEnding === endingId) {
+        data.activeEnding = data.endings[0]?.id ?? null;
+      }
+
+      await writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+      return c.json(data);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- World Setting Management (世界观设定管理) ---
+
+  app.get("/api/v1/books/:id/world-settings", async (c) => {
+    const id = c.req.param("id");
+
+    try {
+      const bookDir = state.bookDir(id);
+      const filePath = join(bookDir, "world-settings.json");
+
+      try {
+        const raw = await readFile(filePath, "utf-8");
+        return c.json(JSON.parse(raw));
+      } catch {
+        return c.json({ categories: [] });
+      }
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.post("/api/v1/books/:id/world-settings/category", async (c) => {
+    const id = c.req.param("id");
+    const body: { name?: string; description?: string } = await c.req.json().catch(() => ({}));
+
+    if (!body.name) return c.json({ error: "name is required" }, 400);
+
+    try {
+      const bookDir = state.bookDir(id);
+      const filePath = join(bookDir, "world-settings.json");
+
+      let data: { categories: Array<{ id: string; name: string; description: string; settings: Array<{ id: string; key: string; value: string; notes: string }> }> };
+      try {
+        data = JSON.parse(await readFile(filePath, "utf-8"));
+      } catch {
+        data = { categories: [] };
+      }
+
+      data.categories.push({
+        id: crypto.randomUUID(),
+        name: body.name,
+        description: body.description ?? "",
+        settings: [],
+      });
+
+      await writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+      return c.json(data);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.post("/api/v1/books/:id/world-settings/setting", async (c) => {
+    const id = c.req.param("id");
+    const body: { categoryId?: string; key?: string; value?: string; notes?: string } = await c.req.json().catch(() => ({}));
+
+    if (!body.categoryId || !body.key) return c.json({ error: "categoryId and key are required" }, 400);
+
+    try {
+      const bookDir = state.bookDir(id);
+      const filePath = join(bookDir, "world-settings.json");
+
+      let data: { categories: Array<{ id: string; name: string; description: string; settings: Array<{ id: string; key: string; value: string; notes: string }> }> };
+      try {
+        data = JSON.parse(await readFile(filePath, "utf-8"));
+      } catch {
+        return c.json({ error: "World settings not found. Create a category first." }, 404);
+      }
+
+      const category = data.categories.find((c) => c.id === body.categoryId);
+      if (!category) return c.json({ error: "Category not found" }, 404);
+
+      category.settings.push({
+        id: crypto.randomUUID(),
+        key: body.key,
+        value: body.value ?? "",
+        notes: body.notes ?? "",
+      });
+
+      await writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+      return c.json(data);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.put("/api/v1/books/:id/world-settings/setting/:settingId", async (c) => {
+    const id = c.req.param("id");
+    const settingId = c.req.param("settingId");
+    const body: { value?: string; notes?: string } = await c.req.json().catch(() => ({}));
+
+    try {
+      const bookDir = state.bookDir(id);
+      const filePath = join(bookDir, "world-settings.json");
+
+      let data: { categories: Array<{ id: string; name: string; description: string; settings: Array<{ id: string; key: string; value: string; notes: string }> }> };
+      try {
+        data = JSON.parse(await readFile(filePath, "utf-8"));
+      } catch {
+        return c.json({ error: "World settings not found" }, 404);
+      }
+
+      for (const category of data.categories) {
+        const setting = category.settings.find((s) => s.id === settingId);
+        if (setting) {
+          if (body.value !== undefined) setting.value = body.value;
+          if (body.notes !== undefined) setting.notes = body.notes;
+          break;
+        }
+      }
+
+      await writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+      return c.json(data);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.delete("/api/v1/books/:id/world-settings/setting/:settingId", async (c) => {
+    const id = c.req.param("id");
+    const settingId = c.req.param("settingId");
+
+    try {
+      const bookDir = state.bookDir(id);
+      const filePath = join(bookDir, "world-settings.json");
+
+      let data: { categories: Array<{ id: string; name: string; description: string; settings: Array<{ id: string; key: string; value: string; notes: string }> }> };
+      try {
+        data = JSON.parse(await readFile(filePath, "utf-8"));
+      } catch {
+        return c.json({ error: "World settings not found" }, 404);
+      }
+
+      for (const category of data.categories) {
+        category.settings = category.settings.filter((s) => s.id !== settingId);
+      }
+
+      await writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+      return c.json(data);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- Book Rules Lexicon (词库写入 book_rules.md) ---
+
+  app.put("/api/v1/books/:id/book-rules/lexicon", async (c) => {
+    const id = c.req.param("id");
+    const body: {
+      bannedWords?: string[];
+      preferredWords?: Array<{ avoid: string; prefer: string }>;
+      domainTerms?: Array<{ term: string; definition?: string }>;
+    } = await c.req.json().catch(() => ({}));
+    try {
+      const bookDir = state.bookDir(id);
+      const rulesPath = join(bookDir, "story", "book_rules.md");
+      const raw = await readFile(rulesPath, "utf-8");
+      const { parseBookRules } = await import("@actalk/inkos-core");
+      const parsed = parseBookRules(raw);
+      if (!parsed) {
+        return c.json({ error: "Could not parse book_rules.md" }, 400);
+      }
+      const nextRules = {
+        ...parsed.rules,
+        ...(body.bannedWords !== undefined ? { bannedWords: body.bannedWords } : {}),
+        ...(body.preferredWords !== undefined ? { preferredWords: body.preferredWords } : {}),
+        ...(body.domainTerms !== undefined ? { domainTerms: body.domainTerms } : {}),
+      };
+      // Reconstruct frontmatter: dynamic-import js-yaml from core's deps
+      let yamlDump: (obj: unknown, opts?: Record<string, unknown>) => string;
+      try {
+        const yaml = await Function("return require('js-yaml')")() as { dump: (obj: unknown, opts?: Record<string, unknown>) => string };
+        yamlDump = yaml.dump;
+      } catch {
+        // Fallback: simple JSON-based serializer for frontmatter
+        yamlDump = (obj) => JSON.stringify(obj, null, 2);
+      }
+      const fm = `---\n${yamlDump(nextRules, { lineWidth: -1 })}---\n\n${parsed.body}`;
+      await writeFile(rulesPath, fm, "utf-8");
+      return c.json({ ok: true, rules: nextRules });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- Book Detail endpoint returns book_rules too ---
 
   app.post("/api/v1/books/:id/write-next", async (c) => {
     const id = c.req.param("id");
@@ -2873,6 +4649,77 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     }
   });
 
+  // --- Batch chapter operations ---
+
+  app.post("/api/v1/books/:id/chapters/batch", async (c) => {
+    const id = c.req.param("id");
+    const body: {
+      chapterNumbers: number[];
+      action: "approve" | "reject" | "normalize" | "delete-empty-lines";
+    } = await c.req.json().catch(() => ({ chapterNumbers: [], action: "approve" }));
+
+    if (!body.chapterNumbers?.length) {
+      return c.json({ error: "chapterNumbers is required" }, 400);
+    }
+
+    try {
+      if (body.action === "approve") {
+        const index = await state.loadChapterIndex(id);
+        const nums = new Set(body.chapterNumbers);
+        const updated = index.map((ch) =>
+          nums.has(ch.number) ? { ...ch, status: "approved" as const } : ch,
+        );
+        await state.saveChapterIndex(id, updated);
+        broadcast("batch:complete", { bookId: id, action: "approve", count: body.chapterNumbers.length });
+        return c.json({ ok: true, action: "approve", count: body.chapterNumbers.length });
+      }
+
+      if (body.action === "reject") {
+        const index = await state.loadChapterIndex(id);
+        const nums = new Set(body.chapterNumbers);
+        const filtered = index.filter((ch) => !nums.has(ch.number));
+        await state.saveChapterIndex(id, filtered);
+        broadcast("batch:complete", { bookId: id, action: "reject", count: body.chapterNumbers.length });
+        return c.json({ ok: true, action: "reject", count: body.chapterNumbers.length });
+      }
+
+      if (body.action === "normalize" || body.action === "delete-empty-lines") {
+        const bookDir = state.bookDir(id);
+        const chaptersDir = join(bookDir, "chapters");
+        const files = await readdir(chaptersDir).catch(() => [] as string[]);
+        const normalizeModule = await import("@actalk/inkos-core");
+        const normalize = normalizeModule.normalizePostWriteSurface;
+        let processed = 0;
+        for (const num of body.chapterNumbers) {
+          const padded = String(num).padStart(4, "0");
+          const match = files.find((f) => f.startsWith(padded) && f.endsWith(".md"));
+          if (!match) continue;
+          const filePath = join(chaptersDir, match);
+          try {
+            const content = await readFile(filePath, "utf-8");
+            let result = content;
+            if (body.action === "normalize") {
+              result = normalize(result);
+            }
+            if (body.action === "delete-empty-lines") {
+              result = result.replace(/\n{4,}/g, "\n\n\n");
+            }
+            if (result !== content) {
+              await writeFile(filePath, result, "utf-8");
+              processed++;
+            }
+          } catch { /* skip unreadable chapters */ }
+        }
+        broadcast("batch:complete", { bookId: id, action: body.action, count: processed });
+        return c.json({ ok: true, action: body.action, count: processed });
+      }
+
+      return c.json({ error: `Unknown action: ${body.action}` }, 400);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
   app.post("/api/v1/books/:id/chapters/:num/reject", async (c) => {
     const id = c.req.param("id");
     const num = parseInt(c.req.param("num"), 10);
@@ -2907,6 +4754,20 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       };
       subscribers.add(handler);
       await stream.writeSSE({ event: "ping", data: "" });
+
+      // Replay buffered events so new connections catch up on recent state.
+      const buffered = [...eventBuffer];
+      if (buffered.length > 0) {
+        await stream.writeSSE({ event: "events:replay:start", data: JSON.stringify({ count: buffered.length }) });
+        for (const entry of buffered) {
+          try {
+            await stream.writeSSE({ event: entry.event, data: JSON.stringify(entry.data) });
+          } catch {
+            break;
+          }
+        }
+        await stream.writeSSE({ event: "events:replay:end", data: "" });
+      }
 
       // Keep alive
       const keepAlive = setInterval(() => {
@@ -3890,6 +5751,54 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       path: relPath,
     };
     return c.json({ item }, 201);
+  });
+
+  app.post("/api/v1/images/generate", async (c) => {
+    type GenerateImageBody = { prompt?: string; title?: string; size?: string };
+    const body = await c.req.json<GenerateImageBody>().catch(() => ({} as GenerateImageBody));
+    const prompt = body.prompt?.trim() ?? "";
+    if (!prompt) return c.json({ error: "Prompt is required" }, 400);
+
+    try {
+      const request = await resolveCoverGenerationRequest({ root });
+      const size = body.size?.trim() || "1024x1024";
+      const { buffer, extension } = await generateImageFromPrompt(request, prompt, size);
+
+      const ext = extension || "png";
+      const rawTitle = body.title?.trim()
+        .replace(/[<>:"/\\|?* -]/gu, " ")
+        .replace(/\s+/gu, " ")
+        .replace(/[.\s]+$/gu, "")
+        .trim()
+        .slice(0, 80) || prompt.slice(0, 40).replace(/[<>:"/\\|?* -]/gu, " ").replace(/\s+/gu, " ").trim() || "image";
+      let fileName = `${rawTitle}.${ext}`;
+      let duplicateIndex = 2;
+      while (await access(join(root, "wallpapers", fileName)).then(() => true).catch(() => false)) {
+        fileName = `${rawTitle} (${duplicateIndex}).${ext}`;
+        duplicateIndex += 1;
+      }
+      const relPath = `wallpapers/${fileName}`;
+      const fullPath = join(root, "wallpapers", fileName);
+      await mkdir(dirname(fullPath), { recursive: true });
+      await writeFile(fullPath, buffer);
+      const updatedAt = new Date().toISOString();
+      const item: GeneratedImageLibraryItem = {
+        id: encodeLibraryId(["project", relPath]),
+        source: "project",
+        kind: "wallpaper",
+        status: "ready",
+        title: rawTitle,
+        subtitle: relPath,
+        url: projectFileUrl(relPath),
+        updatedAt,
+        path: relPath,
+      };
+      return c.json({ item }, 201);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const needsCoverConfig = message.includes("cover") || message.includes("COVER") || message.includes("api key") || message.includes("apiKey");
+      return c.json({ error: message, needsCoverConfig }, 400);
+    }
   });
 
   app.patch("/api/v1/images/library", async (c) => {
@@ -5009,7 +6918,179 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     }
   });
 
+  // --- Chapter Highlights ---
+
+  app.post("/api/v1/books/:id/chapters/:num/highlights", async (c) => {
+    const id = c.req.param("id");
+    const chapterNum = parseInt(c.req.param("num"), 10);
+    try {
+      const bookDir = state.bookDir(id);
+      const chaptersDir = join(bookDir, "chapters");
+      const files = await readdir(chaptersDir);
+      const paddedNum = String(chapterNum).padStart(4, "0");
+      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+      if (!match) {
+        return c.json({ error: `Chapter ${chapterNum} not found` }, 404);
+      }
+      const content = await readFile(join(chaptersDir, match), "utf-8");
+      const book = await state.loadBookConfig(id);
+
+      const { ChapterAnalyzerAgent } = await import("@actalk/inkos-core");
+      const pipelineConfig = await buildPipelineConfig();
+      const agent = new ChapterAnalyzerAgent(pipelineConfig);
+      const result = await agent.generateHighlights({
+        book,
+        bookDir,
+        chapterNumber: chapterNum,
+        chapterContent: content,
+      });
+
+      // Cache to runtime file
+      const runtimeDir = join(bookDir, "runtime");
+      await mkdir(runtimeDir, { recursive: true });
+      await writeFile(
+        join(runtimeDir, `chapter-${paddedNum}.highlights.json`),
+        JSON.stringify(result, null, 2),
+        "utf-8",
+      );
+
+      return c.json(result);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.get("/api/v1/books/:id/chapters/:num/highlights", async (c) => {
+    const id = c.req.param("id");
+    const chapterNum = parseInt(c.req.param("num"), 10);
+    try {
+      const bookDir = state.bookDir(id);
+      const paddedNum = String(chapterNum).padStart(4, "0");
+      const filePath = join(bookDir, "runtime", `chapter-${paddedNum}.highlights.json`);
+      const raw = await readFile(filePath, "utf-8");
+      return c.json(JSON.parse(raw));
+    } catch {
+      return c.json(null);
+    }
+  });
+
+  // --- Satisfaction Beats (爽点标记) ---
+
+  app.post("/api/v1/books/:id/chapters/:num/beats", async (c) => {
+    const id = c.req.param("id");
+    const chapterNum = parseInt(c.req.param("num"), 10);
+    try {
+      const bookDir = state.bookDir(id);
+      const chaptersDir = join(bookDir, "chapters");
+      const files = await readdir(chaptersDir);
+      const paddedNum = String(chapterNum).padStart(4, "0");
+      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+      if (!match) {
+        return c.json({ error: `Chapter ${chapterNum} not found` }, 404);
+      }
+      const content = await readFile(join(chaptersDir, match), "utf-8");
+      const book = await state.loadBookConfig(id);
+
+      const { ChapterAnalyzerAgent } = await import("@actalk/inkos-core");
+      const pipelineConfig = await buildPipelineConfig();
+      const agent = new ChapterAnalyzerAgent(pipelineConfig);
+      const beats = await agent.generateSatisfactionBeats({
+        book,
+        bookDir,
+        chapterNumber: chapterNum,
+        chapterContent: content,
+      });
+
+      // Cache to runtime file
+      const runtimeDir = join(bookDir, "runtime");
+      await mkdir(runtimeDir, { recursive: true });
+      await writeFile(
+        join(runtimeDir, `chapter-${paddedNum}.beats.json`),
+        JSON.stringify(beats, null, 2),
+        "utf-8",
+      );
+
+      return c.json(beats);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.get("/api/v1/books/:id/chapters/:num/beats", async (c) => {
+    const id = c.req.param("id");
+    const chapterNum = parseInt(c.req.param("num"), 10);
+    try {
+      const bookDir = state.bookDir(id);
+      const paddedNum = String(chapterNum).padStart(4, "0");
+      const filePath = join(bookDir, "runtime", `chapter-${paddedNum}.beats.json`);
+      const raw = await readFile(filePath, "utf-8");
+      return c.json(JSON.parse(raw));
+    } catch {
+      return c.json([]);
+    }
+  });
+
   // --- Audit ---
+
+  // --- Timeline (时间线计算器) ---
+
+  app.get("/api/v1/books/:id/timeline", async (c) => {
+    const id = c.req.param("id");
+    try {
+      const { loadTimeline } = await import("@actalk/inkos-core");
+      const bookDir = state.bookDir(id);
+      const data = await loadTimeline(bookDir);
+      if (!data.bookId) data.bookId = id;
+      return c.json(data);
+    } catch {
+      return c.json({ bookId: id, anchors: [] });
+    }
+  });
+
+  app.post("/api/v1/books/:id/timeline/rebuild", async (c) => {
+    const id = c.req.param("id");
+    try {
+      const { loadTimeline, saveTimeline, extractTimelineAnchors } = await import("@actalk/inkos-core");
+      const bookDir = state.bookDir(id);
+      const chaptersDir = join(bookDir, "chapters");
+      const files = await readdir(chaptersDir);
+      const allAnchors: Array<{ chapter: number; timeDescription: string; parsedDate?: string; charactersPresent: string[]; eventSummary: string }> = [];
+
+      for (const file of files) {
+        if (!file.endsWith(".md") || !/^\d{4}/.test(file)) continue;
+        const chapterNum = parseInt(file.slice(0, 4), 10);
+        const content = await readFile(join(chaptersDir, file), "utf-8");
+        const anchors = extractTimelineAnchors(chapterNum, content);
+        allAnchors.push(...anchors);
+      }
+
+      // Sort by chapter number
+      allAnchors.sort((a, b) => a.chapter - b.chapter);
+
+      const data = {
+        bookId: id,
+        anchors: allAnchors,
+        lastRebuilt: new Date().toISOString(),
+      };
+      await saveTimeline(bookDir, data);
+      return c.json(data);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.get("/api/v1/books/:id/timeline/validate", async (c) => {
+    const id = c.req.param("id");
+    try {
+      const { loadTimeline, validateTimelineConsistency } = await import("@actalk/inkos-core");
+      const bookDir = state.bookDir(id);
+      const data = await loadTimeline(bookDir);
+      const issues = validateTimelineConsistency(data.anchors);
+      return c.json({ issues });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
 
   app.post("/api/v1/books/:id/audit/:chapter", async (c) => {
     const id = c.req.param("id");
@@ -5070,16 +7151,128 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     }
   });
 
+  // --- Format Chapter (local, no LLM) ---
+  app.post("/api/v1/books/:id/format/:chapter", async (c) => {
+    const id = c.req.param("id");
+    const chapterNum = parseInt(c.req.param("chapter"), 10);
+    const body = await c.req.json<{ preset?: string }>().catch(() => ({ preset: undefined }));
+    const preset = (body.preset ?? "web-novel") as "web-novel" | "publish" | "screenplay" | "short-story";
+
+    try {
+      const bookDir = state.bookDir(id);
+      const chaptersDir = join(bookDir, "chapters");
+      const files = await readdir(chaptersDir);
+      const paddedNum = String(chapterNum).padStart(4, "0");
+      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+      if (!match) return c.json({ error: "Chapter not found" }, 404);
+
+      const content = await readFile(join(chaptersDir, match), "utf-8");
+      const { ReviserAgent } = await import("@actalk/inkos-core");
+      const pipelineConfig = await buildPipelineConfig();
+      const agent = new ReviserAgent(pipelineConfig);
+      const result = agent.formatChapter(content, preset);
+
+      // Save formatted content back
+      await writeFile(join(chaptersDir, match), result.revisedContent, "utf-8");
+
+      // Update chapter index
+      const index = await state.loadChapterIndex(id);
+      const updatedIndex = index.map((ch) =>
+        ch.number === chapterNum ? { ...ch, wordCount: result.wordCount, updatedAt: new Date().toISOString() } : ch
+      );
+      await state.saveChapterIndex(id, updatedIndex);
+
+      return c.json(result);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- Expand Chapter (uses LLM) ---
+  app.post("/api/v1/books/:id/expand/:chapter", async (c) => {
+    const id = c.req.param("id");
+    const chapterNum = parseInt(c.req.param("chapter"), 10);
+
+    broadcast("expand:start", { bookId: id, chapter: chapterNum });
+    try {
+      const bookDir = state.bookDir(id);
+      const chaptersDir = join(bookDir, "chapters");
+      const files = await readdir(chaptersDir);
+      const paddedNum = String(chapterNum).padStart(4, "0");
+      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+      if (!match) return c.json({ error: "Chapter not found" }, 404);
+
+      const content = await readFile(join(chaptersDir, match), "utf-8");
+      const { ReviserAgent } = await import("@actalk/inkos-core");
+      const pipelineConfig = await buildPipelineConfig();
+      const agent = new ReviserAgent(pipelineConfig);
+      const result = await agent.expandChapter(bookDir, content, chapterNum);
+
+      // Save expanded content back
+      await writeFile(join(chaptersDir, match), result.revisedContent, "utf-8");
+
+      // Update chapter index
+      const index = await state.loadChapterIndex(id);
+      const updatedIndex = index.map((ch) =>
+        ch.number === chapterNum ? { ...ch, wordCount: result.wordCount, updatedAt: new Date().toISOString() } : ch
+      );
+      await state.saveChapterIndex(id, updatedIndex);
+
+      broadcast("expand:complete", { bookId: id, chapter: chapterNum });
+      return c.json(result);
+    } catch (e) {
+      broadcast("expand:error", { bookId: id, error: String(e) });
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- Condense Chapter (uses LLM) ---
+  app.post("/api/v1/books/:id/condense/:chapter", async (c) => {
+    const id = c.req.param("id");
+    const chapterNum = parseInt(c.req.param("chapter"), 10);
+
+    broadcast("condense:start", { bookId: id, chapter: chapterNum });
+    try {
+      const bookDir = state.bookDir(id);
+      const chaptersDir = join(bookDir, "chapters");
+      const files = await readdir(chaptersDir);
+      const paddedNum = String(chapterNum).padStart(4, "0");
+      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+      if (!match) return c.json({ error: "Chapter not found" }, 404);
+
+      const content = await readFile(join(chaptersDir, match), "utf-8");
+      const { ReviserAgent } = await import("@actalk/inkos-core");
+      const pipelineConfig = await buildPipelineConfig();
+      const agent = new ReviserAgent(pipelineConfig);
+      const result = await agent.condenseChapter(bookDir, content, chapterNum);
+
+      // Save condensed content back
+      await writeFile(join(chaptersDir, match), result.revisedContent, "utf-8");
+
+      // Update chapter index
+      const index = await state.loadChapterIndex(id);
+      const updatedIndex = index.map((ch) =>
+        ch.number === chapterNum ? { ...ch, wordCount: result.wordCount, updatedAt: new Date().toISOString() } : ch
+      );
+      await state.saveChapterIndex(id, updatedIndex);
+
+      broadcast("condense:complete", { bookId: id, chapter: chapterNum });
+      return c.json(result);
+    } catch (e) {
+      broadcast("condense:error", { bookId: id, error: String(e) });
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
   // --- Export ---
 
   app.get("/api/v1/books/:id/export", async (c) => {
     const id = c.req.param("id");
     const format = (c.req.query("format") ?? "txt") as string;
     const approvedOnly = c.req.query("approvedOnly") === "true";
-
     try {
       const artifact = await buildExportArtifact(state, id, {
-        format: format as "txt" | "md" | "epub",
+        format: format as "txt" | "md" | "epub" | "pdf",
         approvedOnly,
       });
       const responseBody = typeof artifact.payload === "string"
@@ -5113,7 +7306,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
         request: {
           intent: "export_book",
           bookId: id,
-          format: fmt as "txt" | "md" | "epub",
+          format: fmt as "txt" | "md" | "epub" | "pdf",
           approvedOnly,
           outputPath,
         },
@@ -5125,6 +7318,50 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
         path: (result.details?.outputPath as string | undefined) ?? outputPath,
         format: fmt,
         chapters: (result.details?.chaptersExported as number | undefined) ?? 0,
+      });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- Volume Export (分卷打包导出) ---
+
+  app.post("/api/v1/books/:id/export-volumes", async (c) => {
+    const id = c.req.param("id");
+    const body: {
+      format?: string;
+      approvedOnly?: boolean;
+      chaptersPerVolume?: number;
+      volumeNames?: string[];
+    } = await c.req.json().catch(() => ({}));
+    const format = body.format ?? "txt";
+    const chaptersPerVolume = body.chaptersPerVolume ?? 30;
+
+    try {
+      const { writeVolumeExportArtifacts } = await import("@actalk/inkos-core");
+      const bookDir = state.bookDir(id);
+      const outputDir = join(bookDir, "exports");
+
+      const results = await writeVolumeExportArtifacts(state, id, {
+        format: format as "txt" | "md" | "epub" | "pdf",
+        approvedOnly: body.approvedOnly,
+        chaptersPerVolume,
+        volumeNames: body.volumeNames,
+        outputDir,
+      });
+
+      return c.json({
+        ok: true,
+        volumes: results.map((r) => ({
+          volumeNumber: r.volumeNumber,
+          volumeTitle: r.volumeTitle,
+          chaptersIncluded: r.chaptersIncluded,
+          startChapter: r.startChapter,
+          endChapter: r.endChapter,
+          totalWords: r.totalWords,
+          path: r.outputPath,
+        })),
+        totalVolumes: results.length,
       });
     } catch (e) {
       return c.json({ error: String(e) }, 500);

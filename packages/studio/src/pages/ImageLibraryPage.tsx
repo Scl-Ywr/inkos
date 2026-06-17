@@ -64,6 +64,7 @@ export function ImageLibraryPage() {
   const [source, setSource] = useState<ImageSource>("all");
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [preview, setPreview] = useState<GeneratedImageItem | null>(null);
+  const [previewImageError, setPreviewImageError] = useState(false);
   const [activeWallpaperUrl, setActiveWallpaperUrl] = useState(() => readChatBackground().imageUrl);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
@@ -154,8 +155,19 @@ export function ImageLibraryPage() {
   };
 
   return (
-    <div className="space-y-5">
-      <header className="flex flex-col items-start gap-3 border-b border-border/40 pb-4 md:flex-row md:items-end md:justify-between">
+    <div className="relative space-y-5 pb-16">
+      <button
+        type="button"
+        onClick={() => void refetch()}
+        disabled={loading}
+        title="刷新"
+        aria-label="刷新图片库"
+        className="fixed right-3 top-[calc(env(safe-area-inset-top)+4.75rem)] z-40 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border/60 bg-card/95 text-foreground shadow-lg shadow-background/30 backdrop-blur transition-colors hover:bg-secondary disabled:opacity-60 sm:right-5 sm:top-24 sm:h-10 sm:w-auto sm:px-3"
+      >
+        <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+        <span className="hidden pl-2 text-sm font-semibold sm:inline">刷新</span>
+      </button>
+      <header className="border-b border-border/40 pb-4 pr-14 sm:pr-24">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm font-semibold text-primary">
             <Images size={16} />
@@ -164,15 +176,6 @@ export function ImageLibraryPage() {
           <h1 className="mt-2 text-2xl font-bold tracking-normal text-foreground">已生成图片</h1>
           <p className="mt-1 text-sm leading-6 text-muted-foreground">查看开放世界、封面和短篇生成过的图片，清理不需要的文件。</p>
         </div>
-        <button
-          type="button"
-          onClick={() => void refetch()}
-          disabled={loading}
-          className="inline-flex h-10 min-w-20 shrink-0 items-center justify-center gap-2 rounded-lg border border-border/60 bg-secondary/40 px-3 text-sm font-semibold text-foreground transition-colors hover:bg-secondary disabled:opacity-60"
-        >
-          <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
-          刷新
-        </button>
       </header>
 
       <section className="space-y-3">
@@ -234,7 +237,7 @@ export function ImageLibraryPage() {
               <article key={item.id} className="group overflow-hidden rounded-lg border border-border/45 bg-card/70">
                 <button
                   type="button"
-                  onClick={() => src ? setPreview(item) : undefined}
+                  onClick={() => { if (src) { setPreview(item); setPreviewImageError(false); } }}
                   disabled={!src}
                   className="flex aspect-square w-full items-center justify-center bg-secondary/25 text-muted-foreground"
                 >
@@ -333,7 +336,7 @@ export function ImageLibraryPage() {
       )}
 
       {preview ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/85 p-4 backdrop-blur-sm" onClick={() => setPreview(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/85 p-4 backdrop-blur-sm" onClick={() => { setPreview(null); setPreviewImageError(false); }}>
           <div className="max-h-[92dvh] w-full max-w-4xl overflow-hidden rounded-lg border border-border/60 bg-card shadow-2xl" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-center justify-between gap-3 border-b border-border/40 px-4 py-3">
               <div className="min-w-0">
@@ -350,8 +353,23 @@ export function ImageLibraryPage() {
                 <Trash2 size={16} />
               </button>
             </div>
-            <div className="flex max-h-[76dvh] items-center justify-center bg-secondary/20">
-              {imageUrl(preview.url) ? <img src={imageUrl(preview.url)} alt={preview.title} className="max-h-[76dvh] w-full object-contain" /> : null}
+            <div className="flex max-h-[76dvh] min-h-[200px] items-center justify-center bg-secondary/20">
+              {previewImageError ? (
+                <div className="flex flex-col items-center gap-3 text-destructive p-8">
+                  <AlertTriangle size={32} />
+                  <p className="text-sm font-medium">图片加载失败</p>
+                  <p className="text-xs text-muted-foreground">图片文件可能已损坏或过大</p>
+                </div>
+              ) : imageUrl(preview.url) ? (
+                <img
+                  src={imageUrl(preview.url)}
+                  alt={preview.title}
+                  className="max-h-[76dvh] w-full object-contain"
+                  loading="lazy"
+                  decoding="async"
+                  onError={() => setPreviewImageError(true)}
+                />
+              ) : null}
             </div>
             {preview.kind === "wallpaper" && preview.url ? (
               <div className="border-t border-border/40 p-3">

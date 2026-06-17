@@ -125,8 +125,12 @@ export {
   type RuleStackSections,
   type RuleStack,
   type ChapterTrace,
+  type BeatType,
+  type SatisfactionBeat,
   ChapterMemoSchema,
   ChapterIntentSchema,
+  SatisfactionBeatSchema,
+  BeatTypeSchema,
   ContextSourceSchema,
   ContextPackageSchema,
   RuleLayerScopeSchema,
@@ -292,7 +296,7 @@ export {
   processProjectInteractionRequest,
 } from "./interaction/project-control.js";
 export { createInteractionToolsFromDeps } from "./interaction/project-tools.js";
-export { buildExportArtifact, writeExportArtifact } from "./interaction/export-artifact.js";
+export { buildExportArtifact, writeExportArtifact, writeVolumeExportArtifacts, type VolumeExportResult } from "./interaction/export-artifact.js";
 export {
   normalizeTruthFileName,
   classifyTruthAuthority,
@@ -342,6 +346,8 @@ export {
 } from "./agents/short-fiction.js";
 export {
   generateShortFictionCover,
+  generateImageFromPrompt,
+  resolveCoverGenerationRequest,
   runShortFictionProduction,
   extractResponsesImageBase64,
   resolveCoverApiKey,
@@ -408,7 +414,7 @@ export { analyzeSensitiveWords, type SensitiveWordResult, type SensitiveWordMatc
 export { detectAIContent, type DetectionResult } from "./agents/detector.js";
 export { analyzeStyle } from "./agents/style-analyzer.js";
 export { analyzeDetectionInsights } from "./agents/detection-insights.js";
-export { validatePostWrite, detectParagraphLengthDrift, detectParagraphShapeWarnings, detectDuplicateTitle, type PostWriteViolation } from "./agents/post-write-validator.js";
+export { validatePostWrite, detectParagraphLengthDrift, detectParagraphShapeWarnings, detectDuplicateTitle, normalizePostWriteSurface, type PostWriteViolation } from "./agents/post-write-validator.js";
 export { ChapterAnalyzerAgent, type AnalyzeChapterInput, type AnalyzeChapterOutput } from "./agents/chapter-analyzer.js";
 export { parseWriterOutput, parseCreativeOutput, type ParsedWriterOutput, type CreativeOutput } from "./agents/writer-parser.js";
 export { buildSettlerSystemPrompt, buildSettlerUserPrompt } from "./agents/settler-prompts.js";
@@ -459,6 +465,7 @@ export {
   KnowledgeStore,
   buildBookKnowledgeContext,
   buildWorldKnowledgeContext,
+  type AddKnowledgeSourceResult,
   type KnowledgeChunk,
   type KnowledgeLibrary,
   type KnowledgeScope,
@@ -477,6 +484,7 @@ export { bootstrapStructuredStateFromMarkdown } from "./state/state-bootstrap.js
 export { renderCurrentStateProjection, renderHooksProjection, renderChapterSummariesProjection } from "./state/state-projections.js";
 export { applyRuntimeStateDelta, type RuntimeStateSnapshot } from "./state/state-reducer.js";
 export { validateRuntimeState, type RuntimeStateValidationIssue } from "./state/state-validator.js";
+export { loadTimeline, saveTimeline, extractTimelineAnchors, validateTimelineConsistency, TimelineAnchorSchema, TimelineDataSchema, type TimelineAnchor, type TimelineData } from "./state/timeline-store.js";
 
 // Notify
 export { dispatchNotification, dispatchWebhookEvent, type NotifyMessage } from "./notify/dispatcher.js";

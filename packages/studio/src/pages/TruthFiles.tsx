@@ -62,8 +62,7 @@ export function deriveFilePresentation(
 }
 
 interface Nav {
-  toBook: (id: string) => void;
-  toDashboard: () => void;
+  toBookSettings: (id: string) => void;
 }
 
 export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav; theme: Theme; t: TFunction }) {
@@ -140,9 +139,7 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <button onClick={nav.toDashboard} className={c.link}>{t("bread.books")}</button>
-        <span className="text-border">/</span>
-        <button onClick={() => nav.toBook(bookId)} className={c.link}>{bookId}</button>
+        <button onClick={() => nav.toBookSettings(bookId)} className={c.link}>{t("bread.config")}</button>
         <span className="text-border">/</span>
         <span className="text-foreground">{t("truth.title")}</span>
       </div>

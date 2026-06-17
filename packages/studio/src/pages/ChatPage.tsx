@@ -32,6 +32,7 @@ import {
 } from "../components/ai-elements/reasoning";
 import { ChatMessage } from "../components/chat/ChatMessage";
 import { QuickActions } from "../components/chat/QuickActions";
+import { ScratchpadPanel } from "../components/chat/ScratchpadPanel";
 import {
   isPlaySceneTool,
   ToolExecutionSteps,
@@ -305,12 +306,13 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   const [wallpaperHistoryLoading, setWallpaperHistoryLoading] = useState(false);
   const [wallpaperUploading, setWallpaperUploading] = useState(false);
   const [wallpaperName, setWallpaperName] = useState("");
-  const [knowledgeEnabled, setKnowledgeEnabled] = useState(true);
+  const [knowledgeEnabled, setKnowledgeEnabled] = useState(false);
   const [knowledgeUseAllSources, setKnowledgeUseAllSources] = useState(true);
   const [knowledgeSourceIds, setKnowledgeSourceIds] = useState<ReadonlyArray<string>>([]);
   const [knowledgeSources, setKnowledgeSources] = useState<ReadonlyArray<KnowledgeSourceOption>>([]);
   const [knowledgeLoading, setKnowledgeLoading] = useState(false);
   const [knowledgePickerOpen, setKnowledgePickerOpen] = useState(false);
+  const [scratchpadOpen, setScratchpadOpen] = useState(false);
   const worldPanelInsetClass = currentSessionKind === "play" && worldPanelOpen ? "lg:pr-[380px]" : "";
 
   useEffect(() => {
@@ -1300,6 +1302,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
             <div className="legacy-chat-toolbar mb-2 grid grid-cols-3 items-stretch gap-2 overflow-visible rounded-2xl border border-border/45 bg-card/90 px-2.5 py-2 shadow-lg shadow-background/25 backdrop-blur sm:flex sm:flex-nowrap sm:items-center sm:overflow-x-auto dark:bg-card/95">
               <QuickActions
                 onAction={handleQuickAction}
+                onScratchpad={() => setScratchpadOpen(true)}
                 disabled={loading || !activeSessionId}
                 isZh={isZh}
               />
@@ -1773,6 +1776,14 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
             sessionTitle={activeSession?.title ?? null}
           />
         </>
+      )}
+      {scratchpadOpen && activeBookId && (
+        <ScratchpadPanel
+          bookId={activeBookId}
+          theme={theme}
+          t={t}
+          onClose={() => setScratchpadOpen(false)}
+        />
       )}
     </div>
   );

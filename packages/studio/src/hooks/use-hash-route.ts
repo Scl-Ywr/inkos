@@ -13,11 +13,18 @@ export type HashRoute =
   | { page: "analytics"; bookId: string }
   | { page: "truth"; bookId: string }
   | { page: "knowledge"; bookId: string }
+  | { page: "timeline"; bookId: string }
+  | { page: "schedule"; bookId: string }
+  | { page: "character-graph"; bookId: string }
+  | { page: "world-settings"; bookId: string }
+  | { page: "foreshadowing"; bookId: string }
+  | { page: "endings"; bookId: string }
   | { page: "daemon" }
   | { page: "logs" }
   | { page: "genres" }
   | { page: "style" }
   | { page: "import"; tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" }
+  | { page: "image-gen" }
   | { page: "images" }
   | { page: "radar" }
   | { page: "doctor" };
@@ -64,6 +71,24 @@ function parseHash(hash: string): HashRoute {
   const knowledgeMatch = path.match(/^book\/([^/]+)\/knowledge$/);
   if (knowledgeMatch) return { page: "knowledge", bookId: decodeURIComponent(knowledgeMatch[1]) };
 
+  const timelineMatch = path.match(/^book\/([^/]+)\/timeline$/);
+  if (timelineMatch) return { page: "timeline", bookId: decodeURIComponent(timelineMatch[1]) };
+
+  const scheduleMatch = path.match(/^book\/([^/]+)\/schedule$/);
+  if (scheduleMatch) return { page: "schedule", bookId: decodeURIComponent(scheduleMatch[1]) };
+
+  const characterGraphMatch = path.match(/^book\/([^/]+)\/character-graph$/);
+  if (characterGraphMatch) return { page: "character-graph", bookId: decodeURIComponent(characterGraphMatch[1]) };
+
+  const worldSettingsMatch = path.match(/^book\/([^/]+)\/world-settings$/);
+  if (worldSettingsMatch) return { page: "world-settings", bookId: decodeURIComponent(worldSettingsMatch[1]) };
+
+  const foreshadowingMatch = path.match(/^book\/([^/]+)\/foreshadowing$/);
+  if (foreshadowingMatch) return { page: "foreshadowing", bookId: decodeURIComponent(foreshadowingMatch[1]) };
+
+  const endingsMatch = path.match(/^book\/([^/]+)\/endings$/);
+  if (endingsMatch) return { page: "endings", bookId: decodeURIComponent(endingsMatch[1]) };
+
   const bookMatch = path.match(/^book\/([^/]+)$/);
   if (bookMatch) return { page: "book", bookId: decodeURIComponent(bookMatch[1]) };
 
@@ -71,6 +96,7 @@ function parseHash(hash: string): HashRoute {
   if (path === "daemon") return { page: "daemon" };
   if (path === "genres") return { page: "genres" };
   if (path === "style") return { page: "style" };
+  if (path === "image-gen") return { page: "image-gen" };
   if (path === "images") return { page: "images" };
   if (path === "radar") return { page: "radar" };
   if (path === "doctor") return { page: "doctor" };
@@ -88,6 +114,12 @@ function routeToHash(route: HashRoute): string {
     case "analytics": return `#/book/${encodeURIComponent(route.bookId)}/analytics`;
     case "truth": return `#/book/${encodeURIComponent(route.bookId)}/truth`;
     case "knowledge": return `#/book/${encodeURIComponent(route.bookId)}/knowledge`;
+    case "timeline": return `#/book/${encodeURIComponent(route.bookId)}/timeline`;
+    case "schedule": return `#/book/${encodeURIComponent(route.bookId)}/schedule`;
+    case "character-graph": return `#/book/${encodeURIComponent(route.bookId)}/character-graph`;
+    case "world-settings": return `#/book/${encodeURIComponent(route.bookId)}/world-settings`;
+    case "foreshadowing": return `#/book/${encodeURIComponent(route.bookId)}/foreshadowing`;
+    case "endings": return `#/book/${encodeURIComponent(route.bookId)}/endings`;
     case "book-create": return "#/book/new";
     case "services": return "#/services";
     case "project-settings": return "#/settings";
@@ -95,6 +127,7 @@ function routeToHash(route: HashRoute): string {
     case "daemon": return "#/daemon";
     case "genres": return "#/genres";
     case "style": return "#/style";
+    case "image-gen": return "#/image-gen";
     case "images": return "#/images";
     case "radar": return "#/radar";
     case "doctor": return "#/doctor";
@@ -116,6 +149,12 @@ const HASH_PAGES = new Set([
   "analytics",
   "truth",
   "knowledge",
+  "timeline",
+  "schedule",
+  "character-graph",
+  "world-settings",
+  "foreshadowing",
+  "endings",
   "services",
   "project-settings",
   "service-detail",
@@ -124,6 +163,7 @@ const HASH_PAGES = new Set([
   "genres",
   "style",
   "import",
+  "image-gen",
   "images",
   "radar",
   "doctor",
@@ -156,6 +196,7 @@ export function useHashRoute() {
   const nav = {
     toServices: () => setRoute({ page: "services" }),
     toServiceDetail: (id: string) => setRoute({ page: "service-detail", serviceId: id }),
+    toImageGen: () => setRoute({ page: "image-gen" }),
     toImages: () => setRoute({ page: "images" }),
   };
 

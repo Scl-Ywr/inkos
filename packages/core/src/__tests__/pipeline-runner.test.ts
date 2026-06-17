@@ -244,6 +244,7 @@ describe("PipelineRunner", () => {
         isGoldenOpening: false,
         body: "",
         threadRefs: [] as string[],
+        satisfactionBeats: [] as never[],
       };
       const intentMarkdown = [
         "# Chapter Intent",
@@ -1032,6 +1033,7 @@ describe("PipelineRunner", () => {
         isGoldenOpening: true,
         body: "",
         threadRefs: [] as string[],
+        satisfactionBeats: [] as never[],
       };
       const intentMarkdown = [
         "# Chapter Intent",
@@ -1710,6 +1712,7 @@ describe("PipelineRunner", () => {
           isGoldenOpening: true,
           body: "",
           threadRefs: [],
+          satisfactionBeats: [],
         },
       };
     });
@@ -1900,6 +1903,7 @@ describe("PipelineRunner", () => {
           isGoldenOpening: false,
           body: "",
           threadRefs: [],
+          satisfactionBeats: [],
         },
         intentMarkdown: intentMd,
         plannerInputs: [runtimePath],

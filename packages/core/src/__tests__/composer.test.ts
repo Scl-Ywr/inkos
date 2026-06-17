@@ -73,6 +73,7 @@ describe("ComposerAgent", () => {
         isGoldenOpening: false,
         body: "",
         threadRefs: [],
+        satisfactionBeats: [],
       },
       intentMarkdown: "# Chapter Intent\n",
       plannerInputs: [
