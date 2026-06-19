@@ -29,5 +29,6 @@
 -keep class org.mozilla.geckoview.** { *; }
 -keep class org.mozilla.gecko.** { *; }
 -keep class org.nanohttpd.** { *; }
+-keepclassmembers class fi.iki.elonen.NanoHTTPD$HTTPSession { *; }
 -dontwarn org.mozilla.gecko.**
 -dontwarn org.nanohttpd.**
