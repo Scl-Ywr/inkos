@@ -220,6 +220,6 @@ DEBUG-APK-README.md
 *.pyc
 __pycache__/
 build-err.txt
-capacitor-android-x5/
+packages/studio/android/capacitor-android-x5/capacitor/build/
 screenshot*.png
 .env.production

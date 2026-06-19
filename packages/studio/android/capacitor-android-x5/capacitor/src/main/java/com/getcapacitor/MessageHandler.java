@@ -1,0 +1,115 @@
+package com.getcapacitor;
+
+import org.apache.cordova.PluginManager;
+import org.mozilla.geckoview.GeckoSession;
+import org.mozilla.geckoview.GeckoView;
+
+public class MessageHandler {
+
+    private Bridge bridge;
+    private GeckoView webView;
+    private GeckoSession session;
+    private PluginManager cordovaPluginManager;
+
+    public MessageHandler(Bridge bridge, GeckoView webView, GeckoSession session, PluginManager cordovaPluginManager) {
+        this.bridge = bridge;
+        this.webView = webView;
+        this.session = session;
+        this.cordovaPluginManager = cordovaPluginManager;
+    }
+
+    public void postMessage(String jsonStr) {
+        try {
+            JSObject postData = new JSObject(jsonStr);
+
+            String type = postData.getString("type");
+
+            boolean typeIsNotNull = type != null;
+            boolean isCordovaPlugin = typeIsNotNull && type.equals("cordova");
+            boolean isJavaScriptError = typeIsNotNull && type.equals("js.error");
+
+            String callbackId = postData.getString("callbackId");
+
+            if (isCordovaPlugin) {
+                String service = postData.getString("service");
+                String action = postData.getString("action");
+                String actionArgs = postData.getString("actionArgs");
+
+                Logger.verbose(
+                    Logger.tags("Plugin"),
+                    "To native (Cordova plugin): callbackId: " +
+                        callbackId + ", service: " + service +
+                        ", action: " + action + ", actionArgs: " + actionArgs
+                );
+
+                this.callCordovaPluginMethod(callbackId, service, action, actionArgs);
+            } else if (isJavaScriptError) {
+                Logger.error("JavaScript Error: " + jsonStr);
+            } else {
+                String pluginId = postData.getString("pluginId");
+                String methodName = postData.getString("methodName");
+                JSObject methodData = postData.getJSObject("options", new JSObject());
+
+                Logger.verbose(
+                    Logger.tags("Plugin"),
+                    "To native (Capacitor plugin): callbackId: " + callbackId + ", pluginId: " + pluginId + ", methodName: " + methodName
+                );
+
+                this.callPluginMethod(callbackId, pluginId, methodName, methodData);
+            }
+        } catch (Exception ex) {
+            Logger.error("Post message error:", ex);
+        }
+    }
+
+    public void sendResponseMessage(PluginCall call, PluginResult successResult, PluginResult errorResult) {
+        try {
+            PluginResult data = new PluginResult();
+            data.put("save", call.isKeptAlive());
+            data.put("callbackId", call.getCallbackId());
+            data.put("pluginId", call.getPluginId());
+            data.put("methodName", call.getMethodName());
+
+            boolean pluginResultInError = errorResult != null;
+            if (pluginResultInError) {
+                data.put("success", false);
+                data.put("error", errorResult);
+                Logger.debug("Sending plugin error: " + data.toString());
+            } else {
+                data.put("success", true);
+                if (successResult != null) {
+                    data.put("data", successResult);
+                }
+            }
+
+            boolean isValidCallbackId = !call.getCallbackId().equals(PluginCall.CALLBACK_ID_DANGLING);
+            if (isValidCallbackId) {
+                sendResponseViaEvaluateJs(data);
+            } else {
+                bridge.getApp().fireRestoredResult(data);
+            }
+        } catch (Exception ex) {
+            Logger.error("sendResponseMessage: error: " + ex);
+        }
+        if (!call.isKeptAlive()) {
+            call.release(bridge);
+        }
+    }
+
+    private void sendResponseViaEvaluateJs(PluginResult data) {
+        final String runScript = "window.Capacitor.fromNative(" + data.toString() + ")";
+        // Use bridge.eval which routes through WebExtension Port for native→JS
+        bridge.eval(runScript, null);
+    }
+
+    private void callPluginMethod(String callbackId, String pluginId, String methodName, JSObject methodData) {
+        PluginCall call = new PluginCall(this, pluginId, callbackId, methodName, methodData);
+        bridge.callPluginMethod(pluginId, methodName, call);
+    }
+
+    private void callCordovaPluginMethod(String callbackId, String service, String action, String actionArgs) {
+        bridge.execute(() -> {
+            cordovaPluginManager.exec(service, action, callbackId, actionArgs);
+        });
+    }
+}

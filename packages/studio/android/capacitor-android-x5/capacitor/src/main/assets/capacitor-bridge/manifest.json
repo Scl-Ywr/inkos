@@ -1,0 +1,20 @@
+{
+  "applications": {
+    "gecko": {
+      "id": "capacitor-bridge@inkos.local"
+    }
+  },
+  "content_scripts": [
+    {
+      "all_frames": true,
+      "js": ["content.js"],
+      "matches": ["http://127.0.0.1/*", "http://localhost/*"],
+      "run_at": "document_start"
+    }
+  ],
+  "description": "Native bridge adapter for Capacitor on GeckoView",
+  "manifest_version": 2,
+  "name": "Capacitor Bridge",
+  "permissions": [],
+  "version": "1.0"
+}

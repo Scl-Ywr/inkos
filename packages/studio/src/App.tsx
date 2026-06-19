@@ -752,7 +752,6 @@ function RuntimeStatusButton() {
       <div className="flex min-h-[100dvh] w-full items-center justify-center px-4 py-[calc(env(safe-area-inset-top)+1rem)] pb-[calc(env(safe-area-inset-bottom)+1rem)]">
         <div
           className="glass-panel fade-in w-full max-w-md overflow-hidden rounded-[2rem] border border-border/70 bg-card/95 shadow-2xl shadow-primary/10"
-          onClick={(e) => e.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >
           <div className="flex items-start justify-between gap-4 px-5 pt-5 sm:px-6 sm:pt-6">

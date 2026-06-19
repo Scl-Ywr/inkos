@@ -706,7 +706,6 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
       {showClipboard && (
         <ClipboardPanel
           bookId={bookId}
-          theme={theme}
           onInsert={(text) => {
             if (editing) {
               setEditContent((prev) => prev + "\n\n" + text);
