@@ -115,18 +115,21 @@ export function Analytics({ bookId, nav, theme, t }: { bookId: string; nav: Nav;
         <div className={`border ${c.cardStatic} rounded-lg p-5`}>
           <h2 className={`text-sm font-medium ${c.subtle} mb-4`}>日码字统计（近30天）</h2>
           <div className="flex items-end gap-1 h-32">
-            {data.dailyStats.map((day) => (
-              <div key={day.date} className="flex-1 flex flex-col items-center gap-1 min-w-0">
-                <div
-                  className="w-full bg-primary/70 rounded-t-sm transition-all hover:bg-primary"
-                  style={{ height: `${(day.wordsWritten / maxDailyWords) * 100}%`, minHeight: day.wordsWritten > 0 ? "4px" : "0" }}
-                  title={`${day.date}: ${day.wordsWritten.toLocaleString()} 字`}
-                />
-                {data.dailyStats.length <= 15 && (
-                  <span className="text-[8px] text-muted-foreground truncate w-full text-center">{day.date.slice(5)}</span>
-                )}
-              </div>
-            ))}
+            {data.dailyStats.map((day) => {
+              const barPx = Math.max(day.wordsWritten > 0 ? 4 : 0, Math.round((day.wordsWritten / maxDailyWords) * 112));
+              return (
+                <div key={day.date} className="flex-1 flex flex-col items-center justify-end gap-1 min-w-0 h-full">
+                  <div
+                    className="w-full bg-primary/70 rounded-t-sm transition-all hover:bg-primary"
+                    style={{ height: `${barPx}px` }}
+                    title={`${day.date}: ${day.wordsWritten.toLocaleString()} 字`}
+                  />
+                  {data.dailyStats.length <= 15 && (
+                    <span className="text-[8px] text-muted-foreground truncate w-full text-center">{day.date.slice(5)}</span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

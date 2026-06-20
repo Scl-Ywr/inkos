@@ -16,7 +16,6 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
-import android.util.Log;
 import androidx.activity.result.ActivityResultCallback;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContract;
@@ -142,6 +141,18 @@ public class Bridge {
     private volatile boolean extensionReady = false;
     private String deferredLoadUrl = null;
 
+    // Pending file prompt for <input type="file"> via GeckoView PromptDelegate.
+    private static final int REQUEST_CODE_FILE_PROMPT = 0x7FFFFFF0;
+    private PromptDelegate.FilePrompt pendingFilePrompt;
+    private GeckoResult<PromptDelegate.PromptResponse> pendingFilePromptResult;
+
+    // Hidden WebView for file picking (GeckoView fallback).
+    private android.webkit.WebView filePickerWebView;
+    private android.webkit.ValueCallback<Uri[]> filePickerCallback;
+    private static final int REQUEST_CODE_FILE_CHOOSER = 0x7FF0;
+    private final java.util.concurrent.CompletableFuture<String[]>[] pendingFilePickFuture = new java.util.concurrent.CompletableFuture[1];
+    private ActivityResultLauncher<Intent> filePickerLauncher;
+
     @Deprecated
     public Bridge(
         AppCompatActivity context,
@@ -185,6 +196,8 @@ public class Bridge {
 
         initRuntime();
         initWebView();
+        initFilePickerLauncher();
+        initFilePickerWebView();
         this.setAllowedOriginRules();
         this.msgHandler = new MessageHandler(this, webView, session, pluginManager);
 
@@ -778,12 +791,186 @@ public class Bridge {
             public void onWebAppManifest(GeckoSession geckoSession, JSONObject manifest) {}
         });
 
+        // Set PermissionDelegate to handle file chooser
+        session.setPermissionDelegate(new PermissionDelegate() {
+            @Override
+            public GeckoResult<Integer> onContentPermissionRequest(
+                GeckoSession geckoSession,
+                PermissionDelegate.ContentPermission permission
+            ) {
+                // Auto-grant all permissions including file picker
+                return GeckoResult.fromValue(PermissionDelegate.ContentPermission.VALUE_ALLOW);
+            }
+
+            @Override
+            public void onMediaPermissionRequest(
+                GeckoSession geckoSession,
+                String uri,
+                PermissionDelegate.MediaSource[] video,
+                PermissionDelegate.MediaSource[] audio,
+                PermissionDelegate.MediaCallback callback
+            ) {
+                // Deny media permission
+                callback.reject();
+            }
+        });
+
+        // Handle <input type="file"> via PromptDelegate.onFilePrompt
+        session.setPromptDelegate(new PromptDelegate() {
+            @Override
+            public GeckoResult<PromptResponse> onFilePrompt(GeckoSession geckoSession, FilePrompt prompt) {
+                GeckoResult<PromptResponse> result = new GeckoResult<>();
+
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+
+                if (prompt.mimeTypes != null && prompt.mimeTypes.length > 0) {
+                    if (prompt.mimeTypes.length == 1) {
+                        intent.setType(prompt.mimeTypes[0]);
+                    } else {
+                        intent.setType("*/*");
+                        intent.putExtra(Intent.EXTRA_MIME_TYPES, prompt.mimeTypes);
+                    }
+                } else {
+                    intent.setType("*/*");
+                }
+
+                if (prompt.type == FilePrompt.Type.MULTIPLE) {
+                    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                }
+
+                Intent chooser = Intent.createChooser(intent, null);
+
+                pendingFilePrompt = prompt;
+                pendingFilePromptResult = result;
+                context.startActivityForResult(chooser, REQUEST_CODE_FILE_PROMPT);
+
+                return result;
+            }
+        });
+
         session.open(runtime);
         webView.setSession(session);
 
         appUrlConfig = this.getServerUrl();
         String authority = this.getHost();
         authorities.add(authority);
+    }
+
+    private void initFilePickerLauncher() {
+        filePickerLauncher = context.registerForActivityResult(
+            new androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+            result -> {
+                try {
+                    if (result.getResultCode() == Activity.RESULT_OK) {
+                        Intent data = result.getData();
+                        if (data == null) {
+                            completeFilePickFuture(null);
+                        } else if (data.getClipData() != null) {
+                            int count = data.getClipData().getItemCount();
+                            Uri[] uris = new Uri[count];
+                            for (int i = 0; i < count; i++) {
+                                uris[i] = data.getClipData().getItemAt(i).getUri();
+                            }
+                            completeFilePickFuture(uris);
+                        } else if (data.getData() != null) {
+                            completeFilePickFuture(new Uri[]{data.getData()});
+                        } else {
+                            completeFilePickFuture(null);
+                        }
+                    } else {
+                        completeFilePickFuture(null);
+                    }
+                } catch (Exception e) {
+                    completeFilePickFuture(null);
+                }
+            }
+        );
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private void initFilePickerWebView() {
+        filePickerWebView = new android.webkit.WebView(context);
+        filePickerWebView.setVisibility(android.view.View.INVISIBLE);
+        android.widget.FrameLayout.LayoutParams lp = new android.widget.FrameLayout.LayoutParams(1, 1);
+        lp.leftMargin = -100;
+        lp.topMargin = -100;
+        android.view.View decorView = context.getWindow().getDecorView();
+        if (decorView instanceof android.view.ViewGroup) {
+            ((android.view.ViewGroup) decorView).addView(filePickerWebView, lp);
+        }
+
+        filePickerWebView.getSettings().setJavaScriptEnabled(true);
+        filePickerWebView.setWebChromeClient(new android.webkit.WebChromeClient() {
+            @Override
+            public boolean onShowFileChooser(
+                    android.webkit.WebView webView,
+                    android.webkit.ValueCallback<Uri[]> callback,
+                    android.webkit.WebChromeClient.FileChooserParams fileChooserParams) {
+                if (filePickerCallback != null) {
+                    filePickerCallback.onReceiveValue(null);
+                }
+                filePickerCallback = callback;
+
+                try {
+                    Intent intent = fileChooserParams.createIntent();
+                    context.startActivityForResult(intent, REQUEST_CODE_FILE_CHOOSER);
+                } catch (Exception e) {
+                    // Fallback: create intent manually
+                    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("*/*");
+                    context.startActivityForResult(intent, REQUEST_CODE_FILE_CHOOSER);
+                }
+                return true;
+            }
+        });
+
+        String html = "<html><body><input type='file' id='f'></body></html>";
+        filePickerWebView.loadDataWithBaseURL("http://127.0.0.1:4568", html, "text/html", "UTF-8", null);
+    }
+
+    public void triggerFilePicker(String accept, boolean multiple, final java.util.concurrent.CompletableFuture<String[]> future) {
+        pendingFilePickFuture[0] = future;
+        new Handler(context.getMainLooper()).post(() -> {
+            try {
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                if (accept != null && !accept.isEmpty() && !accept.equals("*/*")) {
+                    if (accept.contains(",")) {
+                        intent.setType("*/*");
+                        intent.putExtra(Intent.EXTRA_MIME_TYPES, accept.split(","));
+                    } else {
+                        intent.setType(accept);
+                    }
+                } else {
+                    intent.setType("*/*");
+                }
+                if (multiple) {
+                    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                }
+                filePickerLauncher.launch(intent);
+            } catch (Exception e) {
+                future.complete(new String[0]);
+            }
+        });
+    }
+
+    private void completeFilePickFuture(Uri[] uris) {
+        java.util.concurrent.CompletableFuture<String[]> future = pendingFilePickFuture[0];
+        pendingFilePickFuture[0] = null;
+        if (future == null) {
+            return;
+        }
+        if (uris == null || uris.length == 0) {
+            future.complete(new String[0]);
+        } else {
+            String[] uriStrings = new String[uris.length];
+            for (int i = 0; i < uris.length; i++) {
+                uriStrings[i] = uris[i].toString();
+            }
+            future.complete(uriStrings);
+        }
     }
 
     private void registerAllPlugins() {
@@ -1282,6 +1469,35 @@ public class Bridge {
 
     @SuppressWarnings("deprecation")
     boolean onActivityResult(int requestCode, int resultCode, Intent data) {
+        // Handle GeckoView file picker prompt
+        if (requestCode == REQUEST_CODE_FILE_PROMPT && pendingFilePrompt != null && pendingFilePromptResult != null) {
+            if (resultCode == Activity.RESULT_OK && data != null) {
+                try {
+                    if (data.getClipData() != null) {
+                        // Multiple files
+                        int count = data.getClipData().getItemCount();
+                        Uri[] uris = new Uri[count];
+                        for (int i = 0; i < count; i++) {
+                            uris[i] = data.getClipData().getItemAt(i).getUri();
+                        }
+                        pendingFilePromptResult.complete(pendingFilePrompt.confirm(context, uris));
+                    } else if (data.getData() != null) {
+                        // Single file
+                        pendingFilePromptResult.complete(pendingFilePrompt.confirm(context, data.getData()));
+                    } else {
+                        pendingFilePromptResult.complete(pendingFilePrompt.dismiss());
+                    }
+                } catch (Exception e) {
+                    pendingFilePromptResult.complete(pendingFilePrompt.dismiss());
+                }
+            } else {
+                pendingFilePromptResult.complete(pendingFilePrompt.dismiss());
+            }
+            pendingFilePrompt = null;
+            pendingFilePromptResult = null;
+            return true;
+        }
+
         PluginHandle plugin = getPluginWithRequestCode(requestCode);
         if (plugin == null || plugin.getInstance() == null) {
             try {

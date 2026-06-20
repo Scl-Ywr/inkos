@@ -3,8 +3,9 @@ import { fetchJson, useApi, postApi } from "../hooks/use-api";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
-import { appAlert } from "../lib/app-dialog";
+import { appAlert, appConfirm } from "../lib/app-dialog";
 import { useSpeech } from "../hooks/use-speech";
+import { loadDecorativeFont, extractFontFamily } from "../lib/load-font";
 import { ClipboardPanel } from "../components/chat/ClipboardPanel";
 import {
   ChevronLeft,
@@ -200,6 +201,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   }, [bookId, chapterNumber, data]);
 
   const handleSimulateComments = async () => {
+    if (!await appConfirm({ title: "模拟读者评论", message: "将调用 AI 模型生成读者评论，确认？", confirmLabel: "执行" })) return;
     setLoadingComments(true);
     setShowComments(true);
     try {
@@ -213,6 +215,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   };
 
   const handleTranslate = async () => {
+    if (!await appConfirm({ title: "翻译章节", message: "将调用 AI 模型翻译本章内容，确认？", confirmLabel: "执行" })) return;
     setLoadingTranslation(true);
     setShowTranslation(true);
     try {
@@ -229,6 +232,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   };
 
   const handleAudiobookAdapt = async () => {
+    if (!await appConfirm({ title: "有声书适配", message: "将调用 AI 模型适配有声书脚本，确认？", confirmLabel: "执行" })) return;
     setLoadingAudiobook(true);
     setShowAudiobook(true);
     try {
@@ -246,6 +250,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
 
   // P3 handlers
   const handleGenerateSummary = async () => {
+    if (!await appConfirm({ title: "生成摘要", message: "将调用 AI 模型生成章节摘要，确认？", confirmLabel: "执行" })) return;
     setLoadingSummary(true);
     setShowSummary(true);
     try {
@@ -259,6 +264,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   };
 
   const handleDetectSensitive = async () => {
+    if (!await appConfirm({ title: "敏感内容检测", message: "将调用 AI 模型检测敏感内容，确认？", confirmLabel: "执行" })) return;
     setLoadingSensitive(true);
     setShowSensitive(true);
     try {
@@ -272,6 +278,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   };
 
   const handleAnalyzeDialogue = async () => {
+    if (!await appConfirm({ title: "对话分析", message: "将调用 AI 模型分析对话结构，确认？", confirmLabel: "执行" })) return;
     setLoadingDialogue(true);
     setShowDialogue(true);
     try {
@@ -285,6 +292,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   };
 
   const handleCheckStyle = async () => {
+    if (!await appConfirm({ title: "风格一致性检查", message: "将调用 AI 模型检查文风一致性，确认？", confirmLabel: "执行" })) return;
     setLoadingStyle(true);
     setShowStyle(true);
     try {
@@ -298,6 +306,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   };
 
   const handleAnalyzePacing = async () => {
+    if (!await appConfirm({ title: "节奏分析", message: "将调用 AI 模型分析叙事节奏，确认？", confirmLabel: "执行" })) return;
     setLoadingPacing(true);
     setShowPacing(true);
     try {
@@ -311,6 +320,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   };
 
   const handleDetectConflicts = async () => {
+    if (!await appConfirm({ title: "冲突检测", message: "将调用 AI 模型检测剧情冲突，确认？", confirmLabel: "执行" })) return;
     setLoadingConflict(true);
     setShowConflict(true);
     try {
@@ -1274,7 +1284,11 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
               <button
                 key={font.id}
                 type="button"
-                onClick={() => setReaderPreferences((current) => ({ ...current, font: font.id }))}
+                onClick={() => {
+                  const family = extractFontFamily(font.stack);
+                  if (family) void loadDecorativeFont(family);
+                  setReaderPreferences((current) => ({ ...current, font: font.id }));
+                }}
                 className={`min-h-9 rounded-xl border px-3 text-sm transition-all ${readerFont === font.id ? "border-primary/45 bg-primary/10 text-primary shadow-sm" : "border-border/45 bg-background/45 text-muted-foreground hover:text-foreground"}`}
                 style={{ fontFamily: font.stack, fontWeight: font.weight, letterSpacing: font.spacing }}
               >
@@ -1440,6 +1454,7 @@ function ChapterHighlights({ bookId, chapterNumber }: { readonly bookId: string;
   }, [bookId, chapterNumber]);
 
   const handleGenerate = async () => {
+    if (!await appConfirm({ title: "生成看点", message: "将调用 AI 模型生成章节看点，确认？", confirmLabel: "执行" })) return;
     setGenerating(true);
     try {
       const result = await postApi<typeof highlights>(`/books/${bookId}/chapters/${chapterNumber}/highlights`);
@@ -1534,6 +1549,7 @@ function ChapterBeats({ bookId, chapterNumber, onBeatsLoaded }: {
   }, [bookId, chapterNumber, onBeatsLoaded]);
 
   const handleGenerate = async () => {
+    if (!await appConfirm({ title: "标记爽点", message: "将调用 AI 模型分析爽点位置，确认？", confirmLabel: "执行" })) return;
     setGenerating(true);
     try {
       const result = await postApi<typeof beats>(`/books/${bookId}/chapters/${chapterNumber}/beats`);

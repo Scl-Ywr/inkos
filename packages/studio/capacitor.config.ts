@@ -13,6 +13,11 @@ const config: CapacitorConfig = {
     captureInput: true,
     webContentsDebuggingEnabled: false,
   },
+  plugins: {
+    FilePicker: {
+      // 可选配置
+    },
+  },
 };
 
 export default config;

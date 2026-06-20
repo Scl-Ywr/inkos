@@ -2067,8 +2067,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
 
   app.use("/*", cors());
   app.use("/*", async (c, next) => {
-    const isKnowledgeUpload = new URL(c.req.url).pathname.endsWith("/knowledge/sources");
-    return bodyLimit({ maxSize: isKnowledgeUpload ? 10 * 1024 * 1024 : 2 * 1024 * 1024 })(c, next);
+    const pathname = new URL(c.req.url).pathname;
+    const isKnowledgeUpload = pathname.endsWith("/knowledge/sources");
+    const isImageUpload = pathname.includes("/images/") || pathname.includes("/wallpapers");
+    const maxSize = isKnowledgeUpload || isImageUpload ? 20 * 1024 * 1024 : 2 * 1024 * 1024;
+    return bodyLimit({ maxSize })(c, next);
   });
 
   // Structured error handler — ApiError returns typed JSON, others return 500
@@ -2079,6 +2082,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes("LLM API key not set") || message.includes("INKOS_LLM_API_KEY not set")) {
       return c.json({ error: { code: "LLM_CONFIG_ERROR", message } }, 400);
+    }
+    if (message.includes("too large") || message.includes("exceed") || message.includes("limit")) {
+      return c.json({ error: { code: "PAYLOAD_TOO_LARGE", message: "请求体过大，请压缩图片后重试。" } }, 413);
     }
     console.error("[studio] Unexpected server error", error);
     return c.json(
@@ -2131,13 +2137,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     },
   };
 
-  // Logger sink that prints to server terminal
+  // Logger sink that prints to server terminal (warn/error only to reduce noise)
   const consoleSink: LogSink = {
     write(entry: LogEntry): void {
-      const prefix = `[${entry.tag}]`;
-      if (entry.level === "warn") console.warn(prefix, entry.message);
-      else if (entry.level === "error") console.error(prefix, entry.message);
-      else console.log(prefix, entry.message);
+      if (entry.level === "warn") console.warn(`[${entry.tag}]`, entry.message);
+      else if (entry.level === "error") console.error(`[${entry.tag}]`, entry.message);
     },
   };
 
@@ -2287,7 +2291,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     const prefix = `[${normalized.tag ?? "app"}]`;
     if (normalized.level === "warn") console.warn(prefix, normalized.message);
     else if (normalized.level === "error") console.error(prefix, normalized.message);
-    else console.log(prefix, normalized.message);
   }
 
   function emitModelRequestDiagnostics(
@@ -4715,21 +4718,16 @@ ${chaptersContent.map((ch) => `--- 第${ch.number}章 ---\n${ch.content}`).join(
 
   app.get("/api/v1/books/:id/endings/origin", async (c) => {
     const id = c.req.param("id");
-    console.log(`[DEBUG] Fetching origin endings for book: ${id}`);
 
     try {
       const bookDir = state.bookDir(id);
       const storyFramePath = join(bookDir, "story", "outline", "story_frame.md");
-      console.log(`[DEBUG] Story frame path: ${storyFramePath}`);
 
       try {
         const content = await readFile(storyFramePath, "utf-8");
-        // Extract the ending section from story_frame.md
         const endingMatch = content.match(/## 终局方向 \+ 全书 Objective\s*\n([\s\S]*?)(?=\n##|$)/);
-        console.log(`[DEBUG] Ending match found: ${!!endingMatch}`);
         if (endingMatch) {
           const endingText = endingMatch[1].trim();
-          console.log(`[DEBUG] Ending text (first 100 chars): ${endingText.substring(0, 100)}`);
           return c.json({
             endings: [{
               id: "origin",
@@ -4745,11 +4743,9 @@ ${chaptersContent.map((ch) => `--- 第${ch.number}章 ---\n${ch.content}`).join(
         }
         return c.json({ endings: [], activeEnding: null });
       } catch (readErr) {
-        console.log(`[DEBUG] Error reading story frame:`, readErr);
         return c.json({ endings: [], activeEnding: null });
       }
     } catch (e) {
-      console.error(`[DEBUG] Error in origin endings API:`, e);
       return c.json({ error: String(e) }, 500);
     }
   });
@@ -5490,6 +5486,49 @@ ${chaptersContent.map((ch) => `--- 第${ch.number}章 ---\n${ch.content}`).join(
     const secrets = await loadSecrets(root);
     const keyFor = (service: string): boolean =>
       Boolean(secrets.services[coverSecretKey(service)]?.apiKey || secrets.services[service]?.apiKey);
+
+    // Collect custom services from llm.services that are explicitly configured for image generation
+    // (must have a cover-specific API key: cover:custom:xxx)
+    const services = normalizeServiceConfig(llm.services);
+    const customCoverServicesFromServices = services
+      .filter((entry) => entry.service === "custom" && entry.baseUrl)
+      .map((entry) => {
+        const serviceKey = `custom:${entry.name}`;
+        const hasCoverKey = Boolean(secrets.services[coverSecretKey(serviceKey)]?.apiKey);
+        return {
+          service: serviceKey,
+          label: entry.name ?? "Custom",
+          baseUrl: entry.baseUrl ?? "",
+          api: entry.apiFormat === "responses" ? "responses" as const : entry.apiFormat === "gemini" ? "gemini" as const : "images" as const,
+          defaultModel: "",
+          models: [""],
+          connected: keyFor(serviceKey),
+          hasCoverKey,
+        };
+      })
+      .filter((entry) => entry.hasCoverKey);
+
+    // Collect the currently selected cover custom service (if any)
+    const currentCoverCustomService = cover?.service.startsWith("custom:") && cover.baseUrl
+      ? [{
+          service: cover.service,
+          label: cover.label ?? decodeURIComponent(cover.service.slice("custom:".length)),
+          baseUrl: cover.baseUrl,
+          api: cover.api ?? "images",
+          defaultModel: cover.model,
+          models: [cover.model],
+          connected: keyFor(cover.service),
+        }]
+      : [];
+
+    // Merge: show all custom cover services, with current one included if not already there
+    const allCustomCoverServices = [
+      ...currentCoverCustomService,
+      ...customCoverServicesFromServices.filter(
+        (svc) => !currentCoverCustomService.some((c) => c.service === svc.service)
+      ),
+    ];
+
     // "Configured" = a cover service is selected AND has a key, OR a cover
     // endpoint is provided via env (the CLI/power-user path). This is the gate
     // for the Play auto-illustration toggles.
@@ -5504,23 +5543,15 @@ ${chaptersContent.map((ch) => `--- 第${ch.number}章 ---\n${ch.content}`).join(
       configured,
       providers: [
         ...COVER_PROVIDER_PRESETS.map((provider) => ({
-        service: provider.service,
-        label: provider.label,
-        baseUrl: provider.baseUrl,
-        api: provider.api,
-        defaultModel: provider.defaultModel,
-        models: provider.models,
-        connected: keyFor(provider.service),
+          service: provider.service,
+          label: provider.label,
+          baseUrl: provider.baseUrl,
+          api: provider.api,
+          defaultModel: provider.defaultModel,
+          models: provider.models,
+          connected: keyFor(provider.service),
         })),
-        ...(cover?.service.startsWith("custom:") && cover.baseUrl ? [{
-        service: cover.service,
-        label: cover.label ?? decodeURIComponent(cover.service.slice("custom:".length)),
-        baseUrl: cover.baseUrl,
-        api: cover.api ?? "images",
-        defaultModel: cover.model,
-        models: [cover.model],
-        connected: keyFor(cover.service),
-        }] : []),
+        ...allCustomCoverServices,
       ],
     });
   });
@@ -6280,8 +6311,8 @@ ${chaptersContent.map((ch) => `--- 第${ch.number}章 ---\n${ch.content}`).join(
   app.post("/api/v1/images/library/wallpapers", async (c) => {
     const body = await c.req.json<{ name?: string; dataUrl?: string }>().catch(() => null);
     const dataUrl = body?.dataUrl?.trim() ?? "";
-    const match = /^data:image\/(png|jpe?g|webp);base64,([a-z0-9+/=\s]+)$/iu.exec(dataUrl);
-    if (!match) return c.json({ error: "A PNG, JPEG, or WebP image is required" }, 400);
+    const match = /^data:image\/(png|jpe?g|webp|gif|bmp|heic|heif|avif|tiff|svg\+xml);base64,([a-z0-9+/=\s]+)$/iu.exec(dataUrl);
+    if (!match) return c.json({ error: "不支持的图片格式，请使用 PNG、JPEG 或 WebP 格式" }, 400);
 
     const content = Buffer.from(match[2].replace(/\s/g, ""), "base64");
     if (content.length === 0 || content.length > 12 * 1024 * 1024) {
@@ -6305,8 +6336,12 @@ ${chaptersContent.map((ch) => `--- 第${ch.number}章 ---\n${ch.content}`).join(
     }
     const relPath = `wallpapers/${fileName}`;
     const fullPath = join(root, "wallpapers", fileName);
-    await mkdir(dirname(fullPath), { recursive: true });
-    await writeFile(fullPath, content);
+    try {
+      await mkdir(dirname(fullPath), { recursive: true });
+      await writeFile(fullPath, content);
+    } catch (fsError) {
+      return c.json({ error: `文件写入失败: ${fsError instanceof Error ? fsError.message : String(fsError)}` }, 500);
+    }
     const updatedAt = new Date().toISOString();
     const item: GeneratedImageLibraryItem = {
       id: encodeLibraryId(["project", relPath]),
@@ -6623,22 +6658,12 @@ ${chaptersContent.map((ch) => `--- 第${ch.number}章 ---\n${ch.content}`).join(
     const playMode = normalizeStudioPlayMode(reqPlayMode);
 
     broadcast("agent:start", { instruction, activeBookId, sessionId, actionSource, requestedIntent });
-    emitRuntimeLog({
-      level: "info",
-      tag: "agent",
-      sessionId,
-      message: `开始请求 · 会话 ${sessionId} · 类型 ${reqSessionKind ?? "auto"} · 模式 ${playMode ?? "-"} · 模型 ${reqService ?? "default"}/${reqModel ?? "default"} · 指令 ${instruction.trim().length} 字符`,
-    });
 
     try {
       // Load config + create LLM client (pipeline created after model resolution)
-      console.error("[agent] Step 1: Loading project config...");
       const config = await loadCurrentProjectConfig({ requireApiKey: false });
-      console.error("[agent] Step 2: Config loaded, creating LLM client...");
       const client = createStudioLLMClient(config.llm, { sessionId });
-      console.error("[agent] Step 3: Loading book session...");
       const loadedBookSession = await loadBookSession(root, sessionId);
-      console.error("[agent] Step 4: Session loaded:", loadedBookSession ? "found" : "not found");
       if (!loadedBookSession) {
         throw new ApiError(404, "SESSION_NOT_FOUND", `Session not found: ${sessionId}`);
       }
@@ -7283,12 +7308,6 @@ ${chaptersContent.map((ch) => `--- 第${ch.number}章 ---\n${ch.content}`).join(
                 args,
                 stages,
               });
-              emitRuntimeLog({
-                level: "info",
-                tag: "tool",
-                sessionId: streamSessionId,
-                message: `开始 ${resolveToolLabel(event.toolName, agent)}${agent ? ` (${agent})` : ""}`,
-              });
             }
             if (event.type === "tool_execution_update") {
               broadcast("tool:update", {
@@ -7328,12 +7347,6 @@ ${chaptersContent.map((ch) => `--- 第${ch.number}章 ---\n${ch.content}`).join(
                 result: event.result,
                 details: exec?.details,
                 isError: event.isError,
-              });
-              emitRuntimeLog({
-                level: event.isError ? "error" : "info",
-                tag: "tool",
-                sessionId: streamSessionId,
-                message: `${event.isError ? "失败" : "完成"} ${resolveToolLabel(event.toolName, exec?.agent)}${exec?.error ? ` · ${exec.error}` : ""}`,
               });
             }
           },

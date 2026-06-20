@@ -223,3 +223,4 @@ build-err.txt
 packages/studio/android/capacitor-android-x5/capacitor/build/
 screenshot*.png
 .env.production
+inkos-studio-v1.6.4.apk

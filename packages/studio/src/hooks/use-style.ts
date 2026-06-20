@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { DEFAULT_HUE, DEFAULT_SATURATION } from "../lib/style-presets";
+import { loadDecorativeFont, extractFontFamily } from "../lib/load-font";
 
 const STORAGE_KEY = "inkos:studio:custom-style";
 
@@ -92,11 +93,22 @@ export function useStyle() {
   }, [customStyle]);
 
   const setFontFamily = useCallback((fontFamily: string | null) => {
-    setCustomStyle((prev) => {
-      const next = { ...prev, fontFamily };
-      writeStyle(next);
-      return next;
-    });
+    const family = extractFontFamily(fontFamily);
+    if (family && family !== "Noto Sans SC Variable" && family !== "Noto Serif SC Variable") {
+      void loadDecorativeFont(family).then(() => {
+        setCustomStyle((prev) => {
+          const next = { ...prev, fontFamily };
+          writeStyle(next);
+          return next;
+        });
+      });
+    } else {
+      setCustomStyle((prev) => {
+        const next = { ...prev, fontFamily };
+        writeStyle(next);
+        return next;
+      });
+    }
   }, []);
 
   const setAccentColor = useCallback((accentHue: number, accentSaturation?: number) => {
