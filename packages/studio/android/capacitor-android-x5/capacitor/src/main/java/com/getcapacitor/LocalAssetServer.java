@@ -30,6 +30,10 @@ public class LocalAssetServer extends NanoHTTPD {
     private static final String capacitorContentStart = Bridge.CAPACITOR_CONTENT_START;
     private String basePath;
     private final Context context;
+    // Async ping results storage
+    private static final java.util.concurrent.ConcurrentHashMap<String, org.json.JSONObject> pingResults = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger> pingCompleted = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger> pingTotal = new java.util.concurrent.ConcurrentHashMap<>();
     private final Bridge bridge;
     private JSInjector jsInjector;
     private final ArrayList<String> authorities;
@@ -90,7 +94,8 @@ public class LocalAssetServer extends NanoHTTPD {
         Method method = session.getMethod();
         Map<String, String> headers = session.getHeaders();
 
-        Logger.debug("LocalAssetServer serving: " + method + " " + uri);
+        // Debug: log ALL requests to understand what reaches NanoHTTPD
+        android.util.Log.d("InkOS_Nano", method + " " + uri);
 
         // Health check — handled directly in Java, no Node proxy needed.
         // The frontend uses this to detect whether the Node backend is alive.
@@ -112,9 +117,62 @@ public class LocalAssetServer extends NanoHTTPD {
             return handlePluginCall(session);
         }
 
+        // File picker via hidden WebView — bypasses GeckoView's missing onFilePrompt.
+        if (uri != null && uri.equals("/__cap_pick_file") && Method.POST.equals(method)) {
+            return handleFilePick(session);
+        }
+
+        // Ping URL for update source checking — bypasses broken Capacitor bridge.
+        if (uri != null && uri.equals("/__cap_ping_batch") && Method.POST.equals(method)) {
+            Logger.debug("Ping batch POST received");
+            return handlePingBatch(session);
+        }
+
+        // Ping status polling
+        if (uri != null && uri.startsWith("/__cap_ping_batch/") && Method.GET.equals(method)) {
+            String batchId = uri.substring("/__cap_ping_batch/".length());
+            Logger.debug("Ping status GET: " + batchId);
+            return handlePingStatus(batchId);
+        }
+
+        // APK download — bypasses broken Capacitor bridge in GeckoView.
+        if (uri != null && uri.equals("/__cap_download_apk") && Method.POST.equals(method)) {
+            return handleDownloadApk(session);
+        }
+
+        // APK download queue — pages POST download requests here, content script polls GET.
+        if (uri != null && uri.equals("/__cap_download_queue") && Method.POST.equals(method)) {
+            return handleDownloadQueuePost(session);
+        }
+        if (uri != null && uri.equals("/__cap_download_queue") && Method.GET.equals(method)) {
+            return handleDownloadQueuePoll();
+        }
+
+        // APK download status polling
+        if (uri != null && uri.startsWith("/__cap_download_apk/") && Method.GET.equals(method)) {
+            String downloadId = uri.substring("/__cap_download_apk/".length());
+            return handleDownloadStatus(downloadId);
+        }
+
+        // APK download cancel
+        if (uri != null && uri.startsWith("/__cap_download_apk/") && uri.endsWith("/cancel") && Method.POST.equals(method)) {
+            String downloadId = uri.substring("/__cap_download_apk/".length(), uri.length() - "/cancel".length());
+            return handleDownloadCancel(downloadId);
+        }
+
         // Direct battery optimization request — bypasses Capacitor bridge entirely for GeckoView.
         if (uri != null && uri.equals("/__cap_battery_exemption") && Method.POST.equals(method)) {
             return handleBatteryExemption();
+        }
+
+        // Install downloaded APK — bypasses Capacitor bridge for GeckoView.
+        if (uri != null && uri.equals("/__cap_install_apk") && Method.POST.equals(method)) {
+            return handleInstallApk(session);
+        }
+
+        // Open install permission settings — bypasses Capacitor bridge for GeckoView.
+        if (uri != null && uri.equals("/__cap_install_permission") && Method.POST.equals(method)) {
+            return handleInstallPermissionSettings();
         }
 
         // TTS endpoints — local text-to-speech via Android TextToSpeech API.
@@ -503,6 +561,437 @@ public class LocalAssetServer extends NanoHTTPD {
     }
 
     /**
+     * File picker via hidden WebView — bypasses GeckoView's missing onFilePrompt.
+     * Called by JS via POST /__cap_pick_file.
+     */
+    private Response handleFilePick(IHTTPSession session) {
+        try {
+            int contentLength = Integer.parseInt(session.getHeaders().getOrDefault("content-length", "0"));
+            byte[] buffer = new byte[contentLength];
+            java.io.InputStream is = session.getInputStream();
+            int read = 0;
+            while (read < contentLength) {
+                int n = is.read(buffer, read, contentLength - read);
+                if (n == -1) break;
+                read += n;
+            }
+            String body = new String(buffer, "UTF-8");
+
+            String accept = "*/*";
+            boolean multiple = false;
+            try {
+                org.json.JSONObject req = new org.json.JSONObject(body);
+                accept = req.optString("accept", "*/*");
+                multiple = req.optBoolean("multiple", false);
+            } catch (Exception ignored) {}
+
+            final java.util.concurrent.CompletableFuture<String[]> future = new java.util.concurrent.CompletableFuture<>();
+            bridge.triggerFilePicker(accept, multiple, future);
+
+            // Block this NanoHTTPD thread until the user picks a file (max 120s).
+            String[] uris;
+            try {
+                uris = future.get(120, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (java.util.concurrent.TimeoutException te) {
+                uris = new String[0];
+            } catch (Exception e) {
+                uris = new String[0];
+            }
+
+            org.json.JSONObject resp = new org.json.JSONObject();
+            if (uris == null || uris.length == 0) {
+                resp.put("uris", new org.json.JSONArray());
+                resp.put("error", "cancelled");
+            } else {
+                org.json.JSONArray urisArray = new org.json.JSONArray();
+                org.json.JSONArray namesArray = new org.json.JSONArray();
+                org.json.JSONArray typesArray = new org.json.JSONArray();
+                org.json.JSONArray dataArray = new org.json.JSONArray();
+                for (String u : urisArray.length() < uris.length ? uris : uris) {
+                    urisArray.put(u);
+                    android.net.Uri uri = android.net.Uri.parse(u);
+                    String name = "unknown";
+                    String type = "application/octet-stream";
+                    String base64 = "";
+                    try {
+                        // Get display name
+                        android.database.Cursor cursor = bridge.getContext().getContentResolver().query(
+                            uri, null, null, null, null);
+                        if (cursor != null) {
+                            if (cursor.moveToFirst()) {
+                                int nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                                if (nameIdx >= 0) name = cursor.getString(nameIdx);
+                                int sizeIdx = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE);
+                            }
+                            cursor.close();
+                        }
+                        // Get MIME type
+                        type = bridge.getContext().getContentResolver().getType(uri);
+                        if (type == null) type = "application/octet-stream";
+                        // Read file content as base64
+                        java.io.InputStream inputStream = bridge.getContext().getContentResolver().openInputStream(uri);
+                        if (inputStream != null) {
+                            byte[] bytes = readAllBytes(inputStream);
+                            inputStream.close();
+                            base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP);
+                        } else {
+                            Logger.error("File pick: openInputStream returned null for " + u);
+                        }
+                    } catch (Exception e) {
+                        Logger.error("Error reading picked file: " + u, e);
+                    }
+                    namesArray.put(name);
+                    typesArray.put(type);
+                    dataArray.put(base64);
+                }
+                resp.put("uris", urisArray);
+                resp.put("names", namesArray);
+                resp.put("types", typesArray);
+                resp.put("data", dataArray);
+            }
+            return newFixedLengthResponse(Response.Status.OK, "application/json", resp.toString());
+        } catch (Exception e) {
+            Logger.error("File pick via HTTP failed", e);
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                "{\"uris\":[],\"error\":\"" + e.getMessage() + "\"}");
+        }
+    }
+
+    /**
+     * Batch ping multiple URLs for update source checking.
+     * Starts pings in background threads and returns batch ID immediately.
+     * Called by JS via POST /__cap_ping_batch.
+     */
+    private Response handlePingBatch(IHTTPSession session) {
+        try {
+            int contentLength = Integer.parseInt(session.getHeaders().getOrDefault("content-length", "0"));
+            byte[] buffer = new byte[contentLength];
+            java.io.InputStream is = session.getInputStream();
+            int read = 0;
+            while (read < contentLength) {
+                int n = is.read(buffer, read, contentLength - read);
+                if (n == -1) break;
+                read += n;
+            }
+            String body = new String(buffer, "UTF-8");
+
+            java.util.List<String> urls = new java.util.ArrayList<>();
+            try {
+                org.json.JSONArray arr = new org.json.JSONArray(body);
+                for (int i = 0; i < arr.length(); i++) urls.add(arr.getString(i));
+            } catch (Exception ignored) {}
+
+            // Generate batch ID and start pings in background threads (non-blocking)
+            String batchId = "ping-" + System.currentTimeMillis();
+            pingTotal.put(batchId, new java.util.concurrent.atomic.AtomicInteger(urls.size()));
+            pingCompleted.put(batchId, new java.util.concurrent.atomic.AtomicInteger(0));
+
+            final java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(
+                Math.min(urls.size(), 8));
+            for (int i = 0; i < urls.size(); i++) {
+                final String u = urls.get(i);
+                final int idx = i;
+                pool.submit(() -> {
+                    org.json.JSONObject result = pingUrl(u);
+                    try { result.put("index", idx); } catch (org.json.JSONException ignored) {}
+                    pingResults.put(batchId + ":" + idx, result);
+                    pingCompleted.get(batchId).incrementAndGet();
+                });
+            }
+            pool.shutdown();
+
+            org.json.JSONObject resp = new org.json.JSONObject();
+            resp.put("batchId", batchId);
+            resp.put("total", urls.size());
+            return newFixedLengthResponse(Response.Status.OK, "application/json", resp.toString());
+        } catch (Exception e) {
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                "{\"error\":\"" + e.getMessage() + "\"}");
+        }
+    }
+
+    /**
+     * Check status of a ping batch.
+     * Called by JS via GET /__cap_ping_batch/{batchId}.
+     */
+    private Response handlePingStatus(String batchId) {
+        java.util.concurrent.atomic.AtomicInteger total = pingTotal.get(batchId);
+        java.util.concurrent.atomic.AtomicInteger completed = pingCompleted.get(batchId);
+        if (total == null) {
+            return newFixedLengthResponse(Response.Status.NOT_FOUND, "application/json",
+                "{\"error\":\"batch not found\"}");
+        }
+        int totalVal = total.get();
+        int completedVal = completed.get();
+        boolean done = completedVal >= totalVal;
+
+        org.json.JSONArray results = new org.json.JSONArray();
+        if (done) {
+            for (int i = 0; i < totalVal; i++) {
+                org.json.JSONObject r = pingResults.remove(batchId + ":" + i);
+                results.put(r != null ? r : new org.json.JSONObject());
+            }
+            pingTotal.remove(batchId);
+            pingCompleted.remove(batchId);
+        }
+
+        org.json.JSONObject resp = new org.json.JSONObject();
+        try {
+            resp.put("done", done);
+            resp.put("completed", completedVal);
+            resp.put("total", totalVal);
+            resp.put("results", results);
+        } catch (org.json.JSONException ignored) {}
+        return newFixedLengthResponse(Response.Status.OK, "application/json", resp.toString());
+    }
+
+    private org.json.JSONObject pingUrl(String urlString) {
+        long startedAt = System.currentTimeMillis();
+        org.json.JSONObject result = new org.json.JSONObject();
+        java.net.HttpURLConnection connection = null;
+        try {
+            java.net.URL url = new java.net.URL(urlString);
+            connection = (java.net.HttpURLConnection) url.openConnection();
+            connection.setInstanceFollowRedirects(true);
+            connection.setRequestMethod("HEAD");
+            connection.setConnectTimeout(5000);
+            connection.setReadTimeout(8000);
+            connection.setRequestProperty("User-Agent", "InkOS-Studio-Android");
+            int code = connection.getResponseCode();
+            if (code == java.net.HttpURLConnection.HTTP_BAD_METHOD) {
+                connection.disconnect();
+                connection = (java.net.HttpURLConnection) url.openConnection();
+                connection.setInstanceFollowRedirects(true);
+                connection.setConnectTimeout(5000);
+                connection.setReadTimeout(8000);
+                connection.setRequestProperty("Range", "bytes=0-0");
+                code = connection.getResponseCode();
+                try (java.io.InputStream input = connection.getInputStream()) { input.read(); }
+            }
+            long latencyMs = Math.max(1L, System.currentTimeMillis() - startedAt);
+            result.put("ok", code >= 200 && code < 400);
+            result.put("statusCode", code);
+            result.put("latencyMs", latencyMs);
+        } catch (org.json.JSONException e) {
+            // Ignore JSON formatting errors
+        } catch (Exception error) {
+            long latencyMs = Math.max(1L, System.currentTimeMillis() - startedAt);
+            try {
+                result.put("ok", false);
+                result.put("statusCode", 0);
+                result.put("latencyMs", latencyMs);
+                result.put("error", error.getMessage());
+            } catch (org.json.JSONException ignored) {}
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+        return result;
+    }
+
+    // ==================== APK Download (bypass GeckoView broken bridge) ====================
+
+    private static final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger> downloadTotal = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger> downloadCompleted = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<String, String> downloadPaths = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<String, String> downloadErrors = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<String, Long> downloadSizes = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<String, java.net.HttpURLConnection> downloadConnections = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<String, Boolean> downloadCancelledFlags = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private Response handleDownloadApk(IHTTPSession session) {
+        try {
+            int contentLength = Integer.parseInt(session.getHeaders().getOrDefault("content-length", "0"));
+            byte[] buffer = new byte[contentLength];
+            java.io.InputStream is = session.getInputStream();
+            int read = 0;
+            while (read < contentLength) {
+                int n = is.read(buffer, read, contentLength - read);
+                if (n == -1) break;
+                read += n;
+            }
+            String body = new String(buffer, "UTF-8");
+            org.json.JSONObject req = new org.json.JSONObject(body);
+            String url = req.optString("url", "");
+            String sha256 = req.optString("sha256", "");
+            String fileName = req.optString("fileName", "inkos-update.apk");
+
+            if (url.isEmpty() || sha256.isEmpty()) {
+                return newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json",
+                    "{\"error\":\"url and sha256 are required\"}");
+            }
+
+            String downloadId = "dl-" + System.currentTimeMillis();
+            downloadTotal.put(downloadId, new java.util.concurrent.atomic.AtomicInteger(0));
+            downloadCompleted.put(downloadId, new java.util.concurrent.atomic.AtomicInteger(0));
+            downloadCancelledFlags.put(downloadId, false);
+
+            final String dlUrl = url;
+            final String dlSha256 = sha256;
+            final String dlFileName = fileName;
+            final String dlId = downloadId;
+
+            new Thread(() -> {
+                java.io.File updatesDir = new java.io.File(bridge.getContext().getCacheDir(), "updates");
+                if (!updatesDir.exists()) updatesDir.mkdirs();
+                java.io.File target = new java.io.File(updatesDir, dlFileName);
+                java.io.File temporary = new java.io.File(updatesDir, dlFileName + ".download");
+
+                java.net.HttpURLConnection connection = null;
+                try {
+                    java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+                    java.net.URL u = new java.net.URL(dlUrl);
+                    connection = (java.net.HttpURLConnection) u.openConnection();
+                    downloadConnections.put(dlId, connection);
+                    connection.setInstanceFollowRedirects(true);
+                    connection.setConnectTimeout(15000);
+                    connection.setReadTimeout(120000);
+                    connection.setRequestProperty("User-Agent", "InkOS-Studio-Android");
+                    int code = connection.getResponseCode();
+                    if (code < 200 || code >= 300) {
+                        throw new java.io.IOException("HTTP " + code);
+                    }
+                    long contentLen = connection.getContentLengthLong();
+                    downloadTotal.get(dlId).set((int) contentLen);
+                    downloadSizes.put(dlId, contentLen);
+
+                    try (java.io.InputStream input = connection.getInputStream();
+                         java.io.FileOutputStream output = new java.io.FileOutputStream(temporary, false)) {
+                        byte[] buf = new byte[64 * 1024];
+                        int r;
+                        long totalBytes = 0;
+                        while ((r = input.read(buf)) != -1) {
+                            if (Boolean.TRUE.equals(downloadCancelledFlags.get(dlId))) {
+                                temporary.delete();
+                                downloadErrors.put(dlId, "cancelled");
+                                return;
+                            }
+                            digest.update(buf, 0, r);
+                            output.write(buf, 0, r);
+                            totalBytes += r;
+                            downloadCompleted.get(dlId).set((int) totalBytes);
+                        }
+                    }
+
+                    String actualSha256 = hex(digest.digest());
+                    if (!actualSha256.equalsIgnoreCase(dlSha256)) {
+                        temporary.delete();
+                        throw new java.io.IOException("SHA-256 mismatch. Expected " + dlSha256 + " but got " + actualSha256);
+                    }
+                    if (target.exists()) target.delete();
+                    // Use Files.move instead of File.renameTo (more reliable on Android)
+                    try {
+                        java.nio.file.Files.move(temporary.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    } catch (Exception moveEx) {
+                        // Fallback: copy + delete
+                        java.nio.file.Files.copy(temporary.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                        temporary.delete();
+                    }
+                    downloadPaths.put(dlId, target.getAbsolutePath());
+                } catch (Exception e) {
+                    downloadErrors.put(dlId, e.getMessage());
+                } finally {
+                    downloadConnections.remove(dlId);
+                    if (connection != null) connection.disconnect();
+                }
+            }, "inkos-dl-http").start();
+
+            org.json.JSONObject resp = new org.json.JSONObject();
+            resp.put("downloadId", downloadId);
+            return newFixedLengthResponse(Response.Status.OK, "application/json", resp.toString());
+        } catch (Exception e) {
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                "{\"error\":\"" + e.getMessage() + "\"}");
+        }
+    }
+
+    private Response handleDownloadStatus(String downloadId) {
+        java.util.concurrent.atomic.AtomicInteger total = downloadTotal.get(downloadId);
+        java.util.concurrent.atomic.AtomicInteger completed = downloadCompleted.get(downloadId);
+        if (total == null) {
+            return newFixedLengthResponse(Response.Status.NOT_FOUND, "application/json",
+                "{\"error\":\"download not found\"}");
+        }
+        String path = downloadPaths.get(downloadId);
+        String error = downloadErrors.get(downloadId);
+        boolean done = path != null || error != null;
+        long totalVal = total.get();
+        long completedVal = completed.get();
+        long size = downloadSizes.containsKey(downloadId) ? downloadSizes.get(downloadId) : 0;
+
+        org.json.JSONObject resp = new org.json.JSONObject();
+        try {
+            resp.put("done", done);
+            resp.put("bytesDownloaded", completedVal);
+            resp.put("totalBytes", totalVal);
+            resp.put("size", size);
+            if (path != null) resp.put("path", path);
+            if (error != null) resp.put("error", error);
+        } catch (org.json.JSONException ignored) {}
+
+        if (done) {
+            downloadTotal.remove(downloadId);
+            downloadCompleted.remove(downloadId);
+            downloadPaths.remove(downloadId);
+            downloadErrors.remove(downloadId);
+            downloadSizes.remove(downloadId);
+            downloadCancelledFlags.remove(downloadId);
+        }
+        return newFixedLengthResponse(Response.Status.OK, "application/json", resp.toString());
+    }
+
+    private Response handleDownloadCancel(String downloadId) {
+        downloadCancelledFlags.put(downloadId, true);
+        java.net.HttpURLConnection conn = downloadConnections.remove(downloadId);
+        if (conn != null) {
+            try { conn.disconnect(); } catch (Exception ignored) {}
+        }
+        downloadErrors.put(downloadId, "cancelled");
+        return newFixedLengthResponse(Response.Status.OK, "application/json", "{\"ok\":true}");
+    }
+
+    private String hex(byte[] bytes) {
+        StringBuilder builder = new StringBuilder(bytes.length * 2);
+        for (byte value : bytes) {
+            builder.append(String.format(java.util.Locale.ROOT, "%02x", value & 0xff));
+        }
+        return builder.toString();
+    }
+
+    // ==================== Download Queue (page POSTs, content script polls GET) ====================
+
+    private static volatile String pendingDownloadRequest = null;
+
+    private Response handleDownloadQueuePost(IHTTPSession session) {
+        try {
+            int contentLength = Integer.parseInt(session.getHeaders().getOrDefault("content-length", "0"));
+            byte[] buffer = new byte[contentLength];
+            java.io.InputStream is = session.getInputStream();
+            int read = 0;
+            while (read < contentLength) {
+                int n = is.read(buffer, read, contentLength - read);
+                if (n == -1) break;
+                read += n;
+            }
+            pendingDownloadRequest = new String(buffer, "UTF-8");
+            return newFixedLengthResponse(Response.Status.OK, "application/json", "{\"ok\":true}");
+        } catch (Exception e) {
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                "{\"error\":\"" + e.getMessage() + "\"}");
+        }
+    }
+
+    private Response handleDownloadQueuePoll() {
+        String request = pendingDownloadRequest;
+        pendingDownloadRequest = null;
+        if (request != null) {
+            return newFixedLengthResponse(Response.Status.OK, "application/json", request);
+        }
+        return newFixedLengthResponse(Response.Status.OK, "application/json", "null");
+    }
+
+    // ==================== Battery Exemption ====================
+
+    /**
      * Open battery optimization exemption dialog directly, bypassing Capacitor bridge.
      * Called by JS via POST /__cap_battery_exemption when GeckoView bridge is broken.
      */
@@ -540,6 +1029,87 @@ public class LocalAssetServer extends NanoHTTPD {
                 "{\"ok\":true,\"ignoring\":" + isIgnoring + "}");
         } catch (Exception e) {
             Logger.error("Battery exemption failed", e);
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                "{\"ok\":false,\"error\":\"" + e.getMessage() + "\"}");
+        }
+    }
+
+    // ==================== Install APK ====================
+
+    /**
+     * Install a downloaded APK file, bypassing Capacitor bridge for GeckoView.
+     * Called by JS via POST /__cap_install_apk with { path } body.
+     */
+    private Response handleInstallApk(IHTTPSession session) {
+        try {
+            int contentLength = Integer.parseInt(session.getHeaders().getOrDefault("content-length", "0"));
+            byte[] buffer = new byte[contentLength];
+            java.io.InputStream is = session.getInputStream();
+            int read = 0;
+            while (read < contentLength) {
+                int n = is.read(buffer, read, contentLength - read);
+                if (n == -1) break;
+                read += n;
+            }
+            String body = new String(buffer, "UTF-8");
+            org.json.JSONObject req = new org.json.JSONObject(body);
+            String path = req.optString("path", "").trim();
+
+            java.io.File apk;
+            if (path.isEmpty()) {
+                apk = new java.io.File(new java.io.File(bridge.getContext().getCacheDir(), "updates"), "inkos-update.apk");
+            } else {
+                apk = new java.io.File(path);
+            }
+
+            if (!apk.exists() || !apk.isFile()) {
+                return newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json",
+                    "{\"ok\":false,\"error\":\"Downloaded APK is missing: " + apk.getAbsolutePath() + "\"}");
+            }
+
+            // Check install permission
+            boolean canInstall = android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O
+                || bridge.getContext().getPackageManager().canRequestPackageInstalls();
+            if (!canInstall) {
+                return newFixedLengthResponse(Response.Status.OK, "application/json",
+                    "{\"ok\":false,\"needsPermission\":true,\"message\":\"Android requires permission to install APKs from this app.\"}");
+            }
+
+            android.net.Uri uri = androidx.core.content.FileProvider.getUriForFile(
+                bridge.getContext(),
+                bridge.getContext().getPackageName() + ".fileprovider",
+                apk
+            );
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(uri, "application/vnd.android.package-archive");
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            bridge.getContext().startActivity(intent);
+
+            return newFixedLengthResponse(Response.Status.OK, "application/json",
+                "{\"ok\":true,\"path\":\"" + apk.getAbsolutePath() + "\"}");
+        } catch (Exception e) {
+            Logger.error("Install APK failed", e);
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                "{\"ok\":false,\"error\":\"" + e.getMessage() + "\"}");
+        }
+    }
+
+    // ==================== Install Permission Settings ====================
+
+    /**
+     * Open the install unknown apps permission settings for this app.
+     * Called by JS via POST /__cap_install_permission.
+     */
+    private Response handleInstallPermissionSettings() {
+        try {
+            Intent intent = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES);
+            intent.setData(android.net.Uri.parse("package:" + bridge.getContext().getPackageName()));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            bridge.getContext().startActivity(intent);
+            return newFixedLengthResponse(Response.Status.OK, "application/json", "{\"ok\":true}");
+        } catch (Exception e) {
+            Logger.error("Open install permission settings failed", e);
             return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
                 "{\"ok\":false,\"error\":\"" + e.getMessage() + "\"}");
         }
@@ -810,6 +1380,21 @@ public class LocalAssetServer extends NanoHTTPD {
         }
 
         boolean isSSE = uri != null && uri.equals("/api/v1/events");
+        boolean isLongRunning = uri != null && (
+            uri.endsWith("/agent")
+            || uri.contains("/generate")
+            || uri.contains("/translate")
+            || uri.contains("/simulate-comments")
+            || uri.contains("/audiobook-adapt")
+            || uri.contains("/summary")
+            || uri.contains("/detect-sensitive")
+            || uri.contains("/analyze-dialogue")
+            || uri.contains("/check-style-consistency")
+            || uri.contains("/analyze-pacing")
+            || uri.contains("/detect-conflicts")
+            || uri.contains("/highlights")
+            || uri.contains("/beats")
+        );
 
         URL url = new URL(targetUrl);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -818,8 +1403,8 @@ public class LocalAssetServer extends NanoHTTPD {
         conn.setConnectTimeout(5000);
         if (isSSE) {
             conn.setReadTimeout(0); // Essential for long-lived SSE connections
-        } else if (uri != null && uri.endsWith("/agent")) {
-            conn.setReadTimeout(0); // Agent calls can take many minutes (LLM + tool execution)
+        } else if (isLongRunning) {
+            conn.setReadTimeout(0); // LLM/image generation can take many minutes
         } else {
             conn.setReadTimeout(30000); // 30-second timeout for other API requests
         }
@@ -959,5 +1544,15 @@ public class LocalAssetServer extends NanoHTTPD {
 
         // Return empty response — actual data was written above
         return newFixedLengthResponse(Response.Status.OK, "text/plain", "");
+    }
+
+    private static byte[] readAllBytes(java.io.InputStream is) throws java.io.IOException {
+        java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+        byte[] chunk = new byte[8192];
+        int n;
+        while ((n = is.read(chunk)) != -1) {
+            buffer.write(chunk, 0, n);
+        }
+        return buffer.toByteArray();
     }
 }

@@ -1,10 +1,11 @@
 import { postApi, useApi } from "../hooks/use-api";
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { Stethoscope, CheckCircle2, XCircle, Loader2, RefreshCw, Download, ShieldCheck, PackageCheck, DatabaseBackup, Wrench } from "lucide-react";
-import { downloadUpdateApk, installDownloadedApk, openInstallPermissionSettings, pingUpdateUrl } from "../lib/android-runtime-plugin";
+import { downloadUpdateApk, getInstallPermissionStatus, installDownloadedApk, openInstallPermissionSettings, pingUpdateUrl, pingUpdateUrls, subscribeToDownloadProgress, cancelDownload, type DownloadProgress } from "../lib/android-runtime-plugin";
 import { isNativeRuntime } from "../lib/mobile-runtime";
 import { appConfirm } from "../lib/app-dialog";
 
@@ -157,6 +158,8 @@ function UpdatePanel({ theme, t }: { theme: Theme; t: TFunction }) {
   const [needsPermission, setNeedsPermission] = useState(false);
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
   const [sourcePings, setSourcePings] = useState<Record<string, UpdateSourcePing>>({});
+  const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
+  const [downloading, setDownloading] = useState(false);
   const [pingingSources, setPingingSources] = useState(false);
   const update = data?.update ?? null;
   const available = Boolean(data?.available && update);
@@ -174,20 +177,12 @@ function UpdatePanel({ theme, t }: { theme: Theme; t: TFunction }) {
     setPingingSources(true);
     setActionError(null);
     try {
-      const results = await Promise.all(downloadSources.map(async (source) => {
-        try {
-          const ping = await pingUpdateUrl(source.url);
-          return [source.id, ping] as const;
-        } catch (pingError) {
-          return [source.id, {
-            ok: false,
-            statusCode: 0,
-            latencyMs: 0,
-            error: pingError instanceof Error ? pingError.message : String(pingError),
-          }] as const;
-        }
-      }));
-      const nextPings = Object.fromEntries(results);
+      const urls = downloadSources.map((s) => s.url);
+      const results = await pingUpdateUrls(urls);
+      const nextPings: Record<string, UpdateSourcePing> = {};
+      downloadSources.forEach((source, i) => {
+        nextPings[source.id] = results[i] ?? { ok: false, statusCode: 0, latencyMs: 0, error: "no result" };
+      });
       setSourcePings(nextPings);
       const fastest = selectFastestSource(downloadSources, nextPings);
       setSelectedSourceId(fastest?.id ?? null);
@@ -204,21 +199,13 @@ function UpdatePanel({ theme, t }: { theme: Theme; t: TFunction }) {
     let cancelled = false;
     setPingingSources(true);
     setActionError(null);
-    Promise.all(downloadSources.map(async (source) => {
-      try {
-        const ping = await pingUpdateUrl(source.url);
-        return [source.id, ping] as const;
-      } catch (pingError) {
-        return [source.id, {
-          ok: false,
-          statusCode: 0,
-          latencyMs: 0,
-          error: pingError instanceof Error ? pingError.message : String(pingError),
-        }] as const;
-      }
-    })).then((results) => {
+    const urls = downloadSources.map((s) => s.url);
+    pingUpdateUrls(urls).then((results) => {
       if (cancelled) return;
-      const nextPings = Object.fromEntries(results);
+      const nextPings: Record<string, UpdateSourcePing> = {};
+      downloadSources.forEach((source, i) => {
+        nextPings[source.id] = results[i] ?? { ok: false, statusCode: 0, latencyMs: 0, error: "no result" };
+      });
       setSourcePings(nextPings);
       const fastest = selectFastestSource(downloadSources, nextPings);
       setSelectedSourceId(fastest?.id ?? null);
@@ -234,7 +221,14 @@ function UpdatePanel({ theme, t }: { theme: Theme; t: TFunction }) {
     if (!update || !source) return;
     setActionError(null);
     setNeedsPermission(false);
-    setActionStatus(`${source.label}: ${t("doctor.updateDownloading")}`);
+    setDownloading(true);
+    setDownloadProgress(null);
+    setActionStatus(null);
+
+    const unsubscribe = subscribeToDownloadProgress((progress) => {
+      setDownloadProgress(progress);
+    });
+
     try {
       const result = await downloadUpdateApk({
         url: source.url,
@@ -242,11 +236,29 @@ function UpdatePanel({ theme, t }: { theme: Theme; t: TFunction }) {
         fileName: `inkos-studio-${update.versionName}.apk`,
       });
       setDownloadedPath(result.path);
+      setDownloadProgress(null);
       setActionStatus(`${source.label}: ${t("doctor.updateDownloaded")}`);
+      // Check install permission (non-blocking — don't await)
+      getInstallPermissionStatus().then((canInstall) => {
+        if (canInstall === false) setNeedsPermission(true);
+      });
     } catch (downloadError) {
+      setDownloadProgress(null);
       setActionStatus(null);
-      setActionError(downloadError instanceof Error ? downloadError.message : String(downloadError));
+      const msg = downloadError instanceof Error ? downloadError.message : String(downloadError);
+      if (msg.includes("cancelled")) {
+        setActionStatus(null);
+      } else {
+        setActionError(msg);
+      }
+    } finally {
+      unsubscribe();
+      setDownloading(false);
     }
+  };
+
+  const handleCancelDownload = async () => {
+    await cancelDownload();
   };
 
   const handleInstall = async () => {
@@ -331,7 +343,7 @@ function UpdatePanel({ theme, t }: { theme: Theme; t: TFunction }) {
               {pingingSources ? t("doctor.updatePinging") : t("doctor.updatePingSources")}
             </button>
             <button
-              disabled={!native || !selectedSource}
+              disabled={!native || !selectedSource || downloading}
               onClick={() => void handleDownload()}
               className={`inline-flex h-9 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${c.btnPrimary}`}
             >
@@ -343,7 +355,7 @@ function UpdatePanel({ theme, t }: { theme: Theme; t: TFunction }) {
             {downloadSources.map((source) => (
               <button
                 key={source.id}
-                disabled={!native}
+                disabled={!native || downloading}
                 onClick={() => {
                   setSelectedSourceId(source.id);
                   void handleDownload(source);
@@ -393,6 +405,71 @@ function UpdatePanel({ theme, t }: { theme: Theme; t: TFunction }) {
           </button>
         )}
       </div>
+
+      {/* Download dialog */}
+      {downloading && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" style={{ animation: "fadeIn 0.2s ease-out" }}>
+          <div className="mx-4 w-full max-w-sm rounded-2xl border border-border/40 bg-card p-6 shadow-2xl" style={{ animation: "fadeIn 0.3s ease-out" }}>
+            <div className="flex items-center gap-3 mb-5">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/15">
+                <Download size={20} className="text-primary animate-pulse" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-foreground">
+                  {downloadProgress ? `正在下载 ${downloadProgress.percent}%` : "正在准备下载..."}
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  {update?.versionName ? `v${update.versionName}` : ""}
+                  {selectedSource ? ` · ${selectedSource.label}` : ""}
+                </p>
+              </div>
+            </div>
+
+            {/* Progress bar */}
+            <div className="h-2.5 w-full rounded-full bg-muted/60 overflow-hidden mb-4">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-primary/60 via-primary to-accent/60 transition-all duration-300"
+                style={{ width: `${downloadProgress?.percent ?? 0}%` }}
+              >
+                <div className="h-full w-full relative overflow-hidden">
+                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent" style={{ animation: "splash-shimmer 1.5s ease-in-out infinite" }} />
+                </div>
+              </div>
+            </div>
+
+            {/* Stats */}
+            <div className="grid grid-cols-3 gap-3 mb-5">
+              <div className="text-center">
+                <p className="text-xs text-muted-foreground">已下载</p>
+                <p className="text-sm font-semibold tabular-nums">{formatBytes(downloadProgress?.bytesDownloaded ?? 0)}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-xs text-muted-foreground">总大小</p>
+                <p className="text-sm font-semibold tabular-nums">{formatBytes(downloadProgress?.totalBytes ?? 0)}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-xs text-muted-foreground">速度</p>
+                <p className="text-sm font-semibold tabular-nums">{formatBytes(downloadProgress?.speedBytesPerSec ?? 0)}/s</p>
+              </div>
+            </div>
+
+            {/* Source URL */}
+            {selectedSource && (
+              <p className="text-[10px] text-muted-foreground/60 truncate mb-4" title={selectedSource.url}>
+                {selectedSource.url}
+              </p>
+            )}
+
+            <button
+              onClick={() => void handleCancelDownload()}
+              className="w-full h-10 rounded-xl border border-destructive/30 bg-destructive/5 text-sm font-medium text-destructive hover:bg-destructive/10 transition-colors"
+            >
+              取消下载
+            </button>
+          </div>
+        </div>,
+        document.body,
+      )}
 
       {!native && <p className="mt-3 text-sm text-muted-foreground">{t("doctor.updateUnsupported")}</p>}
       {error && <p className="mt-3 text-sm text-destructive">{error}</p>}

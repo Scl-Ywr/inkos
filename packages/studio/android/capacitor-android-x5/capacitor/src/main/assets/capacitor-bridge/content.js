@@ -9,15 +9,12 @@
 
   function sendToNative(payload) {
     if (port) {
-      // Preferred: bidirectional Port (connectNative succeeded)
       try {
         port.postMessage(payload);
       } catch (e) {
         console.error("CapacitorBridge: port send failed", e);
       }
     } else {
-      // Port unavailable — route plugin calls via HTTP to Java LocalAssetServer.
-      // Java processes the call asynchronously; the response arrives via eval polling.
       try {
         var body = typeof payload === "string" ? payload : JSON.stringify(payload);
         fetch("/__cap_plugin", {
@@ -25,14 +22,11 @@
           headers: { "Content-Type": "application/json" },
           body: body,
         }).catch(function () {});
-      } catch (e) {
-        // Silently ignore
-      }
+      } catch (e) {}
     }
   }
 
   // Inject bridge objects into PAGE context via <script> tag.
-  // All proxies dispatch CustomEvents that this content script listens to.
   var s = document.createElement("script");
   s.textContent = [
     "window.androidBridge = {",
@@ -59,7 +53,6 @@
   s.parentNode.removeChild(s);
 
   // Immediately fetch endings data and inject into page context
-  // GeckoView's page fetch() hangs, but content script fetch() works
   fetch("/__cap_endings_data")
     .then(function (r) { return r.json(); })
     .then(function (data) {
@@ -71,6 +64,109 @@
       }
     })
     .catch(function () {});
+
+  // Ping batch proxy — page dispatches CustomEvent, content script fetches.
+  window.addEventListener("__cap_ping_request", function (e) {
+    try {
+      var detail = JSON.parse(e.detail);
+      var id = detail.id;
+      var urls = detail.urls;
+      fetch("/__cap_ping_batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(urls),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (startResult) {
+          var batchId = startResult.batchId;
+          function pollStatus() {
+            fetch("/__cap_ping_batch/" + batchId)
+              .then(function (r) { return r.json(); })
+              .then(function (status) {
+                if (status.done) {
+                  window.dispatchEvent(
+                    new CustomEvent("__cap_ping_response", {
+                      detail: JSON.stringify({ id: id, results: status.results }),
+                    })
+                  );
+                } else {
+                  setTimeout(pollStatus, 800);
+                }
+              })
+              .catch(function (err) {
+                window.dispatchEvent(
+                  new CustomEvent("__cap_ping_response", {
+                    detail: JSON.stringify({ id: id, error: err.message || "poll failed" }),
+                  })
+                );
+              });
+          }
+          pollStatus();
+        })
+        .catch(function (err) {
+          window.dispatchEvent(
+            new CustomEvent("__cap_ping_response", {
+              detail: JSON.stringify({ id: id, error: err.message || "start failed" }),
+            })
+          );
+        });
+    } catch (err) {}
+  });
+
+  // APK download proxy — poll NanoHTTPD queue endpoint.
+  function pollDownloadQueue() {
+    fetch("/__cap_download_queue")
+      .then(function (r) { return r.json(); })
+      .then(function (request) {
+        if (!request) return;
+        var id = request.id;
+        var action = request.action;
+        if (action === "cancel") {
+          var dlId = request.downloadId;
+          if (dlId) {
+            fetch("/__cap_download_apk/" + dlId + "/cancel", { method: "POST" }).catch(function () {});
+          }
+          return;
+        }
+        fetch("/__cap_download_apk", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: request.url, sha256: request.sha256, fileName: request.fileName }),
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (startResult) {
+            if (startResult.error) {
+              window.dispatchEvent(new CustomEvent("__cap_download_response", { detail: JSON.stringify({ id: id, error: startResult.error }) }));
+              return;
+            }
+            var downloadId = startResult.downloadId;
+            function pollProgress() {
+              fetch("/__cap_download_apk/" + downloadId)
+                .then(function (r) { return r.json(); })
+                .then(function (status) {
+                  window.dispatchEvent(new CustomEvent("__cap_download_progress", {
+                    detail: JSON.stringify({ id: id, downloadId: downloadId, bytesDownloaded: status.bytesDownloaded, totalBytes: status.totalBytes, size: status.size })
+                  }));
+                  if (status.done) {
+                    window.dispatchEvent(new CustomEvent("__cap_download_response", {
+                      detail: JSON.stringify({ id: id, downloadId: downloadId, path: status.path, error: status.error })
+                    }));
+                  } else {
+                    setTimeout(pollProgress, 500);
+                  }
+                })
+                .catch(function (err) {
+                  window.dispatchEvent(new CustomEvent("__cap_download_response", { detail: JSON.stringify({ id: id, error: err.message || "poll failed" }) }));
+                });
+            }
+            pollProgress();
+          })
+          .catch(function (err) {
+            window.dispatchEvent(new CustomEvent("__cap_download_response", { detail: JSON.stringify({ id: id, error: err.message || "start failed" }) }));
+          });
+      })
+      .catch(function () {});
+  }
 
   // Forward page CustomEvents to native
   window.addEventListener("__cap_bridge", function (e) {
@@ -86,7 +182,7 @@
     } catch (err) {}
   });
 
-  // Eval result listener — shared by both Port and HTTP polling paths
+  // Eval result listener
   function setupEvalResultListener() {
     if (evalListenerRegistered) return;
     evalListenerRegistered = true;
@@ -96,7 +192,6 @@
         if (port) {
           port.postMessage({ __evalResult: data.id, value: data.value });
         } else {
-          // HTTP polling fallback — post result via fetch
           fetch("/__cap_eval_result", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -107,12 +202,10 @@
     });
   }
 
-  // Execute eval commands from native (used by both Port and polling)
   function handleEvalMessage(m) {
     if (!m.__eval) return;
     var id = m.__id || 0;
     setupEvalResultListener();
-
     var wrappedScript =
       "try {" +
       "  var __cap_r = (function(){ return eval(" + JSON.stringify(m.__eval) + "); })();" +
@@ -120,14 +213,22 @@
       "} catch(__cap_e) {" +
       "  window.dispatchEvent(new CustomEvent('__cap_eval_done', {detail: JSON.stringify({id:" + id + ",value:null})}));" +
       "}";
-
     var scr = document.createElement("script");
     scr.textContent = wrappedScript;
     (document.head || document.documentElement).appendChild(scr);
     scr.parentNode.removeChild(scr);
   }
 
-  // HTTP polling for eval commands when Port is unavailable
+  // HTTP polling for eval commands + download queue
+  var downloadPollTimer = null;
+
+  function startDownloadPolling() {
+    if (downloadPollTimer) return;
+    downloadPollTimer = setInterval(function () {
+      pollDownloadQueue();
+    }, 200);
+  }
+
   function startEvalPolling() {
     if (pollTimer) return;
     pollTimer = setInterval(function () {
@@ -139,7 +240,6 @@
           }
         })
         .catch(function () {});
-      // Also poll endings data — inject into PAGE context via eval
       fetch("/__cap_endings_data")
         .then(function (r) { return r.json(); })
         .then(function (data) {
@@ -151,18 +251,16 @@
           }
         })
         .catch(function () {});
+      pollDownloadQueue();
     }, 100);
   }
 
   // Connect bidirectional Port to native
-  // Try both browser.* and chrome.* namespaces (GeckoView may use either)
   var runtime = (typeof browser !== "undefined" && browser.runtime) || (typeof chrome !== "undefined" && chrome.runtime);
   try {
     if (runtime && typeof runtime.connectNative === "function") {
-      // Preferred: bidirectional Port
       port = runtime.connectNative("capacitor");
     } else {
-      // connectNative not available — check for sendNativeMessage
       var hasSendNative = runtime && typeof runtime.sendNativeMessage === "function";
       console.log("CapacitorBridge: connectNative=" + (typeof (runtime && runtime.connectNative)) +
         " sendNativeMessage=" + (typeof (runtime && runtime.sendNativeMessage)) +
@@ -174,19 +272,18 @@
         if (!m) return;
         handleEvalMessage(m);
       });
-
       port.onDisconnect.addListener(function () {
         port = null;
-        // Port lost — start HTTP polling fallback
         startEvalPolling();
       });
+      // Download queue polling must always run, even with port connected,
+      // because downloads go through HTTP endpoints, not the port.
+      startDownloadPolling();
     } else {
-      // No port — start HTTP polling for eval responses
       startEvalPolling();
     }
   } catch (e) {
     console.error("CapacitorBridge: connectNative failed, using HTTP polling fallback", e);
-    // connectNative unavailable — start HTTP polling immediately
     startEvalPolling();
   }
 })();

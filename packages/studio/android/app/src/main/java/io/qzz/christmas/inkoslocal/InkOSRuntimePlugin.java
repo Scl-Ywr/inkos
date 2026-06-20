@@ -30,6 +30,9 @@ import java.util.Locale;
 @CapacitorPlugin(name = "InkOSRuntime")
 public class InkOSRuntimePlugin extends Plugin {
     private static final String APK_MIME_TYPE = "application/vnd.android.package-archive";
+    private volatile boolean downloadCancelled = false;
+    private volatile HttpURLConnection activeDownloadConnection = null;
+    private volatile Thread downloadThread = null;
 
     @PluginMethod
     public void restartNode(PluginCall call) {
@@ -133,13 +136,31 @@ public class InkOSRuntimePlugin extends Plugin {
             return;
         }
 
-        new Thread(() -> {
+        downloadCancelled = false;
+        downloadThread = new Thread(() -> {
             try {
                 call.resolve(downloadApk(url, sha256, fileName));
             } catch (Exception error) {
                 call.reject(error.getMessage());
+            } finally {
+                downloadThread = null;
             }
-        }, "inkos-apk-download").start();
+        }, "inkos-apk-download");
+        downloadThread.start();
+    }
+
+    @PluginMethod
+    public void cancelDownload(PluginCall call) {
+        downloadCancelled = true;
+        HttpURLConnection conn = activeDownloadConnection;
+        if (conn != null) {
+            try { conn.disconnect(); } catch (Exception ignored) {}
+        }
+        Thread t = downloadThread;
+        if (t != null) {
+            t.interrupt();
+        }
+        call.resolve();
     }
 
     @PluginMethod
@@ -306,10 +327,14 @@ public class InkOSRuntimePlugin extends Plugin {
 
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         long totalBytes = 0L;
+        long contentLength = 0L;
+        long lastEmitTime = 0L;
+        long downloadStartTime = System.currentTimeMillis();
         HttpURLConnection connection = null;
         try {
             URL url = new URL(urlString);
             connection = (HttpURLConnection) url.openConnection();
+            activeDownloadConnection = connection;
             connection.setInstanceFollowRedirects(true);
             connection.setConnectTimeout(15000);
             connection.setReadTimeout(120000);
@@ -318,6 +343,7 @@ public class InkOSRuntimePlugin extends Plugin {
             if (code < 200 || code >= 300) {
                 throw new IOException("APK download failed with HTTP " + code);
             }
+            contentLength = connection.getContentLengthLong();
             try (
                 InputStream input = connection.getInputStream();
                 FileOutputStream output = new FileOutputStream(temporary, false)
@@ -325,12 +351,31 @@ public class InkOSRuntimePlugin extends Plugin {
                 byte[] buffer = new byte[64 * 1024];
                 int read;
                 while ((read = input.read(buffer)) != -1) {
+                    if (downloadCancelled) {
+                        temporary.delete();
+                        throw new IOException("Download cancelled by user");
+                    }
                     digest.update(buffer, 0, read);
                     output.write(buffer, 0, read);
                     totalBytes += read;
+
+                    long now = System.currentTimeMillis();
+                    if (now - lastEmitTime >= 500) {
+                        lastEmitTime = now;
+                        long elapsed = now - downloadStartTime;
+                        long speed = elapsed > 0 ? (totalBytes * 1000) / elapsed : 0;
+                        int percent = contentLength > 0 ? (int) (totalBytes * 100 / contentLength) : 0;
+                        JSObject progress = new JSObject();
+                        progress.put("bytesDownloaded", totalBytes);
+                        progress.put("totalBytes", contentLength);
+                        progress.put("percent", percent);
+                        progress.put("speedBytesPerSec", speed);
+                        notifyListeners("downloadProgress", progress);
+                    }
                 }
             }
         } finally {
+            activeDownloadConnection = null;
             if (connection != null) connection.disconnect();
         }
 
@@ -343,9 +388,12 @@ public class InkOSRuntimePlugin extends Plugin {
             temporary.delete();
             throw new IOException("Unable to replace existing APK: " + target);
         }
-        if (!temporary.renameTo(target)) {
+        // Use Files.move instead of File.renameTo (more reliable on Android)
+        try {
+            java.nio.file.Files.move(temporary.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } catch (Exception moveEx) {
+            java.nio.file.Files.copy(temporary.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             temporary.delete();
-            throw new IOException("Unable to finalize APK download: " + target);
         }
 
         JSObject result = new JSObject();
