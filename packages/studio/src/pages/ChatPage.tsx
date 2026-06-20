@@ -1,5 +1,6 @@
 import { useRef, useEffect, useMemo, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
+import { useFilePicker } from "../hooks/use-file-picker";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
@@ -199,6 +200,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const backgroundInputRef = useRef<HTMLInputElement>(null);
+  const { pickFile: pickFileNative } = useFilePicker();
   const textareaSessionIdRef = useRef(activeSessionId);
   const autoScrollPinnedRef = useRef(true);
   const [followingLatest, setFollowingLatest] = useState(true);
@@ -949,41 +951,84 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     setChatBackground((current) => ({ ...current, ...patch }));
   };
 
-  const handleChatBackgroundFile = (file: File | undefined) => {
+  const handleChatBackgroundFile = async (file: File | undefined) => {
     if (!file || !file.type.startsWith("image/")) return;
     setWallpaperUploading(true);
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        if (typeof reader.result !== "string") throw new Error("Unable to read image");
-        const response = await fetchJson<WallpaperUploadResponse>("/images/library/wallpapers", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: wallpaperName.trim() || file.name, dataUrl: reader.result }),
-        });
-        if (!response.item.url) throw new Error("Wallpaper URL is missing");
-        setWallpaperHistory((current) => [
-          response.item,
-          ...current.filter((item) => item.id !== response.item.id),
-        ]);
-        setChatBackground({ ...DEFAULT_CHAT_BACKGROUND, imageUrl: response.item.url });
-        setWallpaperName("");
-        setBackgroundMenuOpen(true);
-      } catch (error) {
-        await appAlert({
-          title: "壁纸保存失败",
-          message: error instanceof Error ? error.message : String(error),
-          tone: "danger",
-        });
-      } finally {
-        setWallpaperUploading(false);
-      }
-    };
-    reader.onerror = () => {
+    try {
+      const reader = new FileReader();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error("Unable to read image"));
+        reader.readAsDataURL(file);
+      });
+
+      const response = await fetchJson<WallpaperUploadResponse>("/images/library/wallpapers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: wallpaperName.trim() || file.name, dataUrl }),
+      });
+      if (!response.item.url) throw new Error("Wallpaper URL is missing");
+      setWallpaperHistory((current) => [
+        response.item,
+        ...current.filter((item) => item.id !== response.item.id),
+      ]);
+      setChatBackground({ ...DEFAULT_CHAT_BACKGROUND, imageUrl: response.item.url });
+      setWallpaperName("");
+      setBackgroundMenuOpen(true);
+    } catch (error) {
+      await appAlert({
+        title: "壁纸保存失败",
+        message: error instanceof Error ? error.message : String(error),
+        tone: "danger",
+      });
+    } finally {
       setWallpaperUploading(false);
-      void appAlert({ title: "壁纸读取失败", message: "无法读取所选图片。", tone: "danger" });
-    };
-    reader.readAsDataURL(file);
+    }
+  };
+
+  const handleChatBackgroundFromDataUrl = async (name: string, dataUrl: string) => {
+    setWallpaperUploading(true);
+    try {
+      const response = await fetchJson<WallpaperUploadResponse>("/images/library/wallpapers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: wallpaperName.trim() || name, dataUrl }),
+      });
+      if (!response.item.url) throw new Error("Wallpaper URL is missing");
+      setWallpaperHistory((current) => [
+        response.item,
+        ...current.filter((item) => item.id !== response.item.id),
+      ]);
+      setChatBackground({ ...DEFAULT_CHAT_BACKGROUND, imageUrl: response.item.url });
+      setWallpaperName("");
+      setBackgroundMenuOpen(true);
+    } catch (error) {
+      await appAlert({
+        title: "壁纸保存失败",
+        message: error instanceof Error ? error.message : String(error),
+        tone: "danger",
+      });
+    } finally {
+      setWallpaperUploading(false);
+    }
+  };
+
+  const handlePickBackgroundImage = async () => {
+    try {
+      const files = await pickFileNative({ accept: "image/*", multiple: false });
+      if (files.length > 0) {
+        const file = files[0];
+        if (file.data) {
+          const mimeType = file.type || 'image/png';
+          const dataUrl = `data:${mimeType};base64,${file.data}`;
+          await handleChatBackgroundFromDataUrl(file.name, dataUrl);
+        } else {
+          await appAlert({ title: "图片读取失败", message: "无法读取所选图片数据", tone: "danger" });
+        }
+      }
+    } catch (error) {
+      // Error already handled in use-file-picker hook
+    }
   };
 
   return (
@@ -1575,7 +1620,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                         </label>
                         <button
                           type="button"
-                          onClick={() => backgroundInputRef.current?.click()}
+                          onClick={() => void handlePickBackgroundImage()}
                           disabled={wallpaperUploading}
                           className="mb-3 flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-primary/35 bg-primary/10 px-3 text-sm font-medium text-primary transition-colors hover:bg-primary/15 disabled:cursor-wait disabled:opacity-60"
                         >

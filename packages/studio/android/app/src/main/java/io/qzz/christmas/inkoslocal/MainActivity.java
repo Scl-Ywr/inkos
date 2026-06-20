@@ -28,6 +28,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         registerPlugin(InkOSRuntimePlugin.class);
+        registerPlugin(FilePickerPlugin.class);
         super.onCreate(savedInstanceState);
         requestNotificationPermissionIfNeeded();
         requestAllFilesAccessIfNeeded();

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchJson, useApi } from "../hooks/use-api";
+import { useFilePicker } from "../hooks/use-file-picker";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { appAlert } from "../lib/app-dialog";
@@ -83,6 +84,7 @@ export function KnowledgePage({ bookId, nav, theme: _theme, t: _t }: {
   const [newBannedWord, setNewBannedWord] = useState("");
   const [newAvoidWord, setNewAvoidWord] = useState("");
   const [newPreferWord, setNewPreferWord] = useState("");
+  const { pickFile: pickFileNative } = useFilePicker();
   const [newTermName, setNewTermName] = useState("");
   const [newTermDef, setNewTermDef] = useState("");
   const { data: bookData } = useApi<{ book: { bookRules?: { bannedWords?: string[]; preferredWords?: Array<{ avoid: string; prefer: string }>; domainTerms?: Array<{ term: string; definition?: string }> } } }>(`/books/${bookId}`);
@@ -148,6 +150,38 @@ export function KnowledgePage({ bookId, nav, theme: _theme, t: _t }: {
       file.text().catch(() => ""),
     ]);
     await uploadSource(file.name, text, base64);
+  };
+
+  const handlePickKnowledgeFile = async () => {
+    try {
+      const files = await pickFileNative({
+        accept: ".txt,.md,.markdown,.json,.csv,.html,.htm",
+        multiple: false,
+      });
+      if (files.length > 0) {
+        const file = files[0];
+        // file.data already contains base64 encoded content from FilePicker plugin
+        const base64 = file.data;
+        // Get text content - try to read from data if it's a text file
+        let text = "";
+        if (base64) {
+          try {
+            const binaryString = atob(base64);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+              bytes[i] = binaryString.charCodeAt(i);
+            }
+            const decoder = new TextDecoder('utf-8');
+            text = decoder.decode(bytes);
+          } catch {
+            // If decoding fails, text stays empty - that's ok for binary files
+          }
+        }
+        await uploadSource(file.name, text, base64);
+      }
+    } catch (error) {
+      // Error already handled in use-file-picker hook
+    }
   };
 
   const handleDelete = async (source: KnowledgeSource) => {
@@ -281,17 +315,12 @@ export function KnowledgePage({ bookId, nav, theme: _theme, t: _t }: {
               重建索引
             </button>
           </div>
-          <label className="mt-4 flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-primary/35 bg-primary/[0.04] px-4 text-center transition-colors hover:bg-primary/[0.08]">
+          <label className="mt-4 flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-primary/35 bg-primary/[0.04] px-4 text-center transition-colors hover:bg-primary/[0.08]"
+            onClick={() => void handlePickKnowledgeFile()}
+          >
             <Upload size={22} className="text-primary" />
             <span className="mt-2 text-sm font-bold text-foreground">{uploading ? "正在导入..." : "选择 TXT / Markdown 文件"}</span>
             <span className="mt-1 text-xs text-muted-foreground">{pythonStatus}</span>
-            <input
-              type="file"
-              accept=".txt,.md,.markdown,.json,.csv,.html,.htm,.docx,.pdf,text/plain,text/markdown,application/json,text/csv,text/html,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf"
-              className="hidden"
-              disabled={uploading}
-              onChange={(event) => void handleFiles(event.currentTarget.files)}
-            />
           </label>
 
           <div className="mt-5 space-y-3">
